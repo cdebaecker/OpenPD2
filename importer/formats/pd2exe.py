@@ -12,13 +12,16 @@ are file offsets):
 Names
     0x10A0B5  master pointer table (unaligned): 0-37 given names, 38-75 family
               names, 76-171 launcher names (96 slots), 172- launcher codes
-    0x0FF5A8  pointer table: 0-31 machine names, 32-63 machine codes,
-              64-135 ammunition names (72)
+    0x0FF5A8  (VA 0x5011A8) the pd2 set's name tables (see below)
 Records (same layouts as Advanced PC-98 unless noted). There are three copies
-of the machine / launcher / ammunition block:
-    0x0FE6E8  DASH set   (F224, TS3, M2IC, M150 trailer: matches the Data Book)
-    0x0FFC50  PD2 set    (PCH50, trailer, M3IC, HA21T)
-    0x1091F5  working copy (identical to the PD2 set in the file)
+of the machine / launcher / ammunition block. 0x409240 copies one set into the
+working copy by the campaign flag DS:0x554B10, which also picks the data folder
+(0x408BE0: flag 1 = folder pd2, 0 = folder dash):
+    0x0FE6E8  pd2 set,  flag 1 (F224, TS3, M2IC, M150 trailer: matches the Data Book)
+    0x0FFC50  dash set, flag 0 (PCH50, M103 trailer, M3IC, HA21T)
+    0x1091F5  working copy (identical to the dash set in the file)
+    with each set its machine names, machine codes and ammunition names (pointer
+    tables at VA 0x5011A8 / 0x502710, copied to 0x50C265: +0, +0x80, +0x100).
     each copy: 32 machines x 31 B, then 96 launchers x 17 B (at +0x3E0),
     then 96 ammunition records x 12 B (at +0x3E0 + 0x660).
     Launcher +7 AP load (low 5 bits), +8 AP cost (low 5 bits) and kind (bits 5-7, 2 = missile), +9 class (low 3 bits; 1 = direct fire). Advanced packs these differently.
@@ -41,7 +44,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import missions  # noqa: E402  (shared enums and the crew record parser)
 
-COPIES = {'dash': 0x0FE6E8, 'pd2': 0x0FFC50, 'working': 0x1091F5}
+COPIES = {'pd2': 0x0FE6E8, 'dash': 0x0FFC50, 'working': 0x1091F5}     # 0x409240
+NAME_TABLES = {'pd2': 0x5011A8, 'dash': 0x502710, 'working': 0x50C265}  # VAs, same copy
+FILE_FROM_VA = 0x401C00     # .data: file offset = VA - this
 
 
 class Pe:
@@ -84,13 +89,14 @@ def read(src):
     family = names(pe, 0x10A0B5, 38, 38)
     launcher_names = names(pe, 0x10A0B5, 76, 96)
     launcher_codes = names(pe, 0x10A0B5, 172, 96)
-    machine_names = names(pe, 0x0FF5A8, 0, 32)
-    machine_codes = names(pe, 0x0FF5A8, 32, 32)
-    ammo_names = names(pe, 0x0FF5A8, 64, 72)
     crew_names = [(g, f) for g, f in zip(given, family)]
 
     sets = {}
     for label, base in COPIES.items():
+        nt = NAME_TABLES[label] - FILE_FROM_VA
+        machine_names = names(pe, nt, 0, 32)
+        machine_codes = names(pe, nt + 0x80, 0, 32)
+        ammo_names = names(pe, nt + 0x100, 0, 96)
         machines = []
         for i in range(31):
             e = d[base + 31 * i: base + 31 * (i + 1)]
@@ -116,7 +122,7 @@ def read(src):
                 'side': 'Zias' if e[14] == 3 else 'Omni', 'raw': e.hex(' ')})
         ab = lb + 96 * 17
         ammo = []
-        for i in range(72):
+        for i in range(96):
             e = d[ab + 12 * i: ab + 12 * (i + 1)]
             if not ammo_names[i]:
                 continue
@@ -144,7 +150,7 @@ def main():
     s = t['sets']['dash']
     print(f"{len(s['machines'])} machines, {len(s['launchers'])} launchers, "
           f"{len(s['ammunition'])} ammunition types per set; rosters: {list(t['rosters'])}")
-    for a, b in (('dash', 'pd2'), ('pd2', 'working')):
+    for a, b in (('pd2', 'dash'), ('dash', 'working')):
         diff = sum(x['raw'] != y['raw'] for k in ('machines', 'launchers', 'ammunition')
                    for x, y in zip(t['sets'][a][k], t['sets'][b][k]))
         print(f'records differing {a} vs {b}: {diff}')

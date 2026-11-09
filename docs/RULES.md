@@ -210,10 +210,10 @@ PC‑98 ovseg 5 0x1781, same structure): Emulated with the AI fire command below
      4. The hit is applied (§4.5, 0x413D90). A destroyed target is removed
         at once (`destroy`, 0x480140). The shooter, if it hit itself, is removed after
         the loop.
-3. **An empty hex,** PD2 rules only (campaign flag 0; always on PC‑98):
+3. **An empty hex,** DASH campaign only (campaign flag 0; always on PC‑98):
    warhead 13 lays a mine of the shooter's side (F‑layer bit 7 enemy, bit 6
    player). If one is already there it is set off instead (next step).
-4. **Mines,** PD2 rules only: after a miss, a decoy or an empty hex, a shot
+4. **Mines,** DASH campaign only: after a miss, a decoy or an empty hex, a shot
    with warhead below 3 or 13 sets off a mine on the hex. The blast hits a
    ground unit there (unowned ammo 12, mode 4).
 
@@ -304,8 +304,8 @@ Guided missiles (warhead 7) ignore the fire control, skill, height and range ter
 
 **Effectiveness** (0x412840; PC‑98 ovseg 5 0x132, table DS:0x8B1C): armour type
 × warhead.
-- Plus Dash has a second table, selected by DS:0x554B10 (a campaign flag,
-  probably the DASH campaign). It differs only at warhead 13, where armours 0–2
+- Plus Dash has a second table, selected by the campaign flag DS:0x554B10 = 1 (the
+  PD2 campaign: see §5.7). It differs only at warhead 13, where armours 0–2
   get 2 instead of 7.
 - PC‑98 has only the first table.
 ```
@@ -376,8 +376,10 @@ occurred: shot down, decoyed and not stopped.
   - its pocket is empty, or its round has no AA attack.
   The hand slots 2–3 are also lost when both manipulators are broken.
 - **Choice:** score = round AA attack + launcher kind. The first slot with the
-  highest score wins. Enemy units fire it automatically. The player gets a
-  yes/no prompt, then picks any slot 0–3.
+  highest score wins. Computer units (status 3+) fire it automatically. A player
+  unit is asked "intercept the missile?" (message 0x1E5, with the pilot's given and
+  family names and the machine's name), then the weapon picker opens in mode 7 until
+  it returns a slot 0–3 or a cancel (−2: no interception). Declining is −2 too.
 - **Firing:** one round is spent. `sq = (crew ANTI AIRCRAFT)²` (the code takes
   `abs()` of the square, so the sign is lost). Two percentages:
   - `track = clamp(launcher AA accuracy + sq, 15, 100)`;
@@ -433,7 +435,7 @@ look like arms, legs and sensors, but the names are still inferred.
 **PC‑98 only, EMP round (warhead 15):** before the mine check, a hit from it does three things:
 - breaks the sensor (unit +1 bits 0–1 = 2);
 - saves the old value in unit +2 bits 6–7, if +2 bits 4–5 was 0;
-- sets +2 bits 4–5 to 3, presumably a recovery counter.
+- sets +2 bits 4–5 to 3 (what reads them on PC‑98 is not traced yet).
 
 `apply_hit(..., pc98=True)` models this.
 
@@ -816,7 +818,7 @@ ground height (no +1), the aim point is the target's height + 1, and height‑0
 hexes do not block. During the search command, an airborne searcher's hex is
 raised 6 levels for this check (manual: "helicopters climb 6 to search").
 
-### 5.7 Turn flow: Code; upkeep Emulated
+### 5.7 Turn flow: Code; upkeep, recon pass and the passes around the AI Emulated
 
 The mission routine (`mission_loop`, 0x436690) sets up the mission, runs the mission script with
 stage 2, then loops. The loop is a state machine on a command code, but one turn
@@ -870,9 +872,13 @@ This is the manual's table of movement modes (§14.2).
 - with option bit 0x20, when the selected unit's pilot is an ace, +5
   experience in all five abilities.
 
-The details depend on the campaign flag DS:0x554B10. PC‑98 has only the flag‑0 version:
+The details depend on the campaign flag DS:0x554B10. It is 1 for the missions numbered
+1–10 (the PD2 campaign) and 0 for 11–22 (DASH), set in 0x46D780. The file opener
+(0x408BE0) reads from the `pd2\` folder when it is set and from `dash\` when clear, and
+0x409240 copies that campaign's record block and name tables into the working copy.
+PC‑98 has only the flag‑0 version:
 
-| | flag 0 (PD2; PC‑98) | flag 1 (DASH) |
+| | flag 0 (DASH; PC‑98) | flag 1 (PD2) |
 |---|---|---|
 | Units | 0–63 | all |
 | AP refill | separate, in `refill_ap` (0x483090) only | also here, for every active unit |
@@ -881,6 +887,59 @@ The details depend on the campaign flag DS:0x554B10. PC‑98 has only the flag�
 
 **AP refill** (`refill_ap`, 0x483090), emulated 150 / 150: every unit of the side whose phase
 begins gets its AP set to the maximum (§5.1).
+
+**The passes around the computer's turn**, read in `mission_loop` and emulated one by one
+(`rules.py`; `verify_turn_passes`, `verify_recon_pass`, `verify_support_fire`):
+- **View reset** before each recon pass: `clear_view` (0x47D5C0) clears the side's view
+  marks on the map; with option bit 0x80, `view_all` (0x437370) marks the whole map
+  instead.
+- **Spotted flags** (`clear_spotted_all`, 0x437440): cleared for units 0–253; with
+  option bit 0x80 the computer's units (status 3+) are set spotted instead.
+- **Turn recon pass** (`recon_pass`, 0x483490(0)), emulated 300 / 300: see above. The
+  side is the current phase's. With the campaign flag, F‑layer bit 5 is first cleared
+  on the map. Each unit's search is `search_command` without its prompt, which for
+  movement modes 0–3 is `step_search`. Not ported: the sensor list DS:0x50AC58
+  (42 × 4 B: x, y, turns, ammo id, filled by the item command 0x4ECC60); its on‑map
+  entries with turns > 0 search from their hex (0x4806A0: unit −1, mode 13, the
+  ammo's recon range).
+- **AI memory pruned** (0x480BF0), just before the computer's turn: entry k of the 40
+  is cleared to −1 unless unit k is an active player‑side unit whose remembered hex
+  is on the map and **not** in the computer's view.
+- **AI memory recorded** (0x480C60), at each turn start: an active, spotted
+  player‑side unit standing in the computer's view is remembered at its hex.
+- **Strike marks** (0x46F590(0)) are cleared on the map after the player's upkeep.
+- **Smoke clears** (0x483B50) at each turn start: every hex with smoke (F‑layer
+  bit 0) loses it with `random(100) < 25`, in row order.
+- **Support state** (`support_fire`, 0x4E0BF0(side)), after each side's turn: in every
+  group with members, a support state (+0x21 high nibble) of 3, 4 or 5 and +0x16 set,
+  the first member that changes something decides: a unit of the side (status side to
+  side + 2) with support order +6 = 1 sets the group's +2 high nibble to 0xA; in state
+  5, a unit of another side sets it to 2 when +2 has bits 4–5 = 2 and bits 6–7 = 1.
+- **Turn start** (`LAB_00436b39`, also reached at a new mission after the player's
+  upkeep and AP): smoke clears; spotted flags; the computer's view reset and recon pass
+  (phase 3); AI memory recorded; phase := 0; the player's view reset and recon pass.
+- 0x483AD0 lists the active flying units at DS:0x551D60, but nothing in the exe reads
+  the list. 0x4361C0 (the date window), 0x436360 (the camera) and 0x4F3DA0 (a map
+  built for the display) are UI.
+
+**Unit removal** (`destroy`, 0x480140), emulated 1,000 / 1,000:
+1. +0 bit 0 (destroyed) and condition 0;
+2. the unit leaves the map (0x47FEE0): its hex is emptied (0x46ED80, the edge hexes
+   too), a unit it carries is put down there (not concealed), its status is reset to
+   its crew's +2, then x = y = −1;
+3. a player unit (status 0, after the reset) loses its weapons (+0xF.., 6 slots) and
+   pockets (+0x1B.., 12) to 0xFF (0x43BD60);
+4. the first group (of 64) with members and +2 bits 4–5 set that lists it drops it:
+   - status ≤ 2 (0x4549B0): members are crew numbers below 27 (28 with the campaign
+     flag) and unit numbers above. The rest of the list moves up, freed slots get 0xFF
+     and the count drops. The crew goes back to the free‑pilot pool (crew +5 = 0xFF,
+     appended to DS:0x50AD02, count DS:0x50AD00); with the campaign flag, a member
+     listed by unit number keeps its crew while DS:0x50663A is set (it is 1 in the
+     battle: 0x487D70 sets it before 0x436530 runs `mission_loop`), and a pool of more
+     than 64 is first rebuilt from the crews whose +4 is not after DS:0x50AD92, with
+     +2 ≤ 2, +5 = 0xFF and +6 bits 0–1 clear;
+   - status 3+ (0x441F40): groups below 20 as above; others clear the member slot and
+     drop the count, and the unit leaves the map again.
 
 **Mission start** (0x4373B0 / `clear_spotted_all` (0x437440)): every unit's movement mode, concealed
 and reacted flags and carried unit are reset, and it is placed off the map.
@@ -1009,7 +1068,7 @@ that hex, or the unit's real position, is in the AI side's view.
 AA mode is used against class‑3 targets. The AI estimates with its own copies of
 the fire rules, which differ from the real ones:
 - **Hit estimate** (`ai_hit_estimate`, 0x413110): the nine hit terms, but **no ace bonuses**, and an
-  aimed‑fire base of **+50 under PD2 rules and +30 under DASH**. The real roll uses +45.
+  aimed‑fire base of **+50 in the DASH campaign (flag 0) and +30 in PD2 (flag 1)**. The real roll uses +45.
 - **Expected damage** (`ai_expected_damage`, 0x413C80): class 200 gives n with no dice; other classes
   give `v − spread/2`, at least 1, with **no halving for class 201** and no
   low‑condition multipliers. It still calls `random(v − spread/2)` and throws
@@ -1552,8 +1611,8 @@ not while carrying), and its init sets the camera to (5, 13).
 | Reaction weapon choice | **Same structure and filters** (PC‑98 ovseg 0 0xDEA); not compared value by value |
 | Line of sight, short‑range trace, reaction candidates | **Identical** (PC‑98 res DDF:A, ovseg 0 0xF77), including the x‑parity quirk |
 | Recon: sight levels, ring, search map, unit search, unit‑to‑unit sight | **Same structure and constants** (PC‑98 res DDF:44D / 878 / 97B / C55 / 1334 / 15BD); not compared value by value |
-| End‑of‑phase upkeep | PC‑98 (ovseg 2 0xACC) is **identical to the Plus Dash flag‑0 version**. Flag 1 (the DASH campaign) refills AP, repairs only +1, and drops Hardy from the training aces |
-| Campaign flag DS:0x554B10 | **Plus Dash only**: 0 = the PD2 rules (as on PC‑98), 1 = DASH. It also selects the second effectiveness table (§4.2) |
+| End‑of‑phase upkeep | PC‑98 (ovseg 2 0xACC) is **identical to the Plus Dash flag‑0 version** (the DASH campaign). Flag 1 (the PD2 campaign) refills AP, repairs only +1, and drops Hardy from the training aces |
+| Campaign flag DS:0x554B10 | **Plus Dash only**: 1 = the PD2 campaign, 0 = DASH (which plays by the PC‑98 rules). It also selects the second effectiveness table (§4.2) |
 | AI move (PC‑98 ovseg 11 0x3885) | **Identical** structure, weights, movement‑mode table, reserve, choice, fallback and return codes. Modes above 9 are undefined in both: PC‑98 leaves all five weights uninitialised, Plus Dash the kind‑0 weight |
 | AI distance field (PC‑98 ovseg 11 0x29C7) | **Same structure** (search limits, blocking of other enemies, −1 / 0 post‑pass), with 16‑bit cells |
 | AI engage (PC‑98 ovseg 11 0x1BE8, pickers 0x18DE / 0x165B / 0x145E) | **Same structure**: order, choice, tie roll, threshold, shot limit, reload, and the anti‑air quirk (u's own spotted flag). **Differs:** PC‑98 takes any unit with status < 3 as a target and in the blast sums, where Plus Dash requires status 0. PC‑98 scores are 16‑bit |

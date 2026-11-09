@@ -42,7 +42,7 @@ import pd2exe    # noqa: E402
 
 KNOWN = json.load(open(os.path.join(HERE, 'versions.json'), encoding='utf-8'))
 CAMPAIGNS = ('pd2', 'dash')
-TABLE_SET = {'pd2': 'pd2', 'dash': 'dash'}      # which copy of the record block each campaign loads
+TABLE_SET = {'pd2': 'pd2', 'dash': 'dash'}      # the record block each campaign loads (0x409240, by DS:0x554B10)
 SECTOR = 2048
 
 
@@ -233,6 +233,25 @@ def export_missions(game, out, pal):
     return count
 
 
+def export_messages(game, out):
+    """The game's message tables, as message_text (0x471A00) reads them: WMES.PCK (the
+    battle's, read when DS:0x50663A is set) and MES.PCK (the others), one LZSS entry per
+    index (DS:0x50663D - 1), each a list of strings numbered from 0 (Shift-JIS, decoded)."""
+    for camp in CAMPAIGNS:
+        folder = os.path.join(game, camp)
+        fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
+        doc = {}
+        for key, name in (('wmes', 'WMES.PCK'), ('mes', 'MES.PCK')):
+            entries = []
+            for c in pd2dt.split_pck(open(fs[name], 'rb').read()):
+                dc = pd2dt.decode_chunk(c)
+                entries.append([t.decode('cp932', 'replace') for t in dc.split(b'\0')] if dc else [])
+            doc[key] = entries
+        os.makedirs(os.path.join(out, camp), exist_ok=True)
+        with open(os.path.join(out, camp, 'messages.json'), 'w', encoding='utf-8') as f:
+            json.dump(doc, f, ensure_ascii=False)
+
+
 def default_out():
     if os.name == 'nt':
         base = os.path.join(os.environ['APPDATA'], 'Godot', 'app_userdata')
@@ -257,6 +276,7 @@ def main():
         os.makedirs(a.out, exist_ok=True)
         pal = export_tables(game, a.out)
         count = export_missions(game, a.out, pal)
+        export_messages(game, a.out)
         manifest = {'format': 1, 'version': version, 'pd2_exe_sha256': h, 'missions': count}
         json.dump(manifest, open(os.path.join(a.out, 'manifest.json'), 'w'), indent=1)
     print('imported %s: %s into %s' % (version, count, a.out))

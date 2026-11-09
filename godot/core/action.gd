@@ -352,7 +352,7 @@ static func step_mine_found(w: Pd2World, u: int, hooks: AiHooks) -> int:
 		Ai.spend_ap(w, u, 4)
 		toggle_mine(w, p.x, p.y, u)
 		return 2
-	if w.sb(u, 0xE) > 3 and (w.ucrew(u, 8) >> 1) & 1 and hooks.mine_clear(u):
+	if w.sb(u, 0xE) > 3 and (w.ucrew(u, 8) >> 1) & 1 and hooks.mine_clear(u, 0x1A3):
 		Ai.spend_ap(w, u, 4)
 		toggle_mine(w, p.x, p.y, u)
 		return 2
@@ -383,6 +383,8 @@ static func ai_walk(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 	var res := 0
 	if mine_trigger(w, x, y, u):
 		if mmode == 2:
+			if w.phase == 0:
+				hooks.mine_found(u)
 			res = step_mine_found(w, u, hooks)
 		else:
 			res = 4 if step_mine_blast(w, rng, x, y, u, mmode, hooks, easy) else 2
@@ -424,12 +426,14 @@ static func ai_path(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 		step_visibility(w, u)
 		if under == -1 and mine_trigger(w, p.x, p.y, u):
 			if mmode == 2:
+				if w.phase == 0:
+					hooks.mine_found(u)
 				if w.sb(u, 0xE) >= 4 and (w.ucrew(u, 8) >> 1) & 1:
 					if w.phase != 0:
 						Ai.spend_ap(w, u, 4)
 						toggle_mine(w, p.x, p.y, u)
 						res = 2
-					elif hooks.mine_clear(u):          # the player is asked (0x1C9)
+					elif hooks.mine_clear(u, 0x1C9):   # the player is asked
 						Ai.spend_ap(w, u, 4)
 						toggle_mine(w, p.x, p.y, u)
 						res = 1
@@ -830,7 +834,8 @@ static func player_move(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mod
 		return [kind, ai_walk(w, rng, u, x, y, mode, mm, hooks, easy)]
 	if kind == "":
 		return [null, null]
-	if not hooks.confirm(0x1E4 if kind == "melee" else 0x1DC, cost):
+	var args := [cost] if kind == "melee" else [cost, w.sb(u, 0xE), w.cover_at(w.unit_class(u), x, y)]
+	if not hooks.confirm(0x1E4 if kind == "melee" else 0x1DC, args):
 		return [kind, null]
 	if kind == "path":
 		return [kind, ai_path(w, rng, u, x, y, mode, mm, hooks, easy)]
@@ -849,3 +854,110 @@ static func player_move(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mod
 			hooks.destroy(o)
 		hooks.melee_done()
 	return [kind, res]
+
+
+# --- unit removal (destroy 0x480140; rules.destroy, emulated) ---------------------------
+
+## 0x46ED80: empty a hex's occupancy (on the map, or on its edge rows / columns).
+static func clear_hex(w: Pd2World, x: int, y: int) -> void:
+	if w.on_map(x, y) or x == 0 or x == 71 or y == 0 or y == 71 or (y & 1 and x == 70):
+		w.O[x + MAP * y] = 0
+
+
+## 0x47FEE0: k leaves the map: its hex emptied, a carried unit put down there (not
+## concealed), the status reset to its crew's (+2); then x = y = -1.
+static func take_off_map(w: Pd2World, k: int) -> void:
+	var p := w.pos(k)
+	if w.on_map(p.x, p.y):
+		clear_hex(w, p.x, p.y)
+		var c := w.ub(k, 0x34)
+		if c != 0xFF:
+			w.setb(c, 9, w.ub(k, 9))
+			w.setb(c, 10, w.ub(k, 10))
+			w.setb(c, 0, w.ub(c, 0) & 0xDF)
+			w.O[p.x + MAP * p.y] = (c + 1) & 0xFF
+			w.setb(k, 0x34, 0xFF)
+		var st := w.ucrew(k, 2)
+		if st != w.ub(k, 0x36):
+			w.setb(k, 0x36, st)
+	w.setb(k, 9, 0xFF)
+	w.setb(k, 10, 0xFF)
+
+
+static func _crew_pool_add(w: Pd2World, c: int) -> void:
+	w.crew[c * Pd2World.CREW + 5] = 0xFF
+	w.crew_pool[w.crew_pool_n & 0xFF] = c & 0xFF
+	w.crew_pool_n += 1
+
+
+## 0x4549B0: take k out of player group g (rules.group_drop_player).
+static func group_drop_player(w: Pd2World, g: int, k: int) -> void:
+	var G := g * 35
+	var c := w.sb(k, 0xB)
+	var camp := w.campaign != 0
+	if camp and w.crew_pool_n > 0x40:
+		w.crew_pool_n = 0
+		for i in 64:
+			var q := i * Pd2World.CREW
+			if w.crew[q + 4] <= w.time_ad92 and w.crew[q + 2] <= 2 and w.crew[q + 5] == 0xFF and not (w.crew[q + 6] & 3):
+				w.crew_pool[w.crew_pool_n] = i
+				w.crew_pool_n += 1
+	var limit := 0x1C if camp else 0x1B
+	var n := w.groups[G + 5]
+	for i in n:
+		var by_crew := c < limit
+		if w.groups[G + 6 + i] != (c if by_crew else k):
+			continue
+		for j in range(i, n - 1):
+			w.groups[G + 6 + j] = w.groups[G + 7 + j]
+		n = (n - 1) & 0xFF
+		w.groups[G + 5] = n
+		if n < 16:
+			for j in range(n, 16):
+				w.groups[G + 6 + j] = 0xFF
+		if camp and not by_crew and w.mode_663a:
+			return
+		_crew_pool_add(w, c)
+		return
+
+
+## 0x441F40: take k out of computer group g (rules.group_drop).
+static func group_drop(w: Pd2World, g: int, k: int) -> void:
+	if g < 20:
+		group_drop_player(w, g, k)
+		return
+	var G := g * 35
+	for i in 16:
+		if w.groups[G + 6 + i] == k:
+			take_off_map(w, k)
+			w.groups[G + 6 + i] = 0xFF
+			w.groups[G + 5] = (w.groups[G + 5] - 1) & 0xFF
+			return
+
+
+## 0x480140: k is destroyed (rules.destroy): flag bit 0, condition 0, off the map, a
+## player unit's weapons and pockets cleared, and its group drops it.
+static func destroy(w: Pd2World, k: int) -> void:
+	w.setb(k, 0, w.ub(k, 0) | 1)
+	w.setb(k, 0xD, 0)
+	take_off_map(w, k)
+	if w.ub(k, 0x36) == 0:
+		for i in 6:
+			w.setb(k, 0xF + 2 * i, 0xFF)
+		for i in 12:
+			w.setb(k, 0x1B + 2 * i, 0xFF)
+	var st := w.sb(k, 0x36)
+	for g in 64:
+		var G := g * 35
+		if w.groups[G + 5] and w.groups[G + 2] & 0x30:
+			var listed := false
+			for i in 16:
+				if w.groups[G + 6 + i] == k:
+					listed = true
+					break
+			if listed:
+				if st <= 2:
+					group_drop_player(w, g, k)
+				else:
+					group_drop(w, g, k)
+				return

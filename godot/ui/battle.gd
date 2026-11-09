@@ -28,6 +28,7 @@ var move_dests: Array = []
 var move_thread: Thread = null
 var turn := 1
 var alert := 0
+var options := 0            # DS:0x551D29 (bit 1 easy, bit 5 training, bit 7 see all): none in the sandbox
 var busy := false
 ## The computer's turn runs on a worker thread so that the player's reaction menu can
 ## pause it; auto_react answers the menu without asking (tests, headless runs).
@@ -102,39 +103,54 @@ class SandboxHooks extends AiTurnHooks:
 		return res
 
 	func destroy(k: int) -> void:
-		var p := w.pos(k)
-		if w.on_map(p.x, p.y) and w.O[p.x + MAP * p.y] == k + 1:
-			w.O[p.x + MAP * p.y] = 0
-		w.setb(k, 0, w.ub(k, 0) | 1)
+		Action.destroy(w, k)                       # 0x480140, emulated
 		battle.say("[color=orange]%s destroyed[/color]" % battle.unit_name(k))
 
 	func mine_blast(x: int, y: int) -> void:
 		battle.say("mine explodes at %d, %d" % [x, y])
 
+	func intercept_choice(t: int, best: int) -> int:
+		## intercept (0x4149F0) for a player unit: "intercept the missile?" (0x1E5: the
+		## pilot's given and family names, the machine's name), then the weapon picker in
+		## mode 7 until a slot or a cancel. auto_react (tests): the best slot.
+		if battle.auto_react:
+			return best
+		if not battle.ask_prompt(battle.msg(0x1E5, battle.intercept_names(t)), false):
+			return -1
+		var opts := []
+		for s in Action.weapon_choices(w, t, 7, 0):
+			if s < 4:
+				opts.append([battle.ui("UI_SLOT_ROUNDS") % [s + 1, w.slot_count(t, s)], s])
+		opts.append([battle.ui("UI_CANCEL"), -2])
+		var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
+		return -1 if pick == -2 else pick
+
 	# the player's move command and its mine dialogs; they run on the move's worker
 	# thread and wait for the answer (auto_react: the defaults, without asking)
-	func confirm(msg: int, ap: int) -> bool:
-		return battle.ask_yes_no(battle.move_message(msg, ap), true)
+	func confirm(msg: int, args: Array) -> bool:
+		return battle.ask_prompt(battle.msg(msg, args), true)
 
 	func use_weapon(a: int, p: int) -> bool:
-		return battle.ask_yes_no(battle.move_message(0x1E5), true)
+		return battle.ask_prompt(battle.msg(0x1A7), true)       # melee's own prompt (0x424490)
 
-	func mine_clear(u: int) -> bool:
-		battle.say(battle.move_message(0x1A6))
-		return battle.ask_yes_no(battle.move_message(0x1A3), false)
+	func mine_found(u: int) -> void:
+		battle.say_msg(0x1A6)
+
+	func mine_clear(u: int, msg := 0x1A3) -> bool:
+		return battle.ask_box(battle.msg(msg), false)
 
 	func mine_shoot(u: int) -> Variant:
-		if not battle.ask_yes_no(battle.move_message(0x1A4), false):
+		if not battle.ask_box(battle.msg(0x1A4), false):
 			return null
 		var opts := []
 		for s in Action.weapon_choices(w, u, 3, 0):
 			if s < 4:
-				opts.append(["Slot %d: %d rounds, %d AP" % [s + 1, w.slot_count(u, s),
+				opts.append([battle.ui("UI_SLOT_ROUNDS_AP") % [s + 1, w.slot_count(u, s),
 					Move.launcher_ap(w, w.launcher_id(u, s))], s])
-		opts.append(["Cancel", -2])
-		var pick: int = battle.ask_choice(battle.move_message(0x1A7), opts, -2)
+		opts.append([battle.ui("UI_CANCEL"), -2])
+		var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
 		if pick != -2:
-			battle.say(battle.move_message(0x1A5))
+			battle.say_msg(0x1A5)
 		return [pick]
 
 
@@ -165,10 +181,13 @@ func _ready() -> void:
 	cam.limit_bottom = MAP * TILE_H
 	add_child(cam)
 	_build_hud()
-	_clear_spotted()
-	_recon_pass(3)
-	_recon_pass(0)
-	Turn.refill_ap(w, 0)
+	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the player's upkeep and
+	# AP, then the turn start (LAB_00436b39)
+	w.phase = 0
+	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
+	Turn.refill_ap(w, Turn.PHASE_PLAYER)
+	w.phase = 3
+	_turn_start()
 	if not squad.is_empty():
 		_select(squad[0])
 		cam.position = hex_center(w.pos(squad[0]))
@@ -389,16 +408,32 @@ func _click(h: Vector2i) -> void:
 
 # --- commands ------------------------------------------------------------------
 
-const MOVE_MESSAGES := {0x1DA: "Both manipulators are broken: cannot move while carrying.",
-	0x1DB: "The movement gear is broken.", 0x1DC: "Move here? (%d AP)", 0x1E4: "Melee? (%d AP)",
-	0x1E5: "Use the melee weapon?", 0x1A3: "Clear the mine? (4 AP)", 0x1A4: "Destroy the mine by shooting?",
-	0x1A5: "The mine is destroyed.", 0x1A6: "A mine is found here!", 0x1A7: "Shoot with:"}
+# --- the game's messages ------------------------------------------------------------
+
+func msg(id: int, args := []) -> String:
+	## a battle message (WMES.PCK), translated and formatted as format_text does
+	return GameData.battle_text(campaign, id, args)
 
 
-func move_message(id: int, n := 0) -> String:
-	## Stand-in texts until the game's own (message_text) come with the translation tables.
-	var t: String = MOVE_MESSAGES.get(id, "")
-	return t % n if "%d" in t else t
+func intercept_names(t: int) -> Array:
+	## 0x1E5's strings: given name (DS:0x50BCB5), family name (DS:0x50BD4D), both indexed by
+	## crew_name_id (0x47C4D0: crew +0, or 1 without a crew), and the machine (DS:0x50C265,
+	## the campaign's machine names)
+	var tables := GameData.tables(campaign)
+	var id := w.sb(t, 0xB)
+	id = 1 if id < 0 else Pd2World.s8(w.ucrew(t, 0))
+	var names: Array = tables.crew_names
+	var mach: Array = tables.machine_names        # the campaign's set (0x409240 copies it to DS:0x50C265)
+	var nm: Array = names[id] if id >= 0 and id < names.size() else ["", ""]
+	return [nm[0], nm[1], mach[w.ub(t, 0xC)] if w.ub(t, 0xC) < mach.size() else ""]
+
+
+func say_msg(id: int, args := []) -> void:
+	say(msg(id, args).replace("@", "\n").strip_edges())
+
+
+func ui(key: String) -> String:
+	return GameData.ui_text(key)
 
 
 func _cmd_move(h: Vector2i) -> void:
@@ -409,7 +444,7 @@ func _cmd_move(h: Vector2i) -> void:
 	var u := selected
 	var why := Action.move_refusal(w, u)
 	if why != -1:
-		say(move_message(why))
+		say_msg(why)
 		return
 	if not h in move_dests:
 		return
@@ -451,8 +486,17 @@ func _move_done(u: int, h: Vector2i, res: Array) -> void:
 
 # --- the move command's questions --------------------------------------------------
 
-func ask_yes_no(text: String, default: bool) -> bool:
-	return ask_choice(text, [["Yes", true], ["No", false]], default)
+func ask_prompt(text: String, default: bool) -> bool:
+	## ui_prompt_at_cursor (0x47EBE0): the choices are written in the message; 0 = the first
+	var parts := GameData.prompt_parts(text)
+	var labels: Array = parts[1] if parts[1].size() >= 2 else [ui("UI_YES"), ui("UI_NO")]
+	return ask_choice(parts[0], [[labels[0], true], [labels[1], false]], default)
+
+
+func ask_box(text: String, default: bool) -> bool:
+	## ui_message_box (0x451FB0): the game reads non-zero as yes (step_mine_found 0x4756A0);
+	## its button labels are not read yet
+	return ask_choice(text, [[ui("UI_YES"), true], [ui("UI_NO"), false]], default)
 
 
 func ask_choice(text: String, options: Array, default: Variant) -> Variant:
@@ -460,13 +504,16 @@ func ask_choice(text: String, options: Array, default: Variant) -> Variant:
 	## main thread and waits for the answer. auto_react: the default, without asking.
 	if auto_react:
 		return default
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		push_error("ask_choice on the main thread: %s" % text)   # would wait forever
+		return default
 	call_deferred("_open_choice", text, options)
 	react_sem.wait()
 	return react_answer
 
 
 func _open_choice(text: String, options: Array) -> void:
-	var box := _reaction_panel(text)
+	var box := _reaction_panel(text.replace("@", "\n").strip_edges())
 	for o in options:
 		var btn := Button.new()
 		btn.text = o[0]
@@ -475,18 +522,6 @@ func _open_choice(text: String, options: Array) -> void:
 
 
 const FIRE_MODES := {"fire": 0, "aimed": 1, "aa": 6}
-const FIRE_MESSAGES := {0x1A8: "Both manipulators are broken: no hand weapons.",
-	0x1A9: "No target there.", 0x1AA: "Helicopters need anti-air fire.",
-	0x1AB: "Anti-air fire only at helicopters.",
-	0x1AC: "The target is within the blast radius. Fire?", 0x1AD: "Fire? (%d AP)"}
-
-
-func _fire_message(id: int, cost := 0) -> String:
-	## Stand-in texts: the game's own (message_text) come with the translation tables.
-	var t: String = FIRE_MESSAGES.get(id, "")
-	return t % cost if "%d" in t else t
-
-
 func _cmd_fire(h: Vector2i, fmode: int) -> void:
 	## The player's fire command (Action.fire_target_map / fire_check / player_fire,
 	## ported from cmd_fire 0x425AF0): only hexes of the target map can be clicked.
@@ -497,32 +532,49 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 		return
 	var cost := Move.fire_ap(w, u, slot, fmode)
 	if w.sb(u, 0xE) < cost:
-		say("Not enough AP (%d needed)." % cost)
+		say_msg(0x1AE, [cost])                       # ui_not_enough_ap (0x426AE0)
 		return
 	if fire_map == null or fire_map.cell(h.x, h.y) != 1:
 		return
 	var check := Action.fire_check(w, u, slot, fmode, h.x, h.y)
 	if check[0] == Action.FIRE_REFUSED:
 		if check[1] != -1:
-			say(_fire_message(check[1]))
+			say_msg(check[1])
 		return
 	if check[0] == Action.FIRE_CONFIRM:
-		var dlg := ConfirmationDialog.new()
-		dlg.dialog_text = _fire_message(check[1], cost)
-		dlg.confirmed.connect(_do_fire.bind(u, fmode, h))
-		dlg.confirmed.connect(dlg.queue_free)
-		dlg.canceled.connect(dlg.queue_free)
-		add_child(dlg)
-		dlg.popup_centered()
+		# 0x1AD shows the AP needed, the AP left and the distance (cmd_fire 0x4262DF); 0x1AC none
+		var up := w.pos(u)
+		var args := [cost, w.sb(u, 0xE), Pd2World.hexdist(up.x, up.y, h.x, h.y)] if check[1] == 0x1AD else []
+		_confirm(msg(check[1], args), _do_fire.bind(u, fmode, h))
 		return
 	_do_fire(u, fmode, h)
 
 
 func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
+	## the shot runs on a worker thread: the return fire may ask the player (intercept)
 	var before := {}
 	for q in w.n_units:
 		before[q] = w.ub(q, 0xD)
-	Action.player_fire(w, rng, u, slot, fmode, h.x, h.y, hooks, false, alert)
+	var s := slot
+	busy = true
+	if auto_react:
+		Action.player_fire(w, rng, u, s, fmode, h.x, h.y, hooks, false, alert)
+		_fire_done(u, before)
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		Action.player_fire(w, rng, u, s, fmode, h.x, h.y, hooks, false, alert)
+		call_deferred("_fire_finished", u, before))
+
+
+func _fire_finished(u: int, before: Dictionary) -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_fire_done(u, before)
+
+
+func _fire_done(u: int, before: Dictionary) -> void:
+	busy = false
 	var hit := false
 	for q in w.n_units:
 		if w.ub(q, 0xD) < before[q]:
@@ -533,24 +585,14 @@ func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
 	_after_command()
 
 
-const CMD_MESSAGES := {0x1AF: "Already concealed.", 0x1B0: "Conceal here? (%d AP)",
-	0x1B1: "No free hex to set the unit down.", 0x1B2: "Set the unit down here?",
-	0x1B3: "No DoLL next to this unit to carry.", 0x1B4: "That unit is carrying another.",
-	0x1B5: "Carry this unit?", 0x1C8: "Search this area? (%d AP)",
-	0x1DD: "Both manipulators are broken: cannot carry.", 0x212: "Aircraft cannot carry."}
-
-
-func _cmd_message(id: Variant, n := 0) -> String:
-	## Stand-in texts until the game's own (message_text) come with the translation tables.
-	if id is String:
-		return "Not enough AP."
-	var t: String = CMD_MESSAGES.get(id, "")
-	return t % n if "%d" in t else t
-
-
 func _confirm(text: String, then: Callable) -> void:
+	## a prompt on the main thread: its choices come from the message (0 = the first)
+	var parts := GameData.prompt_parts(text)
 	var dlg := ConfirmationDialog.new()
-	dlg.dialog_text = text
+	dlg.dialog_text = parts[0].replace("@", "\n").strip_edges()
+	if parts[1].size() >= 2:
+		dlg.ok_button_text = parts[1][0]
+		dlg.cancel_button_text = parts[1][1]
 	dlg.confirmed.connect(then)
 	dlg.confirmed.connect(dlg.queue_free)
 	dlg.canceled.connect(dlg.queue_free)
@@ -564,9 +606,9 @@ func _cmd_search() -> void:
 		return
 	var u := selected
 	if w.sb(u, 0xE) < Action.search_cost(w, u):
-		say(_cmd_message("ap"))
+		say_msg(0x1AE, [Action.search_cost(w, u)])     # ui_not_enough_ap (cmd_search 0x426B10)
 		return
-	_confirm(_cmd_message(0x1C8, Action.search_cost(w, u)), func():
+	_confirm(msg(0x1C8), func():
 		var found: Array = Action.player_search(w, u)
 		var enemies := found.filter(func(k): return w.is_enemy(k))
 		say("%s searches: %d enemy unit(s) found." % [unit_name(u), enemies.size()])
@@ -581,11 +623,15 @@ func _cmd_conceal() -> void:
 		return
 	var u := selected
 	var why: Variant = Action.conceal_check(w, u)
-	if not (why is String and why == ""):
-		say(_cmd_message(why))
-		return
 	var cost := 3 if (w.ucrew(u, 8) >> 3) & 1 else 6
-	_confirm(_cmd_message(0x1B0, cost), func():
+	if not (why is String and why == ""):
+		if why is String:                             # "ap": ui_not_enough_ap (cmd_conceal 0x426C00)
+			say_msg(0x1AE, [cost])
+		else:
+			say_msg(why)
+		return
+	# 0x1B0 shows the AP needed, the AP left and the cover of the unit's hex
+	_confirm(msg(0x1B0, [cost, w.sb(u, 0xE), w.cover(u)]), func():
 		Ai.ai_conceal(w, u)
 		say("%s conceals." % unit_name(u))
 		_after_command())
@@ -596,9 +642,13 @@ func _cmd_carry_mode() -> void:
 	if selected == -1:
 		return
 	var u := selected
-	var res: Array = Action.carry_candidates(w, u) if w.ub(u, 0x34) == 0xFF else Action.release_candidates(w, u)
+	var carrying := w.ub(u, 0x34) != 0xFF
+	var res: Array = Action.release_candidates(w, u) if carrying else Action.carry_candidates(w, u)
 	if res[0].is_empty():
-		say(_cmd_message(res[1]))
+		if res[1] is String:                          # "ap": ui_not_enough_ap (cmd_release: 2; cmd_carry: its cost)
+			say_msg(0x1AE, [2 if carrying else Action.carry_cost(w, u)])
+		else:
+			say_msg(res[1])
 		return
 	carry_hexes = []
 	for v in res[0]:
@@ -612,17 +662,17 @@ func _cmd_carry_click(h: Vector2i) -> void:
 	var u := selected
 	if w.ub(u, 0x34) == 0xFF:
 		var o := w.O[h.x + MAP * h.y] - 1
-		_confirm(_cmd_message(0x1B5), func():
+		_confirm(msg(0x1B5), func():
 			var why := Action.player_carry(w, u, o)
 			if why != -1:
-				say(_cmd_message(why))
+				say_msg(why)
 			else:
 				say("%s picks up %s." % [unit_name(u), unit_name(o)])
 			_set_mode("move")
 			_after_command())
 	else:
 		var carried := w.ub(u, 0x34)
-		_confirm(_cmd_message(0x1B2), func():
+		_confirm(msg(0x1B2), func():
 			Action.player_release(w, u, h.x, h.y)
 			if not carried in squad:
 				pass
@@ -641,52 +691,47 @@ func _after_command() -> void:
 
 # --- the turn --------------------------------------------------------------------
 
-func _recon_pass(side: int) -> void:
-	## 0x483490(0): with the campaign flag set, F-layer bit 5 is cleared first; then
-	## each active unit of the side searches with its movement mode (0x47F500 without the
-	## command's prompt and cost: what step_search does).
-	if w.campaign:
-		for y in MAP:
-			for x in MAP:
-				if w.on_map(x, y):
-					w.F[x + MAP * y] &= 0xDF
-	for u in w.n_units:
-		if w.active(u) and (3 if w.is_enemy(u) else 0) == side:
-			Action.step_search(w, u, (w.ub(u, 4) >> 4) & 3)
+func _view_reset(side: int) -> void:
+	## mission_loop: clear_view (0x47D5C0), or view_all (0x437370) with option bit 7
+	if options & 0x80:
+		Turn.view_all(w, side)
+	else:
+		Turn.clear_view(w, side)
 
 
-func _clear_spotted() -> void:
-	## 0x437440: every spotted flag is cleared (units 0-253).
-	for u in w.n_units:
-		w.setb(u, 0, w.ub(u, 0) & ~0x10)
-
-
-func _clear_view(side: int) -> void:
-	## 0x47D5C0(side): the side's view marks (F-layer bit 3 for the player, 2 for the enemy).
-	var bit := 0x08 if side < 3 else 0x04
-	for y in MAP:
-		for x in MAP:
-			if w.on_map(x, y):
-				w.F[x + MAP * y] &= ~bit
+func _turn_start() -> void:
+	## mission_loop's LAB_00436b39 (w.phase is 3 here): smoke clears (0x483B50), spotted
+	## flags (0x437440), the computer's view and recon pass, the AI memory of spotted
+	## DoLLS (0x480C60); then the player's phase, view and recon pass. (The date window
+	## 0x4361C0, the camera 0x436360 and 0x4F3DA0 are display.)
+	Turn.smoke_clears(w, rng)
+	Turn.clear_spotted_all(w, options)
+	Turn.clear_view(w, 3)
+	Turn.recon_pass(w, 3)
+	Turn.memory_record(w)
+	w.phase = 0
+	_view_reset(0)
+	Turn.recon_pass(w, 0)
 
 
 func _end_turn() -> void:
-	## The mission loop's turn (0x436690; RULES.md 5.7), less the event scripts, the
-	## strike executor and support fire, which are not ported.
+	## mission_loop (0x436690) after the player's commands, call by call; the mission's
+	## event scripts and the strike executor (0x4E37A0) are not ported.
 	if busy:
 		return
 	busy = true
-	w.phase = 3
 	say("[b]Enemy phase[/b]")
-	_clear_spotted()
-	_clear_view(0)
-	_recon_pass(0)
+	Turn.support_fire(w, 0)
+	Turn.clear_spotted_all(w, options)
+	_view_reset(0)
+	Turn.recon_pass(w, 0)                # still the player's phase
+	w.phase = 3
 	Turn.turn_upkeep(w, rng, Turn.PHASE_ENEMY)
 	Turn.refill_ap(w, Turn.PHASE_ENEMY)
-	_clear_view(3)
-	_recon_pass(3)
-	for u in w.n_units:                  # 0x4361A0: the reacted flags
-		w.setb(u, 0, w.ub(u, 0) & ~0x40)
+	Turn.clear_view(w, 3)
+	Turn.recon_pass(w, 3)
+	Turn.memory_forget(w)
+	Turn.clear_reacted_all(w)
 	hooks.flag = 0
 	if auto_react:
 		var undefined0 := []
@@ -722,16 +767,14 @@ func _end_turn_finish(res: int, undefined: Array) -> void:
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
+	Turn.support_fire(w, 3)
+	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
-	# the next player turn starts (0x436B39): spotting and views are redone
-	_clear_spotted()
-	_clear_view(3)
-	_recon_pass(3)
-	_clear_view(0)
-	_recon_pass(0)
+	w.phase = 3
+	Turn.clear_strikes(w)                # 0x46F590(0)
+	_turn_start()
 	turn += 1
-	w.phase = 0
 	say("[b]Turn %d[/b]" % turn)
 	busy = false
 	if selected != -1 and not w.active(selected):

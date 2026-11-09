@@ -7,6 +7,13 @@ const ROOT := "user://import"
 var manifest: Dictionary = {}
 var palette: Array = []
 var _tables := {}
+var _messages := {}
+var _translations := {}
+## "ja" shows the game's own text; "en" / "fr" use the translation tables when they have
+## the message (translations/*.csv: res://translations, user://translations, the folder
+## named by the PD2_TRANSLATIONS environment variable, or a PowerDolls2-content checkout
+## next to this one), else the Japanese text.
+var language := OS.get_locale_language()
 
 
 func _ready() -> void:
@@ -22,6 +29,8 @@ func reload() -> void:
 	var pal: Dictionary = _json(ROOT + "/palette.json")
 	palette = pal.get("tactical", [])
 	_tables.clear()
+	_messages.clear()
+	_translations.clear()
 
 
 func mission_count(campaign: String) -> int:
@@ -61,6 +70,145 @@ func map_texture(campaign: String, index: int) -> Texture2D:
 		return null
 	var img := Image.load_from_file(path)
 	return ImageTexture.create_from_image(img) if img else null
+
+
+## A battle message (WMES.PCK, as message_text 0x471A00 reads it), translated, with its
+## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1);
+## ids 0x1A3 and up hold the same text in every entry of both campaigns.
+func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
+	var t := _translated("wmes", "%X" % id)
+	if t == "":
+		if not _messages.has(campaign):
+			_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
+		var tables: Array = _messages[campaign].get("wmes", [])
+		if entry < tables.size() and id < tables[entry].size():
+			t = tables[entry][id]
+	return format_text(t, args)
+
+
+## An engine UI string (translations/ui.csv): the language's column, else English, else the key.
+func ui_text(key: String) -> String:
+	if not _translations.has("ui"):
+		_translations["ui"] = _load_csv("ui")
+	var row: Dictionary = _translations["ui"].get(key, {})
+	return row.get(language, row.get("en", key))
+
+
+func _translated(table: String, key: String) -> String:
+	if language == "ja":
+		return ""
+	if not _translations.has(table):
+		_translations[table] = _load_csv(table)
+	var row: Dictionary = _translations[table].get(key, {})
+	return row.get(language, "")
+
+
+static func _load_csv(table: String) -> Dictionary:
+	var dirs := ["res://translations", "user://translations"]
+	if OS.has_environment("PD2_TRANSLATIONS"):
+		dirs.append(OS.get_environment("PD2_TRANSLATIONS"))
+	# a development checkout next to the content repository (D:/Dev/PowerDolls2-content)
+	dirs.append(ProjectSettings.globalize_path("res://").path_join("../../../PowerDolls2-content/translations").simplify_path())
+	var out := {}
+	for d in dirs:
+		var f := FileAccess.open("%s/%s.csv" % [d, table], FileAccess.READ)
+		if f == null:
+			continue
+		var head := f.get_csv_line()
+		while not f.eof_reached():
+			var row := f.get_csv_line()
+			if row.size() < 2 or row[0] == "":
+				continue
+			var cells := {}
+			for i in range(1, mini(row.size(), head.size())):
+				if row[i] != "":
+					cells[head[i]] = row[i]
+			out[row[0]] = cells
+	return out
+
+
+## format_text (0x435B10): %% is a percent sign; %[width] then d / l (decimal, padded with
+## spaces on the left to the width), x (upper-case hex; decimal when negative), s (padded
+## on the right and cut to the width), c (one character). %aHH and %b (which takes an
+## argument) set the colour and print nothing here. A backslash then n or r is a line break.
+## '@' is left in: the game's window printer (0x438FE0) waits for a click there.
+static func format_text(t: String, args: Array) -> String:
+	var out := ""
+	var ai := 0
+	var i := 0
+	while i < t.length():
+		var c := t[i]
+		if c == "\\" and i + 1 < t.length() and (t[i + 1] == "n" or t[i + 1] == "r"):
+			out += "
+"
+			i += 2
+			continue
+		if c != "%":
+			out += c
+			i += 1
+			continue
+		i += 1
+		if i >= t.length():
+			break
+		if t[i] == "%":
+			out += "%"
+			i += 1
+			continue
+		var wd := ""
+		while i < t.length() and t[i] >= "0" and t[i] <= "9":
+			wd += t[i]
+			i += 1
+		var width := mini(int(wd), 80) if wd != "" else 0
+		if i >= t.length():
+			break
+		var k := t[i]
+		i += 1
+		var a: Variant = args[ai] if ai < args.size() else 0
+		match k:
+			"d", "l", "x":
+				ai += 1
+				var n := int(a)
+				if k == "d":
+					n = ((n & 0xFFFF) ^ 0x8000) - 0x8000      # a short
+				var v := ("%X" % n) if k == "x" and n >= 0 else str(n)
+				out += " ".repeat(maxi(0, width - v.length())) + v
+			"s":
+				ai += 1
+				var v := str(a)
+				if width:
+					v = v.substr(0, width)
+				out += v + " ".repeat(maxi(0, width - v.length()))
+			"c":
+				ai += 1
+				out += char(int(a)) if a is int else str(a)
+			"a":
+				i += 2
+			"b":
+				ai += 1
+	return out
+
+
+## A prompt's text and its choices: the choices start after the full-width space before the
+## first choice and are split by
+## '・' ("移動　・　中止"), as the texts are written (the popup builder 0x40C090 is not
+## read yet); answer 0 is the first choice (the prompt's 0, checked in the emulated
+## commands). Returns [text, [choices]].
+static func prompt_parts(t: String) -> Array:
+	var f := t.find("・")
+	if f == -1:
+		return [t, []]
+	var cut := f
+	while cut > 0 and t[cut - 1] == "　":
+		cut -= 1
+	while cut > 0 and t[cut - 1] != "　":
+		cut -= 1
+	var parts := []
+	for p in t.substr(cut).split("・"):
+		parts.append(p.replace("　", "").strip_edges())
+	var head := t.substr(0, cut)
+	while head.ends_with("　") or head.ends_with(" "):
+		head = head.left(head.length() - 1)
+	return [head, parts]
 
 
 static func _join(parts: Array) -> PackedByteArray:

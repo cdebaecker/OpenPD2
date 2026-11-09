@@ -1032,8 +1032,10 @@ static func ai_reload(w: Pd2World, u: int) -> int:
 
 
 ## 0x46F320
+## 0x46F320: mark (x, y), if on the map, as in the side's view (bit 3 player, bit 2 enemy).
 static func set_view(w: Pd2World, x: int, y: int, side: int) -> void:
-	w.F[x + MAP * y] |= 1 << (3 if side < 3 else 2)
+	if w.on_map(x, y):
+		w.F[x + MAP * y] |= 1 << (3 if side < 3 else 2)
 
 
 ## 0x42D430: the AI's search command. Returns the number of units spotted (or an abort code).

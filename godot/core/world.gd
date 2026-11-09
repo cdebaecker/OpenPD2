@@ -34,6 +34,11 @@ var phase := 3                  # DS:0x50DDC8: 0 = the player's phase (the mine 
 var memory: PackedByteArray     # AI memory DS:0x551DA0: 40 x 3 B (x, y, 0xFF)
 var groups: PackedByteArray     # 64 x 35 B (DS:0x50A35C)
 var combat: PackedByteArray     # combat record, 26 x 13 B (DS:0x506B39)
+# read by destroy's group removal (0x4549B0); the mission start (not ported) sets them
+var crew_pool := PackedByteArray()   # DS:0x50AD02: free pilots (0x8C B), count DS:0x50AD00
+var crew_pool_n := 0
+var time_ad92 := 0                   # DS:0x50AD92, compared with crew +4
+var mode_663a := 1                   # DS:0x50663A: 1 in the battle (0x487D70 -> 0x436530)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
@@ -66,6 +71,7 @@ func _init(machines: PackedByteArray, launchers: PackedByteArray, ammo: PackedBy
 	groups.resize(64 * 35)
 	combat = PackedByteArray()
 	combat.resize(26 * 13)
+	crew_pool.resize(0x8C)
 
 
 func duplicate_world() -> Pd2World:
@@ -82,6 +88,11 @@ func duplicate_world() -> Pd2World:
 	c.groups = groups.duplicate()
 	c.combat = combat.duplicate()
 	c.fire_point = fire_point
+	c.crew_pool = crew_pool.duplicate()
+	c.crew_pool_n = crew_pool_n
+	c.time_ad92 = time_ad92
+	c.mode_663a = mode_663a
+	c.phase = phase
 	return c
 
 
@@ -244,8 +255,11 @@ func unit_class(u: int) -> int:                    # 0x47CC30
 
 func cover(u: int) -> int:                         # 0x47CD20 at the unit's tile
 	var p := pos(u)
-	var tile := layer(T, p.x, p.y)
-	return terrain[608 + 16 * (5 + unit_class(u)) + terrain[tile]]
+	return cover_at(unit_class(u), p.x, p.y)
+
+
+func cover_at(cls: int, x: int, y: int) -> int:    # cover(cls, tile_at(x, y)), 0x47CD20
+	return terrain[608 + 16 * (5 + cls) + terrain[layer(T, x, y)]]
 
 
 func armour(u: int) -> int:                        # 0x47C900

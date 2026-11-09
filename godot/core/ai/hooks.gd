@@ -33,8 +33,13 @@ func mine_blast(x: int, y: int) -> void:
 	pass
 
 
-## The player's phase (w.phase 0): clear the mine found? (0x1A3 on a step, 0x1C9 on a path)
-func mine_clear(u: int) -> bool:
+## The player's phase (w.phase 0): "mine found!" (0x1A6), in careful mode before any question.
+func mine_found(u: int) -> void:
+	pass
+
+
+## The player's phase: clear the mine found? (msg 0x1A3 on a step, 0x1C9 on a path)
+func mine_clear(u: int, msg := 0x1A3) -> bool:
 	return false
 
 
@@ -44,8 +49,9 @@ func mine_shoot(u: int) -> Variant:
 	return null
 
 
-## The move command's prompts: 0x1DC (move along the path, ap) and 0x1E4 (melee, ap).
-func confirm(msg: int, ap: int) -> bool:
+## The move command's prompts, with the values the game shows: 0x1DC (move along the path?
+## [the hex's AP, u's AP, the hex's cover]) and 0x1E4 (melee? [the hex's AP]).
+func confirm(msg: int, args: Array) -> bool:
 	return true
 
 

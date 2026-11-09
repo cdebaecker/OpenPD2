@@ -12,7 +12,7 @@ extends RefCounted
 const UNITS := 255              # 0-254: the group table follows unit 254 (DS:0x50A35C)
 const INIT_FIRST := 27
 const INIT_UNITS := 228
-const CAMPAIGN_FLAG := {"pd2": 0, "dash": 1}   # DS:0x554B10
+const CAMPAIGN_FLAG := {"pd2": 1, "dash": 0}   # DS:0x554B10: 1 reads pd2\ (0x408BE0), 0 dash\
 
 
 static func build(tables: Dictionary, doc: Dictionary, campaign: String) -> Pd2World:

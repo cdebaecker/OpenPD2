@@ -1,7 +1,7 @@
 class_name AiTurnHooks
 extends AiHooks
-## What a behaviour leaves to the game, with the real reload, shots and steps
-## (rules.AiTurnHooks). Melee, reactions, unit removal and mine blasts stay hooks.
+## What a behaviour leaves to the game, with the real reload, shots, steps and unit
+## removal (rules.AiTurnHooks). Melee, reactions and mine blasts stay hooks.
 
 var w: Pd2World
 var easy := false
@@ -26,3 +26,7 @@ func step(kind: String, x: int, y: int, movemode: int, mm: Move.MoveMap, u := -1
 	if kind == "walk":
 		return Action.ai_walk(w, rng, u, x, y, movemode, mm, self, easy)
 	return Action.ai_path(w, rng, u, x, y, movemode, mm, self, easy)
+
+
+func destroy(k: int) -> void:             # 0x480140 (Action.destroy, emulated)
+	Action.destroy(w, k)
