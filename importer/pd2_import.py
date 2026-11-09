@@ -44,6 +44,7 @@ KNOWN = json.load(open(os.path.join(HERE, 'versions.json'), encoding='utf-8'))
 CAMPAIGNS = ('pd2', 'dash')
 TABLE_SET = {'pd2': 'pd2', 'dash': 'dash'}      # the record block each campaign loads (0x409240, by DS:0x554B10)
 SECTOR = 2048
+GRAPHICS_CHUNK = [0, 1, 2, 5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]   # 0x482910's local table
 
 
 def b64(data):
@@ -213,9 +214,9 @@ def export_missions(game, out, pal):
         os.makedirs(os.path.join(out, camp, 'missions'), exist_ok=True)
         os.makedirs(os.path.join(out, camp, 'maps'), exist_ok=True)
         for m, rec in enumerate(recs):
-            cp = m
-            while cp > 0 and (not layers['C'][cp] or not layers['P'][cp]):
-                cp -= 1
+            # the loader 0x482910 takes the P / C chunk from a table with the DASH flag
+            # (DS:0x554B10 = 0): mission 3 uses chunk 5's graphics (1-based numbers)
+            cp = (GRAPHICS_CHUNK[m + 1] - 1) if camp == 'dash' else m
             if len(layers['M'][m]) == 72 * 72 and layers['P'][cp]:
                 w, h, img = missions.render_tactical(layers['M'][m], layers['C'][cp], layers['P'][cp])
                 gcp.write_png(os.path.join(out, camp, 'maps', f'm{m:02d}.png'), w, h, img, pal)

@@ -181,8 +181,13 @@ func _ready() -> void:
 	cam.limit_bottom = MAP * TILE_H
 	add_child(cam)
 	_build_hud()
-	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the player's upkeep and
-	# AP, then the turn start (LAB_00436b39)
+	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the loader's layer reset
+	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
+	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
+	# upkeep and AP, then the turn start (LAB_00436b39)
+	Mission.layers_reset(w)
+	Mission.start_units(w)
+	Mission.rebuild_occupancy(w)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)

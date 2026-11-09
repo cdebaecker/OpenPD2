@@ -41,13 +41,58 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String) -> Pd2W
 	return w
 
 
+## 0x483030: the occupancy layer emptied, then every active unit (0-253, in order) written.
 static func rebuild_occupancy(w: Pd2World) -> void:
 	w.O = PackedByteArray()
 	w.O.resize(72 * 72)
-	for u in w.units.size() / 55:
+	for u in mini(w.units.size() / 55, 254):
 		if w.active(u):
 			var p := w.pos(u)
 			w.O[p.x + 72 * p.y] = (u + 1) & 0xFF
+
+
+## The end of the mission loader 0x482910: occupancy emptied, F layer cleared but bit 5.
+static func layers_reset(w: Pd2World) -> void:
+	w.O = PackedByteArray()
+	w.O.resize(72 * 72)
+	for i in 72 * 72:
+		w.F[i] &= 0x20
+
+
+## 0x437490, a new mission: every unit (0-253) carries nobody and gets its maximum AP.
+static func start_units(w: Pd2World) -> void:
+	for u in mini(w.units.size() / 55, 254):
+		w.setb(u, 0x34, 0xFF)
+		w.setb(u, 0xE, Move.max_ap(w, u) & 0xFF)
+
+
+## 0x429950: parts and every slot's and pocket's state repaired.
+static func repair_all(w: Pd2World, u: int) -> void:
+	w.setb(u, 1, 0)
+	w.setb(u, 2, w.ub(u, 2) & 0xF0)
+	for i in 6:
+		w.setb(u, 0x10 + 2 * i, w.ub(u, 0x10 + 2 * i) & 0xCF)
+	for i in 12:
+		w.setb(u, 0x1C + 2 * i, w.ub(u, 0x1C + 2 * i) & 0x3F)
+
+
+## When mission_loop returns: 0x4373B0 resets every unit (mode 0, not concealed or reacted,
+## carrying nobody, +6 = 0, repaired, off the map) and empties the timer lists; 0x4374C0
+## marks units 0-39 whose machine has +0x1C set as destroyed.
+static func mission_end(w: Pd2World) -> void:
+	for u in mini(w.units.size() / 55, 254):
+		w.setb(u, 4, w.ub(u, 4) & 0xCF)
+		w.setb(u, 0, w.ub(u, 0) & 0x9F)
+		w.setb(u, 0x34, 0xFF)
+		w.setb(u, 6, 0)
+		repair_all(w, u)
+		w.setb(u, 9, 0xFF)
+		w.setb(u, 10, 0xFF)
+	w.bombs.fill(0)
+	w.sensors.fill(0)
+	for u in 40:
+		if w.machine(w.ub(u, 0xC), 0x1C):
+			w.setb(u, 0, w.ub(u, 0) | 1)
 
 
 ## Sandbox stand-in for the briefing: `count` DoLLS (crew 1..count, X4 PLDs) take the

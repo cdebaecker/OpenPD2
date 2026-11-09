@@ -39,6 +39,8 @@ var crew_pool := PackedByteArray()   # DS:0x50AD02: free pilots (0x8C B), count 
 var crew_pool_n := 0
 var time_ad92 := 0                   # DS:0x50AD92, compared with crew +4
 var mode_663a := 1                   # DS:0x50663A: 1 in the battle (0x487D70 -> 0x436530)
+var bombs := PackedByteArray()       # DS:0x50AC1C: timed explosives, 15 x 4 B (not ported)
+var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (not ported)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
@@ -72,6 +74,8 @@ func _init(machines: PackedByteArray, launchers: PackedByteArray, ammo: PackedBy
 	combat = PackedByteArray()
 	combat.resize(26 * 13)
 	crew_pool.resize(0x8C)
+	bombs.resize(0x3C)
+	sensors.resize(0xA8)
 
 
 func duplicate_world() -> Pd2World:
@@ -93,6 +97,8 @@ func duplicate_world() -> Pd2World:
 	c.time_ad92 = time_ad92
 	c.mode_663a = mode_663a
 	c.phase = phase
+	c.bombs = bombs.duplicate()
+	c.sensors = sensors.duplicate()
 	return c
 
 

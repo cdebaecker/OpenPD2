@@ -941,10 +941,23 @@ begins gets its AP set to the maximum (§5.1).
    - status 3+ (0x441F40): groups below 20 as above; others clear the member slot and
      drop the count, and the unit leaves the map again.
 
-**Mission start** (0x4373B0 / `clear_spotted_all` (0x437440)): every unit's movement mode, concealed
-and reacted flags and carried unit are reset, and it is placed off the map.
-Spotted flags are cleared, except that option bit 0x80 shows enemy units. Both
-timer tables are emptied.
+**A new mission** (`mission_loop` with DS:0x50AD94 = 0), emulated where it is rules:
+1. the mission's data is loaded (0x482910): the S, M and H layers from chunk
+   DS:0x50663D − 1 of `MISSON?D.PCK`; the map graphics (P, C) from the same chunk, except
+   that with the DASH flag (0) they go through a table in which mission 3 uses chunk
+   5's graphics. The occupancy layer is emptied and every F‑layer bit but bit 5 is
+   cleared (smoke, views, strikes and mines included);
+2. `start_units` (0x437490): every unit (0–253) carries nobody and gets its maximum AP;
+3. the mission script, stage 2 (not ported);
+4. the occupancy layer is rebuilt from the active units (0x483030, units 0–253 in order);
+5. the mission's start script (table 0x51F0F8, not ported);
+6. phase 0: upkeep and AP refill; phase 3; then the turn start (see the passes above).
+
+**When the mission ends** (`mission_loop` returning anything but 0xC0), emulated:
+0x4373B0 resets every unit (0–253): movement mode 0, not concealed, not reacted,
+carrying nobody, +6 = 0, all parts and slot / pocket states repaired (0x429950), off the
+map; the timed‑explosive list (DS:0x50AC1C, 15 × 4 B) and the sensor list are emptied.
+Then 0x4374C0 marks units 0–39 whose machine has +0x1C set as destroyed.
 
 ### 5.8 The computer side: generic AI and per‑mission event scripts
 
