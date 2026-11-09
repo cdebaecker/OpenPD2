@@ -49,6 +49,27 @@ class SandboxHooks extends AiTurnHooks:
 			return 0
 		var t := u
 		var f := flag
+		if w.is_enemy(u):
+			# the player's units react: the game's menu loop (Action.player_reactions), with
+			# an automatic answer until the battle can pause the computer's turn for a menu
+			var mode := 10 if w.unit_class(t) >= 2 else 5
+			var choose := func(menu: Array, tt: int) -> Variant:
+				var tp := w.pos(tt)
+				for b in menu:
+					var bp := w.pos(b)
+					var best := -1
+					var best_atk := 0
+					for s in Action.weapon_choices(w, b, mode, Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y)):
+						if s < 4:
+							var atk := Move.final_attack(w, b, s, mode == 10)
+							if atk > best_atk:
+								best = s
+								best_atk = atk
+					if best != -1:
+						battle.say("%s reacts at %s" % [battle.unit_name(b), battle.unit_name(tt)])
+						return [b, [best]]
+				return 1
+			return Action.player_reactions(w, rng, reactors, t, f, choose, self, easy)
 		var shot := func(b: int, s: int) -> int:
 			battle.say("%s reacts at %s" % [battle.unit_name(b), battle.unit_name(t)])
 			return Action.reaction_shot(w, rng, b, s, t, f, self, easy)

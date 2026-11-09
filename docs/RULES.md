@@ -588,6 +588,36 @@ against ground targets).
   (flag 1; the fire command `cmd_fire` (0x425AF0) and others);
 - from the other move routines (flag 10).
 
+**The player's reaction menu** (`reaction_loop`, 0x472920, when the target is an enemy;
+`rules.player_reactions` / `weapon_choices`). Emulated: the menu loop 600 / 600 with the
+player's answers scripted, and the weapon picker 600 / 600.
+1. **Menu** (`reaction_menu_list`, 0x472ED0): the candidates (`reaction_candidates`, in
+   order) that have not reacted yet, after two fixed entries:
+   - entry 0 marks the *target* as having reacted (flag 0x40, through 0x4EE870), then ends;
+   - entry 1 just ends.
+2. **Weapon picker** (`ui_reaction_weapon_picker`, 0x4E7EE0, mode 5, or 10 at an
+   aircraft, at the reactor's distance to the target). Items 0–3 are the slots, 4–7
+   their magazine swaps. Slot k is disabled when:
+   - its range is 0, or below the distance in modes 5 / 10;
+   - it is a hand slot and both manipulators are broken;
+   - in anti‑air modes (6 / 7 / 10): the launcher's AA accuracy is 0 or the AA attack is 0;
+   - in the other modes: the ground accuracy or attack is 0 (smoke exempt), aimed fire
+     uses a blast radius, or a ground reaction uses a launcher of radius other than 1;
+   - the AP is short, except in modes 5 / 7 / 10;
+   - the launcher kind is 3, is not direct in modes 1 / 5, or is a missile in mode 7;
+   - the slot is empty, its pocket is broken, or the slot is broken.
+
+   A swap item is disabled when the launcher takes no magazines (+9 bit 3), takes a
+   single round type (+0xB = 0xFF), or the count reads −1. An empty slot reads launcher
+   −1, the 17 bytes before the launcher table (machine 31's tail).
+3. **Choice:** a slot fires a reaction shot (`reaction_shot`). A swap item only reopens
+   the picker; no magazine is changed here. Cancel goes back to the menu.
+4. **Repeat:** the menu comes back after each shot until it is empty, the player ends it,
+   or the target is destroyed. Unlike the computer's branch, this one writes nothing to
+   the AI memory.
+
+The same picker, in modes 0 / 1 / 6, offers the weapons of the fire command.
+
 **Who can react** (`reaction_candidates`, 0x472410): every unit that meets all of these:
 - on the other side, status ≠ 1, active;
 - its order nibble (unit +3, low or high nibble by the alert flag DS:0x50ADF1)

@@ -525,3 +525,98 @@ static func player_fire(w: Pd2World, rng: Pd2Random, u: int, slot: int, mode: in
 			var shot := func(b: int, s: int) -> int: return reaction_shot(w, rng, b, s, u, 1, hooks, easy)
 			return Move.ai_reactions(w, rng, cands, u, 1, shot)
 	return 0
+
+
+# --- the weapon picker and the player's reaction menu (0x4E7EE0, 0x472920) ----------
+
+## Launcher record byte as the picker reads it: an empty slot (-1) reads the 17 bytes
+## before the launcher table, machine 31's tail.
+static func _picker_launcher(w: Pd2World, lid: int, f: int) -> int:
+	return w.machine(31, 14 + f) if lid == -1 else w.launcher(lid, f)
+
+
+## The weapon picker's enabled items for u in `mode` (rules.weapon_choices): 0-3 the
+## slots, 4-7 their magazine swaps.
+static func weapon_choices(w: Pd2World, u: int, mode: int, dist := 0) -> Array:
+	var out := []
+	var mag_off := {}
+	var hands_off := (w.ub(u, 1) & 0xC0) == 0x80 and (w.ub(u, 2) & 3) == 2
+	for s in 4:
+		var lid := w.launcher_id(u, s)
+		var off := false
+		var rng_ := w.weapon_range(u, s) & 0xFF
+		if rng_ == 0 or (mode in [5, 10] and rng_ < dist):
+			off = true
+		if s > 1 and hands_off:
+			off = true
+		var wh := w.warhead(u, s)
+		if mode in [6, 7, 10]:
+			if _picker_launcher(w, lid, 5) == 0 or Move.final_attack(w, u, s, true) == 0:
+				off = true
+		else:
+			if _picker_launcher(w, lid, 2) == 0 and wh != SMOKE_WARHEAD:
+				off = true
+			if Move.final_attack(w, u, s, false) == 0 and wh != SMOKE_WARHEAD:
+				off = true
+			var rad := _picker_launcher(w, lid, 9) & 7
+			if (mode == 1 and rad != 0) or (mode == 5 and rad != 1):
+				off = true
+		var v := _picker_launcher(w, lid, 8) & 0x1F
+		var cost := (v - 32 if v & 0x10 else v) * (2 if mode == 1 else 1)
+		if w.sb(u, 0xE) < cost and not mode in [5, 10, 7]:
+			off = true
+		var kind := _picker_launcher(w, lid, 8) >> 5
+		if kind == 3 or (kind != 0 and mode in [1, 5]) or (mode == 7 and kind == 2):
+			off = true
+		var cnt := w.slot_count(u, s)
+		if not (_picker_launcher(w, lid, 9) & 8):
+			mag_off[s] = true
+		if cnt == 0:
+			off = true
+		elif _picker_launcher(w, lid, 0xB) == 0xFF:
+			mag_off[s] = true
+		elif w.ub(u, 0x1C + 2 * (w.ub(u, 0x10 + 2 * s) & 15)) >> 6 == 2:
+			off = true
+		if cnt == -1:
+			mag_off[s] = true
+		if w.slot_state(u, s) == 2:
+			off = true
+		if not off:
+			out.append(s)
+	for s in 4:
+		if not mag_off.has(s):
+			out.append(4 + s)
+	return out
+
+
+## The reaction loop's player branch (rules.player_reactions). choose.call(menu, t)
+## returns 0 (mark t as reacted and stop), 1 or null (stop), or [unit, picks] with picks
+## the picker answers (ending with a slot or -2). Returns the OR of the shot results.
+static func player_reactions(w: Pd2World, rng: Pd2Random, reactors: Array, t: int, flag: int,
+		choose: Callable, hooks: AiHooks = null, easy := false) -> int:
+	if hooks == null:
+		hooks = AiHooks.new()
+	var result := 0
+	while true:
+		var menu := []
+		for b in reactors:
+			if not (w.ub(b, 0) & 0x40):
+				menu.append(b)
+		if menu.is_empty():
+			break
+		var pick: Variant = choose.call(menu, t)
+		if pick == null or (pick is int and pick == 1):
+			break
+		if pick is int and pick == 0:
+			w.setb(t, 0, w.ub(t, 0) | 0x40)
+			break
+		var b: int = pick[0]
+		for item in pick[1]:
+			if item == -2:
+				break
+			if item < 4:
+				result |= reaction_shot(w, rng, b, item, t, flag, hooks, easy)
+				break
+		if result >= 4:
+			break
+	return result
