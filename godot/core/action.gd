@@ -343,7 +343,34 @@ static func step_mine_blast(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int,
 	return res
 
 
-## 0x475AE0: one step into an adjacent hex for a computer-side mover. Returns the bits.
+## 0x4756A0: a mine found on a single step in careful mode. Outside the player's phase it
+## is cleared for 4 AP; in it the player may clear it (4+ AP and the engineering skill)
+## or shoot it (the slot's launcher AP and a round). Returns 2 when the mine is gone, else 0.
+static func step_mine_found(w: Pd2World, u: int, hooks: AiHooks) -> int:
+	var p := w.pos(u)
+	if w.phase != 0:
+		Ai.spend_ap(w, u, 4)
+		toggle_mine(w, p.x, p.y, u)
+		return 2
+	if w.sb(u, 0xE) > 3 and (w.ucrew(u, 8) >> 1) & 1 and hooks.mine_clear(u):
+		Ai.spend_ap(w, u, 4)
+		toggle_mine(w, p.x, p.y, u)
+		return 2
+	var picks: Variant = hooks.mine_shoot(u)
+	if picks == null:
+		return 0
+	for item in picks:
+		if item == -2:
+			return 0
+		if item < 4:
+			Ai.spend_ap(w, u, Move.launcher_ap(w, w.launcher_id(u, item)))
+			w.set_slot_count(u, item, w.slot_count(u, item) - 1)
+			toggle_mine(w, p.x, p.y, u)
+			return 2
+	return 0
+
+
+## 0x475AE0: one step into an adjacent hex. Returns the bits.
 static func ai_walk(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: int, mm: Move.MoveMap, hooks: AiHooks = null, easy := false) -> int:
 	if hooks == null:
 		hooks = AiHooks.new()
@@ -356,9 +383,7 @@ static func ai_walk(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 	var res := 0
 	if mine_trigger(w, x, y, u):
 		if mmode == 2:
-			Ai.spend_ap(w, u, 4)
-			toggle_mine(w, x, y, u)
-			res = 2
+			res = step_mine_found(w, u, hooks)
 		else:
 			res = 4 if step_mine_blast(w, rng, x, y, u, mmode, hooks, easy) else 2
 	if res != 4:
@@ -400,9 +425,14 @@ static func ai_path(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 		if under == -1 and mine_trigger(w, p.x, p.y, u):
 			if mmode == 2:
 				if w.sb(u, 0xE) >= 4 and (w.ucrew(u, 8) >> 1) & 1:
-					Ai.spend_ap(w, u, 4)
-					toggle_mine(w, p.x, p.y, u)
-					res = 2
+					if w.phase != 0:
+						Ai.spend_ap(w, u, 4)
+						toggle_mine(w, p.x, p.y, u)
+						res = 2
+					elif hooks.mine_clear(u):          # the player is asked (0x1C9)
+						Ai.spend_ap(w, u, 4)
+						toggle_mine(w, p.x, p.y, u)
+						res = 1
 			else:
 				res = 4 if step_mine_blast(w, rng, p.x, p.y, u, mmode, hooks, easy) else 2
 		if res != 4:
@@ -733,3 +763,89 @@ static func player_release(w: Pd2World, u: int, x: int, y: int) -> void:
 	w.setb(u, 0x34, 0xFF)
 	w.O[x + MAP * y] = (o + 1) & 0xFF
 	Ai.spend_ap(w, u, 2)
+
+
+# --- the player's move command (unit_command_menu 0x4EE8D0, entries 0-2) ---------------
+
+## Why u cannot move: 0x1DA (manipulators broken while carrying), 0x1DB (movement gear
+## broken), or -1.
+static func move_refusal(w: Pd2World, u: int) -> int:
+	if Ai.manipulator_state(w, u) == 2 and w.ub(u, 0x34) != 0xFF:
+		return 0x1DA
+	if w.ub(u, 1) & 0x0C == 8 or w.ub(u, 1) & 0x30 == 0x20:
+		return 0x1DB
+	return -1
+
+
+## 0x47D780: AP left, not destroyed, movement gear not broken.
+static func can_move(w: Pd2World, u: int) -> bool:
+	var g := w.ub(u, 1)
+	return w.ub(u, 0xE) != 0 and w.ub(u, 0xD) != 0 and (g >> 2) & 3 != 2 and (g >> 4) & 3 != 2
+
+
+## 0x47CED0(map, 1): the hexes that take a click: reachable, and (except for wheeled /
+## tracked machines, category 2-5) not held by a unit of u's side.
+static func move_destinations(w: Pd2World, u: int, mm: Move.MoveMap) -> Array:
+	var cat := w.machine(w.ub(u, 0xC), 0) & 15
+	var kind := 2 if cat == 9 else (1 if cat >= 2 and cat <= 5 else 0)
+	if w.ub(u, 0xC) == 12:
+		kind = 2
+	var side := w.is_enemy(u)
+	var out := []
+	for ly in mm.h:
+		for lx in mm.w:
+			if mm.cells[ly * mm.w + lx] == 0xFF:
+				continue
+			var x := mm.x0 + lx
+			var y := mm.y0 + ly
+			if kind != 1:
+				var o := w.O[x + MAP * y] - 1 if w.on_map(x, y) else -1
+				if o != -1 and w.is_enemy(o) == side:
+					continue
+			out.append(Vector2i(x, y))
+	return out
+
+
+## What a click on (x, y) does: ["walk" | "melee" | "path" | "", the AP shown, the unit there].
+static func move_click(w: Pd2World, u: int, x: int, y: int, mm: Move.MoveMap) -> Array:
+	var up := w.pos(u)
+	var cls := w.unit_class(u)
+	var o := w.O[x + MAP * y] - 1
+	var cost := mm.cell(x, y) & 0x7F
+	var spotted := o != -1 and w.ub(o, 0) & 0x10
+	if Pd2World.hexdist(x, y, up.x, up.y) == 1 and (absi(w.H[x + MAP * y] - w.H[up.x + MAP * up.y]) < 2 or cls >= 2):
+		return ["walk" if not spotted or cls == 3 else "melee", cost, o]
+	return ["" if spotted else "path", cost, o]
+
+
+## One click of the move command on a hex of move_destinations: [kind, result]; result
+## null when the prompt was declined or nothing happens. Melee results: 0 the defender
+## is destroyed and u walks in, 1 u pays the hex's AP, 2 u destroyed, 3 both.
+static func player_move(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mode: int, mm: Move.MoveMap, hooks: AiHooks, easy := false, alert := 0) -> Array:
+	var mc := move_click(w, u, x, y, mm)
+	var kind: String = mc[0]
+	var cost: int = mc[1]
+	var o: int = mc[2]
+	if kind == "walk":
+		return [kind, ai_walk(w, rng, u, x, y, mode, mm, hooks, easy)]
+	if kind == "":
+		return [null, null]
+	if not hooks.confirm(0x1E4 if kind == "melee" else 0x1DC, cost):
+		return [kind, null]
+	if kind == "path":
+		return [kind, ai_path(w, rng, u, x, y, mode, mm, hooks, easy)]
+	var res := Melee.melee(w, rng, u, o, alert, easy, hooks.use_weapon)
+	if w.fault != "":
+		return [kind, null]
+	if res == 0:
+		hooks.destroy(o)
+		ai_walk(w, rng, u, x, y, mode, mm, hooks, easy)
+		hooks.melee_done()
+	elif res == 1:
+		Ai.spend_ap(w, u, cost)
+	else:
+		hooks.destroy(u)
+		if res == 3:
+			hooks.destroy(o)
+		hooks.melee_done()
+	return [kind, res]

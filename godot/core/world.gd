@@ -30,6 +30,7 @@ var T: PackedByteArray
 var F: PackedByteArray
 var O: PackedByteArray          # occupancy (unit + 1), 72 x 72; empty = not used
 var campaign: int = 0
+var phase := 3                  # DS:0x50DDC8: 0 = the player's phase (the mine dialogs)
 var memory: PackedByteArray     # AI memory DS:0x551DA0: 40 x 3 B (x, y, 0xFF)
 var groups: PackedByteArray     # 64 x 35 B (DS:0x50A35C)
 var combat: PackedByteArray     # combat record, 26 x 13 B (DS:0x506B39)

@@ -472,6 +472,41 @@ whole commands with the UI scripted, and the target map 60 / 60 on its own.
      reaction candidates shoot by the computer's rule (flag 1).
 5. The command repeats on the same weapon while the AP, the rounds and the unit last.
 
+**The player's move command** (unit menu entries 0–2: normal speed, high speed,
+careful; `unit_command_menu` 0x4EE8D0; `rules.move_refusal` / `can_move` /
+`move_destinations` / `move_click` / `player_move`). Emulated whole, menu included,
+with every answer scripted: 499 / 499 matching.
+1. **Refused:** both manipulators broken while carrying a unit (0x1DA); movement gear
+   broken, +1 bits 2–3 at 2 or bits 4–5 at 2 (0x1DB).
+2. **Marked hexes** (0x47CED0): every reachable hex of the move map. For machines other
+   than wheeled / tracked (category 2–5) a hex held by a unit of the same side is left
+   out, the unit's own hex too; helicopters and machine 12 count as "other". With no
+   marked hex the command does nothing. Only marked hexes take a click.
+3. **The click:**
+   - **An adjacent hex**, with a height step below 2 (any step for class 2+ machines):
+     a plain step (`ai_walk`) when it is empty, its unit is not spotted, or the mover
+     flies (class 3). A spotted unit there: "melee?" (0x1E4, with the hex's AP), then
+     the melee. **Results:** 0 the defender is removed and the mover steps in; 1 the
+     mover pays the hex's AP; 2 the mover is removed; 3 both.
+   - **Any other hex:** "move here?" (0x1DC, with the hex's AP), then the path
+     (`ai_path`). A spotted unit on the hex: nothing happens.
+4. The command asks for the next click while the unit has AP, is not destroyed and its
+   movement gear holds (0x47D780). A right click ends it.
+
+**Mines in the player's phase** (phase flag DS:0x50DDC8 = 0; `step_mine_found` 0x4756A0,
+`rules.step_mine_found`). In careful mode a mine of the other side is found:
+- **On a single step:** "mine found" (0x1A6), then:
+  - with more than 3 AP and the engineering skill (crew +8 bit 1): "clear it?" (0x1A3).
+    Yes: 4 AP, the mine is gone, result 2;
+  - otherwise, or on no: "destroy it by shooting?" (0x1A4). Yes opens the weapon picker
+    (mode 3). The chosen slot pays its launcher's AP and one round; the mine is
+    destroyed (0x1A5), result 2;
+  - no (or cancel): the mine stays, result 0, and the unit stands on it unharmed.
+- **On a path** (with 4+ AP and the skill): "clear it?" (0x1C9). Yes: 4 AP, the mine is
+  gone and the walk **stops** (result 1). No: the unit walks on over it.
+- **Outside the player's phase** the mine is cleared without asking (result 2). Emulated
+  for player movers in the player's phase: 988 / 988 steps matching.
+
 **The player's search, conceal, carry and release** (unit menu entries 8, 9 and 10;
 `rules.player_search` / `conceal_check` / `carry_candidates` / `player_carry` /
 `release_candidates` / `player_release`). Emulated whole with their prompts answered:

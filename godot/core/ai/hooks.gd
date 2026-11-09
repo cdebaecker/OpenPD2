@@ -33,6 +33,32 @@ func mine_blast(x: int, y: int) -> void:
 	pass
 
 
+## The player's phase (w.phase 0): clear the mine found? (0x1A3 on a step, 0x1C9 on a path)
+func mine_clear(u: int) -> bool:
+	return false
+
+
+## Destroy the mine by shooting? (0x1A4): null to decline, or the weapon picker's answers
+## (mode 3) ending with a slot 0-3 or -2 (no magazine swaps).
+func mine_shoot(u: int) -> Variant:
+	return null
+
+
+## The move command's prompts: 0x1DC (move along the path, ap) and 0x1E4 (melee, ap).
+func confirm(msg: int, ap: int) -> bool:
+	return true
+
+
+## melee's own prompt: use the melee weapon in pocket p?
+func use_weapon(a: int, p: int) -> bool:
+	return true
+
+
+## the melee's display afterwards (0x40EB70)
+func melee_done() -> void:
+	pass
+
+
 ## the player's "intercept?" prompt: the slot, or -1 to decline
 func intercept_choice(t: int, best: int) -> int:
 	return -1

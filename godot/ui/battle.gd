@@ -2,8 +2,8 @@ extends Node2D
 ## The tactical battle, sandbox edition: one mission's map and enemy force (INIT), a
 ## stand-in squad (Mission.sandbox_squad), the player's commands and the computer's
 ## whole turn, all through the ported rules in core/. What is not ported yet (briefing,
-## event scripts, melee resolution, the player's fire / reaction menus, the strike
-## executor) is replaced by the simplest stand-in and listed in engine/README.md.
+## event scripts, the strike executor, magazine swaps) is replaced by the simplest
+## stand-in and listed in engine/README.md.
 
 const TILE_W := 48
 const TILE_H := 36
@@ -24,6 +24,8 @@ var slot := 0
 var mm: Move.MoveMap = null
 var fire_map: Move.MoveMap = null
 var carry_hexes: Array = []
+var move_dests: Array = []
+var move_thread: Thread = null
 var turn := 1
 var alert := 0
 var busy := false
@@ -109,11 +111,38 @@ class SandboxHooks extends AiTurnHooks:
 	func mine_blast(x: int, y: int) -> void:
 		battle.say("mine explodes at %d, %d" % [x, y])
 
+	# the player's move command and its mine dialogs; they run on the move's worker
+	# thread and wait for the answer (auto_react: the defaults, without asking)
+	func confirm(msg: int, ap: int) -> bool:
+		return battle.ask_yes_no(battle.move_message(msg, ap), true)
+
+	func use_weapon(a: int, p: int) -> bool:
+		return battle.ask_yes_no(battle.move_message(0x1E5), true)
+
+	func mine_clear(u: int) -> bool:
+		battle.say(battle.move_message(0x1A6))
+		return battle.ask_yes_no(battle.move_message(0x1A3), false)
+
+	func mine_shoot(u: int) -> Variant:
+		if not battle.ask_yes_no(battle.move_message(0x1A4), false):
+			return null
+		var opts := []
+		for s in Action.weapon_choices(w, u, 3, 0):
+			if s < 4:
+				opts.append(["Slot %d: %d rounds, %d AP" % [s + 1, w.slot_count(u, s),
+					Move.launcher_ap(w, w.launcher_id(u, s))], s])
+		opts.append(["Cancel", -2])
+		var pick: int = battle.ask_choice(battle.move_message(0x1A7), opts, -2)
+		if pick != -2:
+			battle.say(battle.move_message(0x1A5))
+		return [pick]
+
 
 func _ready() -> void:
 	var tables := GameData.tables(campaign)
 	var doc := GameData.mission(campaign, mission_index)
 	w = Mission.build(tables, doc, campaign)
+	w.phase = 0
 	rng = Pd2Random.new(int(Time.get_ticks_usec()) & 0xFFFF)
 	hooks = SandboxHooks.new(w, false, rng)
 	hooks.battle = self
@@ -320,8 +349,11 @@ func _select(u: int) -> void:
 func _update_move_map() -> void:
 	mm = null
 	fire_map = null
+	move_dests = []
 	if selected != -1 and w.active(selected):
 		mm = Move.move_map(w, selected, move_mode)
+		if Action.move_refusal(w, selected) == -1:
+			move_dests = Action.move_destinations(w, selected, mm)
 		if mode in FIRE_MODES and w.launcher_id(selected, slot) != -1:
 			fire_map = Action.fire_target_map(w, selected, slot, FIRE_MODES[mode])
 	_refresh_info()
@@ -357,48 +389,89 @@ func _click(h: Vector2i) -> void:
 
 # --- commands ------------------------------------------------------------------
 
+const MOVE_MESSAGES := {0x1DA: "Both manipulators are broken: cannot move while carrying.",
+	0x1DB: "The movement gear is broken.", 0x1DC: "Move here? (%d AP)", 0x1E4: "Melee? (%d AP)",
+	0x1E5: "Use the melee weapon?", 0x1A3: "Clear the mine? (4 AP)", 0x1A4: "Destroy the mine by shooting?",
+	0x1A5: "The mine is destroyed.", 0x1A6: "A mine is found here!", 0x1A7: "Shoot with:"}
+
+
+func move_message(id: int, n := 0) -> String:
+	## Stand-in texts until the game's own (message_text) come with the translation tables.
+	var t: String = MOVE_MESSAGES.get(id, "")
+	return t % n if "%d" in t else t
+
+
 func _cmd_move(h: Vector2i) -> void:
+	## The move command (Action.player_move, from unit_command_menu 0x4EE8D0): only the
+	## marked hexes take a click; the prompts and the mine dialogs are asked on the way.
 	if mm == null:
 		return
-	var c := mm.cell(h.x, h.y)
-	if c <= 0 or c == 0xFF:
-		return
 	var u := selected
-	if c & Move.MELEE_FLAG:
-		_cmd_melee(u, h, c & 0x7F)
+	var why := Action.move_refusal(w, u)
+	if why != -1:
+		say(move_message(why))
 		return
-	hooks.flag = 0
-	var p := w.pos(u)
-	var res: int
-	if Pd2World.hexdist(p.x, p.y, h.x, h.y) == 1:
-		res = Action.ai_walk(w, rng, u, h.x, h.y, move_mode, mm, hooks)
-	else:
-		res = Action.ai_path(w, rng, u, h.x, h.y, move_mode, mm, hooks)
-	if res & 1:
-		say("%s: contact." % unit_name(u))
-	if res & 4 or not w.active(u):
-		say("%s lost." % unit_name(u))
-	_after_command()
+	if not h in move_dests:
+		return
+	busy = true
+	if auto_react:
+		_move_done(u, h, Action.player_move(w, rng, u, h.x, h.y, move_mode, mm, hooks, false, alert))
+		return
+	move_thread = Thread.new()
+	move_thread.start(_move_worker.bind(u, h, mm))
 
 
-func _cmd_melee(u: int, h: Vector2i, cost: int) -> void:
-	## Entering a hex held by a spotted enemy starts a melee, as the AI's charge does
-	## (0x430660): the hex's AP, the melee, then the winner's follow-up. The player's own
-	## melee command flow is not ported; this mirrors the AI's.
-	var o := w.O[h.x + MAP * h.y] - 1
-	if o == -1:
-		return
-	Ai.spend_ap(w, u, cost)
-	var res := hooks.melee(u, o)
-	if res == 0:
-		hooks.destroy(o)
-		if w.O[h.x + MAP * h.y] - 1 == -1:
-			Action.ai_walk(w, rng, u, h.x, h.y, (w.ub(u, 4) >> 4) & 3, mm, hooks)
-	elif res == 2 or res == 3:
-		hooks.destroy(u)
-		if res == 3:
-			hooks.destroy(o)
+func _move_worker(u: int, h: Vector2i, map: Move.MoveMap) -> void:
+	var res := Action.player_move(w, rng, u, h.x, h.y, move_mode, map, hooks, false, alert)
+	call_deferred("_move_finished", u, h, res)
+
+
+func _move_finished(u: int, h: Vector2i, res: Array) -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_move_done(u, h, res)
+
+
+func _move_done(u: int, h: Vector2i, res: Array) -> void:
+	busy = false
+	var kind: Variant = res[0]
+	var r: Variant = res[1]
+	if kind == "melee" and r != null:
+		say("%s attacks in melee: %s" % [unit_name(u),
+			["the defender falls", "both stand", "the attacker falls", "both fall"][r]])
+	elif (kind == "walk" or kind == "path") and r != null:
+		if r & 1:
+			say("%s: contact." % unit_name(u))
+		if r & 4 or not w.active(u):
+			say("%s lost." % unit_name(u))
 	_after_command()
+	if w.active(u) and not Action.can_move(w, u):
+		say("%s cannot move any further." % unit_name(u))
+
+
+# --- the move command's questions --------------------------------------------------
+
+func ask_yes_no(text: String, default: bool) -> bool:
+	return ask_choice(text, [["Yes", true], ["No", false]], default)
+
+
+func ask_choice(text: String, options: Array, default: Variant) -> Variant:
+	## Called on a worker thread (the move, the computer's turn): shows the question on the
+	## main thread and waits for the answer. auto_react: the default, without asking.
+	if auto_react:
+		return default
+	call_deferred("_open_choice", text, options)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_choice(text: String, options: Array) -> void:
+	var box := _reaction_panel(text)
+	for o in options:
+		var btn := Button.new()
+		btn.text = o[0]
+		btn.pressed.connect(_answer_reaction.bind(o[1]))
+		box.add_child(btn)
 
 
 const FIRE_MODES := {"fire": 0, "aimed": 1, "aa": 6}
@@ -603,6 +676,7 @@ func _end_turn() -> void:
 	if busy:
 		return
 	busy = true
+	w.phase = 3
 	say("[b]Enemy phase[/b]")
 	_clear_spotted()
 	_clear_view(0)
@@ -657,6 +731,7 @@ func _end_turn_finish(res: int, undefined: Array) -> void:
 	_clear_view(0)
 	_recon_pass(0)
 	turn += 1
+	w.phase = 0
 	say("[b]Turn %d[/b]" % turn)
 	busy = false
 	if selected != -1 and not w.active(selected):
@@ -772,7 +847,7 @@ func _check_end() -> void:
 # --- drawing ---------------------------------------------------------------------
 
 func _draw_overlay() -> void:
-	if w == null or (ai_running and react_panel == null):
+	if w == null or ((ai_running or move_thread != null) and react_panel == null):
 		return
 	if mode == "carry":
 		for hx in carry_hexes:
@@ -783,12 +858,10 @@ func _draw_overlay() -> void:
 				if fire_map.at(lx, ly) == 1:
 					overlay.draw_circle(hex_center(Vector2i(fire_map.x0 + lx, fire_map.y0 + ly)), 10, Color(1, 0.8, 0.2, 0.25))
 	if mm != null and mode == "move":
-		for ly in mm.h:
-			for lx in mm.w:
-				var c := mm.at(lx, ly)
-				if c != 0 and c != 0xFF:
-					var col := Color(1, 0.3, 0.2, 0.35) if c & Move.MELEE_FLAG else Color(0.3, 0.8, 1.0, 0.22)
-					overlay.draw_circle(hex_center(Vector2i(mm.x0 + lx, mm.y0 + ly)), 14, col)
+		for hx in move_dests:
+			var o := w.O[hx.x + MAP * hx.y] - 1
+			var col := Color(1, 0.3, 0.2, 0.35) if o != -1 and w.ub(o, 0) & 0x10 else Color(0.3, 0.8, 1.0, 0.22)
+			overlay.draw_circle(hex_center(hx), 14, col)
 	for u in w.n_units:
 		if not w.active(u):
 			continue
