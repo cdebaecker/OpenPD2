@@ -472,6 +472,33 @@ whole commands with the UI scripted, and the target map 60 / 60 on its own.
      reaction candidates shoot by the computer's rule (flag 1).
 5. The command repeats on the same weapon while the AP, the rounds and the unit last.
 
+**The player's search, conceal, carry and release** (unit menu entries 8, 9 and 10;
+`rules.player_search` / `conceal_check` / `carry_candidates` / `player_carry` /
+`release_candidates` / `player_release`). Emulated whole with their prompts answered:
+search 306, conceal 290, carry 282 and release 322, all matching.
+- **Search** (`cmd_search`, 0x426B10 → `step_search` (0x47F950) in mode 8):
+  - **Cost:** 8 AP, 4 with the recon skill; with less the command refuses.
+  - **Area:** the unit's own search map, shown with "search here?" (0x1C8). An aircraft
+    counts 6 levels higher meanwhile.
+  - **On yes:** the area goes into the side's view, and the other side's units in it are
+    spotted (as `spot_in_map`, mode 8). The unit pays the AP and its movement mode
+    becomes "searching". A window shows each enemy found.
+- **Conceal** (`cmd_conceal`, 0x426C00): the AI's rule (`ai_conceal`: 6 AP, 3 with
+  crew +8 bit 3), after a prompt showing the cover (0x1B0). Already concealed: 0x1AF.
+- **Carry** (entry 10 when the unit carries nobody; `cmd_carry`, 0x427150):
+  - **Refused:** both manipulators broken (0x1DD); short of 8 AP (4 with the
+    engineering skill); an aircraft (0x212); no candidate (0x1B3).
+  - **Candidates:** a neighbouring player PLD (class 0, status 0) at most one level up
+    or down. A candidate that carries a unit itself is refused (0x1B4).
+  - **On confirmation** (0x1B5): the carrier's +0x34 = the unit, which leaves the map
+    (x = y = −1, its hex cleared). The carrier pays the AP.
+- **Release** (entry 10 when carrying; `cmd_release`, 0x426D70):
+  - **Cost:** 2 AP.
+  - **Candidates:** an empty neighbour the carrier's machine category can enter, at most
+    one level up or down. None: 0x1B1.
+  - **On confirmation** (0x1B2): the unit takes the hex and is spotted only if the hex
+    is in the enemy's view. It loses its concealment, and the carrier pays 2 AP.
+
 **Hits without a shooter** (mines, map hazards; 0x413D90 with shooter −1): the
 "shooter is an ace" test still runs, on **unit −1**. Its crew byte is the byte just
 before the unit table: combat‑record byte 302 (DS:0x506C67). When that crew is an

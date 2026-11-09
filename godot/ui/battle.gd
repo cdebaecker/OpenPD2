@@ -23,6 +23,7 @@ var move_mode := 1          # 0 high speed, 1 normal, 2 careful
 var slot := 0
 var mm: Move.MoveMap = null
 var fire_map: Move.MoveMap = null
+var carry_hexes: Array = []
 var turn := 1
 var alert := 0
 var busy := false
@@ -207,7 +208,8 @@ func _build_hud() -> void:
 		slot_buttons.append(btn)
 	var row4 := HBoxContainer.new()
 	box.add_child(row4)
-	for b in [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]]:
+	for b in [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
+			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]]:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.pressed.connect(b[1])
@@ -284,6 +286,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_Q: _set_mode("aa")
 			KEY_S: _cmd_search()
 			KEY_C: _cmd_conceal()
+			KEY_K: _cmd_carry_mode()
 			KEY_E: _end_turn()
 			KEY_TAB: _next_unit()
 			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
@@ -319,7 +322,7 @@ func _update_move_map() -> void:
 	fire_map = null
 	if selected != -1 and w.active(selected):
 		mm = Move.move_map(w, selected, move_mode)
-		if mode != "move" and w.launcher_id(selected, slot) != -1:
+		if mode in FIRE_MODES and w.launcher_id(selected, slot) != -1:
 			fire_map = Action.fire_target_map(w, selected, slot, FIRE_MODES[mode])
 	_refresh_info()
 	overlay.queue_redraw()
@@ -342,6 +345,9 @@ func _click(h: Vector2i) -> void:
 		_select(o)
 		return
 	if selected == -1 or not w.active(selected):
+		return
+	if mode == "carry":
+		_cmd_carry_click(h)
 		return
 	if mode == "move":
 		_cmd_move(h)
@@ -454,21 +460,102 @@ func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
 	_after_command()
 
 
+const CMD_MESSAGES := {0x1AF: "Already concealed.", 0x1B0: "Conceal here? (%d AP)",
+	0x1B1: "No free hex to set the unit down.", 0x1B2: "Set the unit down here?",
+	0x1B3: "No DoLL next to this unit to carry.", 0x1B4: "That unit is carrying another.",
+	0x1B5: "Carry this unit?", 0x1C8: "Search this area? (%d AP)",
+	0x1DD: "Both manipulators are broken: cannot carry.", 0x212: "Aircraft cannot carry."}
+
+
+func _cmd_message(id: Variant, n := 0) -> String:
+	## Stand-in texts until the game's own (message_text) come with the translation tables.
+	if id is String:
+		return "Not enough AP."
+	var t: String = CMD_MESSAGES.get(id, "")
+	return t % n if "%d" in t else t
+
+
+func _confirm(text: String, then: Callable) -> void:
+	var dlg := ConfirmationDialog.new()
+	dlg.dialog_text = text
+	dlg.confirmed.connect(then)
+	dlg.confirmed.connect(dlg.queue_free)
+	dlg.canceled.connect(dlg.queue_free)
+	add_child(dlg)
+	dlg.popup_centered()
+
+
 func _cmd_search() -> void:
+	## cmd_search (Action.player_search, emulated).
 	if selected == -1:
 		return
-	var n := Ai.ai_search(w, selected, 1, hooks)
-	say("%s searches: %d found." % [unit_name(selected), n])
-	_after_command()
+	var u := selected
+	if w.sb(u, 0xE) < Action.search_cost(w, u):
+		say(_cmd_message("ap"))
+		return
+	_confirm(_cmd_message(0x1C8, Action.search_cost(w, u)), func():
+		var found: Array = Action.player_search(w, u)
+		var enemies := found.filter(func(k): return w.is_enemy(k))
+		say("%s searches: %d enemy unit(s) found." % [unit_name(u), enemies.size()])
+		for k in enemies:
+			say("  enemy found: %s" % unit_name(k))
+		_after_command())
 
 
 func _cmd_conceal() -> void:
+	## cmd_conceal (Action.conceal_check, then the AI's conceal rule; emulated).
 	if selected == -1:
 		return
-	var was := w.ub(selected, 0) & 0x20
-	Ai.ai_conceal(w, selected)
-	say("%s %s." % [unit_name(selected), "conceals" if not was and w.ub(selected, 0) & 0x20 else "cannot conceal"])
-	_after_command()
+	var u := selected
+	var why: Variant = Action.conceal_check(w, u)
+	if not (why is String and why == ""):
+		say(_cmd_message(why))
+		return
+	var cost := 3 if (w.ucrew(u, 8) >> 3) & 1 else 6
+	_confirm(_cmd_message(0x1B0, cost), func():
+		Ai.ai_conceal(w, u)
+		say("%s conceals." % unit_name(u))
+		_after_command())
+
+
+func _cmd_carry_mode() -> void:
+	## Carry when the unit carries nobody, release otherwise (the unit menu's entry 10).
+	if selected == -1:
+		return
+	var u := selected
+	var res: Array = Action.carry_candidates(w, u) if w.ub(u, 0x34) == 0xFF else Action.release_candidates(w, u)
+	if res[0].is_empty():
+		say(_cmd_message(res[1]))
+		return
+	carry_hexes = []
+	for v in res[0]:
+		carry_hexes.append(Vector2i(v.x, v.y))
+	_set_mode("carry")
+
+
+func _cmd_carry_click(h: Vector2i) -> void:
+	if not h in carry_hexes:
+		return
+	var u := selected
+	if w.ub(u, 0x34) == 0xFF:
+		var o := w.O[h.x + MAP * h.y] - 1
+		_confirm(_cmd_message(0x1B5), func():
+			var why := Action.player_carry(w, u, o)
+			if why != -1:
+				say(_cmd_message(why))
+			else:
+				say("%s picks up %s." % [unit_name(u), unit_name(o)])
+			_set_mode("move")
+			_after_command())
+	else:
+		var carried := w.ub(u, 0x34)
+		_confirm(_cmd_message(0x1B2), func():
+			Action.player_release(w, u, h.x, h.y)
+			if not carried in squad:
+				pass
+			say("%s sets down %s." % [unit_name(u), unit_name(carried)])
+			_set_mode("move")
+			_after_command())
 
 
 func _after_command() -> void:
@@ -687,7 +774,10 @@ func _check_end() -> void:
 func _draw_overlay() -> void:
 	if w == null or (ai_running and react_panel == null):
 		return
-	if fire_map != null and mode != "move":
+	if mode == "carry":
+		for hx in carry_hexes:
+			overlay.draw_circle(hex_center(hx), 14, Color(0.4, 1, 0.6, 0.35))
+	if fire_map != null and mode != "move" and mode != "carry":
 		for ly in fire_map.h:
 			for lx in fire_map.w:
 				if fire_map.at(lx, ly) == 1:

@@ -47,7 +47,7 @@ campaigns.
 Controls:
 - left click selects or acts; right or middle drag pans; the wheel zooms;
 - M move, F fire, A aimed fire, Q anti-air fire, 1–4 weapon slot;
-- S search, C conceal;
+- S search, C conceal, K carry / release;
 - Tab next unit, E end turn.
 
 When an enemy moves or fires near your units, the computer's turn pauses on the reaction

@@ -620,3 +620,116 @@ static func player_reactions(w: Pd2World, rng: Pd2Random, reactors: Array, t: in
 		if result >= 4:
 			break
 	return result
+
+
+# --- the player's search, conceal, carry and release (0x426B10 ... 0x427150) --------
+
+static func search_cost(w: Pd2World, u: int) -> int:
+	return 4 if w.ucrew(u, 8) & 1 else 8
+
+
+## cmd_search (0x47F950 in mode 8), once confirmed: the spotted units, or null without AP.
+static func player_search(w: Pd2World, u: int) -> Variant:
+	var cost := search_cost(w, u)
+	if w.sb(u, 0xE) < cost:
+		return null
+	var up := w.pos(u)
+	var g := up.x + MAP * up.y
+	var h0 := w.H[g]
+	var climb := w.unit_class(u) > 1
+	if climb:
+		w.H[g] = (h0 + 6) & 0xFF
+	var spotted := []
+	var rp := Sight.recon_range(w, u)
+	var smap := Sight.search_map(w, up.x, up.y, rp.x, rp.y)
+	if smap != null:
+		var side := 3 if w.is_enemy(u) else 0
+		for ly in smap.h:
+			for lx in smap.w:
+				if smap.at(lx, ly) != 0xFF:
+					Ai.set_view(w, smap.x0 + lx, smap.y0 + ly, side)
+		spotted = Sight.spot_in_map(w, u, smap, 8)
+		Ai.spend_ap(w, u, cost)
+		w.setb(u, 4, w.ub(u, 4) | 0x30)
+	if climb:
+		w.H[g] = h0
+	return spotted
+
+
+## cmd_conceal's refusals: 0x1AF (already concealed), "ap", or "" when it may conceal.
+static func conceal_check(w: Pd2World, u: int) -> Variant:
+	if w.ub(u, 0) & 0x20:
+		return 0x1AF
+	var cost := 3 if (w.ucrew(u, 8) >> 3) & 1 else 6
+	if w.sb(u, 0xE) < cost:
+		return "ap"
+	return ""
+
+
+static func carry_cost(w: Pd2World, u: int) -> int:
+	return 4 if (w.ucrew(u, 8) >> 1) & 1 else 8
+
+
+## cmd_carry: [[Vector3i(x, y, unit)...], refusal ("" / "ap" / message id)].
+static func carry_candidates(w: Pd2World, u: int) -> Array:
+	if Ai.manipulator_state(w, u) == 2:
+		return [[], 0x1DD]
+	if w.sb(u, 0xE) < carry_cost(w, u):
+		return [[], "ap"]
+	if w.unit_class(u) >= 2:
+		return [[], 0x212]
+	var up := w.pos(u)
+	var h0 := w.H[up.x + MAP * up.y]
+	var out := []
+	for d in 6:
+		var o2: Vector2i = NB[up.y & 1][d]
+		var x := up.x + o2.x
+		var y := up.y + o2.y
+		var o := w.O[x + MAP * y] - 1
+		if o != -1 and w.unit_class(o) == 0 and w.sb(o, 0x36) == 0 and absi(h0 - w.H[x + MAP * y]) < 2:
+			out.append(Vector3i(x, y, o))
+	return [out, "" if not out.is_empty() else 0x1B3]
+
+
+## u picks up o: -1 done, 0x1B4 when o carries a unit itself.
+static func player_carry(w: Pd2World, u: int, o: int) -> int:
+	if w.ub(o, 0x34) != 0xFF:
+		return 0x1B4
+	w.setb(u, 0x34, o)
+	w.O[w.sb(o, 9) + MAP * w.sb(o, 10)] = 0
+	w.setb(o, 9, 0xFF)
+	w.setb(o, 10, 0xFF)
+	Ai.spend_ap(w, u, carry_cost(w, u))
+	return -1
+
+
+## cmd_release: [[Vector2i...], refusal].
+static func release_candidates(w: Pd2World, u: int) -> Array:
+	if w.sb(u, 0xE) < 2:
+		return [[], "ap"]
+	var up := w.pos(u)
+	var cat := w.umachine(u, 0) & 15
+	var h0 := w.H[up.x + MAP * up.y]
+	var out := []
+	for d in 6:
+		var o2: Vector2i = NB[up.y & 1][d]
+		var x := up.x + o2.x
+		var y := up.y + o2.y
+		if (w.terrain[Move.S_MOVE_ROWS + 16 * cat + w.terrain[w.T[x + MAP * y]]] != 0
+				and w.O[x + MAP * y] == 0 and absi(h0 - w.H[x + MAP * y]) < 2):
+			out.append(Vector2i(x, y))
+	return [out, "" if not out.is_empty() else 0x1B1]
+
+
+static func player_release(w: Pd2World, u: int, x: int, y: int) -> void:
+	var o := w.ub(u, 0x34)
+	w.setb(o, 9, x)
+	w.setb(o, 10, y)
+	if Ai.in_view(w, x, y, 3):
+		w.setb(o, 0, w.ub(o, 0) | 0x10)
+	else:
+		w.setb(o, 0, w.ub(o, 0) & 0xEF)
+	w.setb(o, 0, w.ub(o, 0) & 0xDF)
+	w.setb(u, 0x34, 0xFF)
+	w.O[x + MAP * y] = (o + 1) & 0xFF
+	Ai.spend_ap(w, u, 2)
