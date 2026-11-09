@@ -78,19 +78,23 @@ func map_texture(campaign: String, index: int) -> Texture2D:
 ## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1,
 ## the mission's chunk); ids 0x1A3 and up hold the same text in every entry of both campaigns.
 func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
+	if not _messages.has(campaign):
+		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
+	var tables: Array = _messages[campaign].get("wmes", [])
+	var ja := ""
+	if entry < tables.size() and id < tables[entry].size():
+		ja = tables[entry][id]
+	if ja == "" and not tables.is_empty():
+		return format_text("", args)       # a line the entry leaves empty stays empty
 	# a mission's own messages differ between entries: "<campaign>.<entry>.<id>" first,
-	# then "<campaign>.<id>", then "<id>"
+	# then "<campaign>.<id>" (the radio lines differ between campaigns), then "<id>"
 	var t := _translated("wmes", "%s.%d.%X" % [campaign, entry, id])
-	if t == "":                    # then one campaign's (the radio lines differ between them)
+	if t == "":
 		t = _translated("wmes", "%s.%X" % [campaign, id])
 	if t == "":
 		t = _translated("wmes", "%X" % id)
 	if t == "":
-		if not _messages.has(campaign):
-			_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
-		var tables: Array = _messages[campaign].get("wmes", [])
-		if entry < tables.size() and id < tables[entry].size():
-			t = tables[entry][id]
+		t = ja
 	return format_text(t, args)
 
 
