@@ -16,6 +16,7 @@ var w: Pd2World
 var rng: Pd2Random
 var hooks: SandboxHooks
 var squad: Array = []
+var sandbox := false            # the stand-in squad (no player group formed)
 var names := {}
 var selected := -1
 var mode := "move"          # move / fire / aimed
@@ -163,7 +164,12 @@ class SandboxHooks extends AiTurnHooks:
 func _ready() -> void:
 	var tables := GameData.tables(campaign)
 	var doc := GameData.mission(campaign, mission_index)
-	w = Mission.build(tables, doc, campaign)
+	# a campaign's first mission starts a new campaign (0x421B90): the pilot choice answered
+	# with its "fill at random" (rand() seeded from the clock, as 0x48F7A0 does)
+	var save := GameData.save_image(campaign)
+	var pick: Campaign.Hooks = Campaign.Hooks.new() if mission_index == 0 else null
+	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
+	w = Mission.build(tables, doc, campaign, save, pick, crt)
 	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22
 	script_no = mission_index + (1 if campaign == "pd2" else 11)
 	mission_hooks = BattleMissionHooks.new()
@@ -180,7 +186,12 @@ func _ready() -> void:
 	hooks = SandboxHooks.new(w, false, rng)
 	hooks.battle = self
 	names = {"crew": tables.crew_names, "machine": tables.machine_names}
-	squad = Mission.sandbox_squad(w, 4)
+	# the sortie's squad: the player's groups (the new campaign forms PD2 mission 1's); with
+	# none (the sortie screen 0x45ED60 is not ported) the stand-in squad
+	squad = Mission.player_units(w)
+	sandbox = squad.is_empty()
+	if sandbox:
+		squad = Mission.sandbox_squad(w, 4)
 	var tex := GameData.map_texture(campaign, mission_index)
 	if tex:
 		var s := Sprite2D.new()
@@ -211,10 +222,14 @@ func _ready() -> void:
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
 	_turn_start()
-	if not squad.is_empty():
-		_select(squad[0])
-		cam.position = hex_center(w.pos(squad[0]))
-	say("Turn 1. %d DoLLS dropped; %d enemy units on the map." % [squad.size(), _count_side(3)])
+	var landed := squad.filter(func(u): return w.active(u))
+	if not landed.is_empty():
+		_select(landed[0])
+		cam.position = hex_center(w.pos(landed[0]))
+	if sandbox:
+		say("Turn 1. %d DoLLS dropped; %d enemy units on the map." % [squad.size(), _count_side(3)])
+	else:
+		say("Turn 1. %d DoLLS in the sortie, %d on the map; %d enemy units." % [squad.size(), landed.size(), _count_side(3)])
 
 
 # --- geometry --------------------------------------------------------------------
@@ -1032,7 +1047,8 @@ func _count_side(side: int) -> int:
 
 
 func _check_end() -> void:
-	if squad.all(func(u): return not w.active(u)):
+	# lost: nobody on the map nor still in a group (a group flying in lands later)
+	if squad.all(func(u): return not w.active(u) and not u in Mission.player_units(w)):
 		say("[color=red]The squad is lost.[/color]")
 	elif _count_side(3) == 0:
 		say("[color=lime]No enemy unit left.[/color]")

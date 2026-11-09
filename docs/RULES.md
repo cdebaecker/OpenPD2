@@ -1738,6 +1738,53 @@ checks it), then its members are set down on the hexes of a word table on its st
 group 0 on (9, 30), (8, 29), (8, 30), (9, 34), (8, 33), (8, 34), group 2 on (9, 34),
 (8, 33), (8, 34); a member past the table gets whatever the stack holds.
 
+### 5.10 Starting a campaign and loading a mission: Emulated
+
+**The save** (0x4987C0): a save file is "PD2DATA\0" and a memory image of DS:0x506638,
+0x47BD bytes: the crew table, combat records, all 255 units, the 64 groups and the DS
+block (then a check, 0x436130). A new game loads its campaign's SAVEDATA.ORG: the 27
+player units carry their crews (+0xB = their number) but, in PD2, no machine (+0xC =
+−1); DASH's are equipped. No group has members.
+
+**A new campaign** (0x421B90, run by game_mode_loop 0x487D70 before the first mission;
+emulated 786 / 786 from both saves, `verify_new_campaign`):
+- the **pilot choice** (0x422050 with its list 0x422950): PD2 offers crews 2–15, DASH the
+  crews from 2 with +2 = 0 and +3 = 0, each listed with +4 = −1. The player toggles
+  pilots, each toggle confirmed, up to 5 (PD2) or 11 (DASH); "done" with the count
+  reached is confirmed once more, below it the game offers to fill the rest at random
+  (`rand() % 14` over the list until a free entry). The C runtime's `rand()` (0x4F5F90,
+  state × 0x343FD + 0x269EC3, bits 16–30) is seeded from the clock (0x48F7A0), apart from
+  the game's own generator (§1). Picked pilots get +4 = 0 (PD2: only crews up to 15),
+  the others −1; PD2 then numbers its picks from the third on in pairs, +4 = (n + 2) /
+  2 + 1: the turn of the campaign they become available;
+- crew 1's +4 = 0, and the free‑pilot list (DS:0x50AD00 / 02) is rebuilt;
+- **PD2**: unit 1 takes the unit template at DS:0x5138A0 with crew 1 and joins group 0;
+  the first other crew already available (+4 ≤ DS:0x50AD92, +2 = 0, +5 = −1) takes
+  0x5138D7 into group 0, the second 0x51390E into group 2 — mission 1's squad;
+- **DASH**: the available crews keep their unit; those with +3 = 0 are drafted (+4 = 3)
+  on an odd `rand() % 100` until 6 are, those with +3 = 1 take the template at
+  0x513948; more are drafted from the free‑pilot list until 6; then the crews take the
+  six templates at 0x513750 in order. No group is formed: DASH's sortie comes from the
+  sortie screen (0x45ED60, not ported).
+
+**Joining a group** (0x454690, emulated 2000 / 2000, `verify_group_join`): the unit's
+machine class (machines +0 low nibble) decides where it may go — class 0 into a group
+with +2 bits 1–3 = 0, class 1 into one with bits = 2, classes 2–3 into groups 0, 2, …,
+10 (+3 bit 0 set; class 3 only up to group 5), classes 4–5 into groups 12–19; no more
+than two members whose crew +3 is 1, and of one class. A group holds 16 units (groups
+12–19 two). The unit is appended, its crew's +5 = the group, it leaves the free‑pilot
+list, and its flag bit 2 is set. Return codes: 0 joined, 1 full, 2 wrong group, 3 mixed
+classes, 4 no machine, 5 not in the free‑pilot list (still joined), 6 two pilots
+already, 7 the group's +3 bit 0 clear, 8 class 3 past group 5.
+
+**Loading a mission** (0x416CF0 with load_init_npc 0x417030, read in the disassembly):
+the mission's INIT entry is written over units 27–254 and the 64 groups (0x39BC
+bytes), its NPC entry over crews 27–36. On the campaign's first chunk (DS:0x50663D = 1)
+groups 0 and 2 keep their count and members across it; on later chunks the player's
+groups with +2 bit 0 are emptied and every crew with +2 = 0 and +4 ≤ DS:0x50AD92 gets
++5 = −1. Then the operation plan (0x443F60) and the sortie screen (0x45ED60) run before
+the battle (DS:0x50663A = 1, 0x436530).
+
 ---
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far

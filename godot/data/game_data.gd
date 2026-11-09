@@ -58,6 +58,15 @@ func tables(campaign: String) -> Dictionary:
 	return _tables[campaign]
 
 
+## A campaign's new-game state (SAVEDATA.ORG's memory image, from <campaign>/save.json):
+## [base address, bytes], or [] with an older import.
+func save_image(campaign: String) -> Array:
+	var doc: Dictionary = _json("%s/%s/save.json" % [ROOT, campaign])
+	if not doc.has("image"):
+		return []
+	return [int(doc.base), Marshalls.base64_to_raw(doc.image)]
+
+
 ## A mission's data, with the base64 blobs decoded to PackedByteArrays.
 func mission(campaign: String, index: int) -> Dictionary:
 	var doc: Dictionary = _json("%s/%s/missions/m%02d.json" % [ROOT, campaign, index])

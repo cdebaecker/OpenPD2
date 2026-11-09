@@ -15,31 +15,53 @@ const INIT_UNITS := 228
 const CAMPAIGN_FLAG := {"pd2": 1, "dash": 0}   # DS:0x554B10: 1 reads pd2\ (0x408BE0), 0 dash\
 
 
-static func build(tables: Dictionary, doc: Dictionary, campaign: String) -> Pd2World:
+static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: Array = [],
+		pick: Campaign.Hooks = null, crt: Campaign.CrtRand = null) -> Pd2World:
+	## The world of a mission. With the campaign's save image (save = [base, bytes]) it is
+	## the game's: the new-game state (crew, records, units, groups, DS block); with pick
+	## and crt the new campaign's first sortie (Campaign.new_campaign, 0x421B90) runs on
+	## it; then the mission load (Campaign.mission_load, 0x416CF0: INIT and NPC, chunk 1
+	## keeping groups 0 and 2). Without a save image (an older import): INIT, the roster
+	## and NPC over the exe's crew table.
 	var w := Pd2World.new(tables.machines, tables.launchers, tables.ammo, doc.S, UNITS)
 	w.n_units = 254                # the game's unit loops stop at 253
 	var img: Array = tables.get("data_image", [])
 	if img.size() == 2:
 		w.static_mem[img[0]] = img[1]  # the exe's data around the tables (reads past them)
-	var init: PackedByteArray = doc.init
-	for i in mini(init.size(), INIT_UNITS * 55):
-		w.units[INIT_FIRST * 55 + i] = init[i]
-	for i in range(INIT_UNITS * 55, mini(init.size(), INIT_UNITS * 55 + 64 * 35)):
-		w.groups[i - INIT_UNITS * 55] = init[i]
-	var crew0: PackedByteArray = tables.get("crew", PackedByteArray())
-	for i in mini(crew0.size(), 64 * 16):
-		w.crew[i] = crew0[i]
-	var roster: PackedByteArray = doc.roster
-	for i in mini(roster.size(), 27 * 16):
-		w.crew[i] = roster[i]
-	var npc: PackedByteArray = doc.npc
-	for i in mini(npc.size(), 37 * 16 - 27 * 16):
-		w.crew[27 * 16 + i] = npc[i]
+	w.campaign = CAMPAIGN_FLAG.get(campaign, 0)
+	if save.size() == 2:
+		var base: int = save[0]
+		var data: PackedByteArray = save[1]
+		var put := func(addr: int, n: int) -> PackedByteArray:
+			return data.slice(addr - base, addr - base + n)
+		w.crew = put.call(0x506734, 64 * 16)
+		w.combat = put.call(0x506B39, 26 * 13)
+		w.units = put.call(0x506C93, 255 * 55)
+		w.groups = put.call(0x50A35C, 64 * 35)
+		w.ds = put.call(0x50AD00, 0xF5)
+		if pick != null and crt != null:
+			Campaign.new_campaign(w, crt, pick)
+		Campaign.mission_load(w, int(doc.get("mission", 0)) + 1, doc.init, doc.npc)
+		w.mode_663a = 1                # the battle (game_mode_loop, 0x487D70)
+	else:
+		var init: PackedByteArray = doc.init
+		for i in mini(init.size(), INIT_UNITS * 55):
+			w.units[INIT_FIRST * 55 + i] = init[i]
+		for i in range(INIT_UNITS * 55, mini(init.size(), INIT_UNITS * 55 + 64 * 35)):
+			w.groups[i - INIT_UNITS * 55] = init[i]
+		var crew0: PackedByteArray = tables.get("crew", PackedByteArray())
+		for i in mini(crew0.size(), 64 * 16):
+			w.crew[i] = crew0[i]
+		var roster: PackedByteArray = doc.roster
+		for i in mini(roster.size(), 27 * 16):
+			w.crew[i] = roster[i]
+		var npc: PackedByteArray = doc.npc
+		for i in mini(npc.size(), 37 * 16 - 27 * 16):
+			w.crew[27 * 16 + i] = npc[i]
 	if doc.M.size() == 72 * 72:
 		w.T = doc.M
 	if doc.H.size() == 72 * 72:
 		w.H = doc.H
-	w.campaign = CAMPAIGN_FLAG.get(campaign, 0)
 	rebuild_occupancy(w)
 	return w
 
@@ -102,6 +124,17 @@ static func mission_end(w: Pd2World) -> void:
 ## unit slots 0..count-1, equipped like the mission's first enemy PLD, are dropped on the
 ## passable hexes farthest from the enemy and listed in group 0 by crew number. Returns
 ## their unit indices.
+## The player's units the groups list (0-19, members in order): the squad of a sortie.
+static func player_units(w: Pd2World) -> Array:
+	var out := []
+	for g in 20:
+		for i in w.groups[35 * g + 5]:
+			var k := w.groups[35 * g + 6 + i]
+			if k != 0xFF and not k in out:
+				out.append(k)
+	return out
+
+
 static func sandbox_squad(w: Pd2World, count := 4) -> Array:
 	var template := -1
 	for u in w.n_units:

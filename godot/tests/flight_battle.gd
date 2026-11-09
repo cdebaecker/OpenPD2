@@ -2,8 +2,8 @@ extends SceneTree
 ## PD2 mission 1's flight engine in the battle: the computer's turns run the speech hook
 ## (0x499830: the flight turn, then the arrival scenes); groups 0 and 2 arrive on their
 ## turn, play their scene once (flags DS:0x50AD76 / 0x50AD78) and their members are set
-## down on the landing hexes (group 2 only when it has members: the sandbox squad is all
-## in group 0).
+## down on the landing hexes. The squad is the new campaign's (0x421B90): unit 1 and the
+## first pilot in group 0, the second in group 2.
 
 func _init() -> void:
 	await process_frame
@@ -44,8 +44,7 @@ func _init() -> void:
 		if text.find(b.msg(id).replace("@", "\n").strip_edges().get_slice("\n", 0)) != -1:
 			lines += 1
 	print("arrival lines in the log: %d" % lines)
-	# the sandbox squad is all in group 0 (sandbox_squad): a group with nobody never arrives
-	var need := [0] if Flight.gb(w, 2, 5) == 0 else [0, 2]
+	var need := [0, 2]
 	var ok := lines > 0
 	for g in need:
 		ok = ok and landed[g]

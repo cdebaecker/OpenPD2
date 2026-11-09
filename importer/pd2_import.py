@@ -173,7 +173,7 @@ CALL_SIGNS_VA = {'pd2': 0x501728, 'dash': 0x502C90}
 CALL_SIGNS = 39 + 34
 # The initialised data around the tables the world models, for code that reads past one
 # (Pd2World.mem8 / rules.ds_byte fall back to it).
-DATA_IMAGE = (0x506600, 0x50D000)
+DATA_IMAGE = (0x506600, 0x514000)
 
 
 def _exe_str(exe, va):
@@ -238,6 +238,10 @@ def export_missions(game, out, pal):
         roster = save[260:260 + 27 * 16]
         os.makedirs(os.path.join(out, camp, 'missions'), exist_ok=True)
         os.makedirs(os.path.join(out, camp, 'maps'), exist_ok=True)
+        # the new game's state: a memory image of DS:0x506638.. (0x47BD B after the
+        # "PD2DATA" header, 0x4987C0), crew, combat records, units, groups, the DS block
+        json.dump({'base': 0x506638, 'image': b64(save[8:8 + 0x47BD])},
+                  open(os.path.join(out, camp, 'save.json'), 'w'))
         for m, rec in enumerate(recs):
             # the loader 0x482910 takes the P / C chunk from a table with the DASH flag
             # (DS:0x554B10 = 0): mission 3 uses chunk 5's graphics (1-based numbers)
