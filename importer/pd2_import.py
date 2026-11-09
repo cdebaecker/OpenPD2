@@ -44,6 +44,7 @@ KNOWN = json.load(open(os.path.join(HERE, 'versions.json'), encoding='utf-8'))
 CAMPAIGNS = ('pd2', 'dash')
 TABLE_SET = {'pd2': 'pd2', 'dash': 'dash'}      # the record block each campaign loads (0x409240, by DS:0x554B10)
 SECTOR = 2048
+SCRIPT_EXITS = {('pd2', 0): 0x519FE8}           # mission 1's load script (0x49A700): 14 exit hexes
 GRAPHICS_CHUNK = [0, 1, 2, 5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]   # 0x482910's local table
 
 
@@ -192,6 +193,7 @@ def export_tables(game, out):
 
 def export_missions(game, out, pal):
     count = {}
+    exe = open(os.path.join(game, 'Pd2.exe'), 'rb').read()
     for camp in CAMPAIGNS:
         folder = os.path.join(game, camp)
         fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
@@ -228,6 +230,10 @@ def export_missions(game, out, pal):
                 'S': b64(layers['S'][m]), 'M': b64(layers['M'][m]), 'H': b64(layers['H'][m]),
                 'text': {i: t for i, t in texts[m]} if m < len(texts) else {},
             }
+            if (camp, m) in SCRIPT_EXITS:            # the mission's load script copies it to 0x519FB0
+                va = SCRIPT_EXITS[(camp, m)]
+                raw = exe_va(exe, va, 56)
+                doc['exits'] = [list(struct.unpack_from('<hh', raw, 4 * i)) for i in range(14)]
             with open(os.path.join(out, camp, 'missions', f'm{m:02d}.json'), 'w', encoding='utf-8') as f:
                 json.dump(doc, f, ensure_ascii=False)
         count[camp] = len(recs)

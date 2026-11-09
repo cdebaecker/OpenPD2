@@ -27,7 +27,12 @@ var carry_hexes: Array = []
 var move_dests: Array = []
 var move_thread: Thread = null
 var turn := 1
-var alert := 0
+var alert: int:            # DS:0x50ADF1, the alert (in the DS block)
+	get: return w.ds8(0x50ADF1) if w else 0
+	set(v): w.set_ds8(0x50ADF1, v)
+var script_no := 0          # DS:0x50CE72
+var mission_hooks: BattleMissionHooks
+var mission_over := false
 var options := 0            # DS:0x551D29 (bit 1 easy, bit 5 training, bit 7 see all): none in the sandbox
 var busy := false
 ## The computer's turn runs on a worker thread so that the player's reaction menu can
@@ -158,6 +163,14 @@ func _ready() -> void:
 	var tables := GameData.tables(campaign)
 	var doc := GameData.mission(campaign, mission_index)
 	w = Mission.build(tables, doc, campaign)
+	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22
+	script_no = mission_index + (1 if campaign == "pd2" else 11)
+	mission_hooks = BattleMissionHooks.new()
+	mission_hooks.battle = self
+	if script_no == 1:
+		MissionScripts.m01_init(w)           # in the game the pre-battle screen runs it (0x4DD2F0)
+		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
+			w.exits.append(Vector2i(int(p[0]), int(p[1])))
 	w.phase = 0
 	rng = Pd2Random.new(int(Time.get_ticks_usec()) & 0xFFFF)
 	hooks = SandboxHooks.new(w, false, rng)
@@ -187,6 +200,7 @@ func _ready() -> void:
 	# upkeep and AP, then the turn start (LAB_00436b39)
 	Mission.layers_reset(w)
 	Mission.start_units(w)
+	_script_turn(2)
 	Mission.rebuild_occupancy(w)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
@@ -262,7 +276,7 @@ func _build_hud() -> void:
 	var row4 := HBoxContainer.new()
 	box.add_child(row4)
 	for b in [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
-			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]]:
+			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]] + ([[ui("UI_INDOOR_SEARCH") + " [I]", _cmd_mission]] if script_no == 1 else []):
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.pressed.connect(b[1])
@@ -341,6 +355,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_C: _cmd_conceal()
 			KEY_K: _cmd_carry_mode()
 			KEY_E: _end_turn()
+			KEY_I: _cmd_mission()
 			KEY_TAB: _next_unit()
 			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
 
@@ -416,8 +431,8 @@ func _click(h: Vector2i) -> void:
 # --- the game's messages ------------------------------------------------------------
 
 func msg(id: int, args := []) -> String:
-	## a battle message (WMES.PCK), translated and formatted as format_text does
-	return GameData.battle_text(campaign, id, args)
+	## a battle message (WMES.PCK, the mission's entry), translated and formatted as format_text does
+	return GameData.battle_text(campaign, id, args, mission_index)
 
 
 func intercept_names(t: int) -> Array:
@@ -687,6 +702,7 @@ func _cmd_carry_click(h: Vector2i) -> void:
 
 
 func _after_command() -> void:
+	_script_state()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
@@ -720,13 +736,25 @@ func _turn_start() -> void:
 
 
 func _end_turn() -> void:
-	## mission_loop (0x436690) after the player's commands, call by call; the mission's
-	## event scripts and the strike executor (0x4E37A0) are not ported.
-	if busy:
+	## mission_loop (0x436690) after the player's commands, call by call (the strike executor
+	## 0x4E37A0 is not ported). It runs on a worker thread: the computer's turn and the
+	## mission script may ask the player (reactions, interception, escapes).
+	if busy or mission_over:
 		return
 	busy = true
 	say("[b]Enemy phase[/b]")
+	if auto_react:
+		var r := _enemy_phase()
+		_end_turn_finish(r[0], r[1])
+		return
+	ai_running = true
+	ai_thread = Thread.new()
+	ai_thread.start(_ai_phase)
+
+
+func _enemy_phase() -> Array:
 	Turn.support_fire(w, 0)
+	_script_turn(1)
 	Turn.clear_spotted_all(w, options)
 	_view_reset(0)
 	Turn.recon_pass(w, 0)                # still the player's phase
@@ -738,21 +766,24 @@ func _end_turn() -> void:
 	Turn.memory_forget(w)
 	Turn.clear_reacted_all(w)
 	hooks.flag = 0
-	if auto_react:
-		var undefined0 := []
-		_end_turn_finish(AiTurn.run(w, rng, hooks, alert, false, undefined0), undefined0)
-		return
-	ai_running = true
-	ai_thread = Thread.new()
-	ai_thread.start(_ai_phase)
+	var undefined := []
+	var res := AiTurn.run(w, rng, hooks, w.ds8(0x50ADF1), false, undefined)
+	Turn.support_fire(w, 3)
+	w.phase = 0
+	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
+	Turn.refill_ap(w, Turn.PHASE_PLAYER)
+	w.phase = 3
+	_script_turn(0)
+	Turn.clear_strikes(w)                # 0x46F590(0)
+	_turn_start()
+	return [res, undefined]
 
 
 func _ai_phase() -> void:
-	## Worker thread: the computer's turn. Only the reaction menu talks to the main
-	## thread meanwhile (ask_reaction); input is blocked by `busy`.
-	var undefined := []
-	var res := AiTurn.run(w, rng, hooks, alert, false, undefined)
-	call_deferred("_ai_done", res, undefined)
+	## Worker thread: the enemy phase. Only the questions talk to the main thread meanwhile;
+	## input is blocked by `busy`.
+	var r := _enemy_phase()
+	call_deferred("_ai_done", r[0], r[1])
 
 
 func _ai_done(res: int, undefined: Array) -> void:
@@ -772,13 +803,6 @@ func _end_turn_finish(res: int, undefined: Array) -> void:
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
-	Turn.support_fire(w, 3)
-	w.phase = 0
-	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
-	Turn.refill_ap(w, Turn.PHASE_PLAYER)
-	w.phase = 3
-	Turn.clear_strikes(w)                # 0x46F590(0)
-	_turn_start()
 	turn += 1
 	say("[b]Turn %d[/b]" % turn)
 	busy = false
@@ -786,6 +810,83 @@ func _end_turn_finish(res: int, undefined: Array) -> void:
 		_next_unit()
 	_update_move_map()
 	_check_end()
+
+
+# --- the mission's event scripts (MissionScripts; DS:0x50CE72 selects them) --------------
+
+class BattleMissionHooks extends MissionScripts.Hooks:
+	var battle
+
+	func dialog(msg: int, args: Array, choices: int) -> int:
+		## 0x43BA20 with its choice labels: mission 1's escape (0xAA, the pilot's given and
+		## family names) uses 実行 / 中止 (DS:0x50CBC1), its indoor search (0xA5) はい / いいえ
+		## (DS:0x517F88)
+		var a := args
+		var labels := [battle.ui("UI_YES"), battle.ui("UI_NO")]
+		if msg == 0xAA:
+			var names: Array = GameData.tables(battle.campaign).crew_names
+			var nm: Array = names[args[0]] if args[0] < names.size() else ["", ""]
+			a = [nm[0], nm[1]]
+			labels = [battle.ui("UI_GO"), battle.ui("UI_CANCEL")]
+		var text: String = battle.msg(msg, a)
+		return 0 if battle.ask_choice(text, [[labels[0], true], [labels[1], false]], true) else 1
+
+	func message(msg: int, args := []) -> int:
+		battle.say_msg(msg, args)
+		return 0
+
+	func scroll(x: int, y: int) -> int:
+		return 0
+
+
+func _script_turn(stage: int) -> void:
+	## the turn script (table 0x51EFD8): stage 2 at a new mission, 1 after the player's turn,
+	## 0 in the computer's turn. Only mission 1's is ported; its speech hook is not.
+	if script_no == 1:
+		MissionScripts.m01_turn(w, rng, stage, mission_hooks)
+
+
+func _script_state() -> void:
+	## the state check (table 0x51EC68), after every command, and the end code DS:0x50ADF2
+	if mission_over:
+		return
+	if script_no == 1 and MissionScripts.m01_state(w) == -1:
+		say_msg(0x12B)
+		_end_mission()
+	elif w.ds8(0x50ADF2):
+		_end_mission()
+
+
+func _end_mission() -> void:
+	mission_over = true
+	say("[b]%s[/b]" % ui("UI_MISSION_OVER"))
+
+
+func _cmd_mission() -> void:
+	## the mission's own command (unit menu entry 11, table 0x51EF78): mission 1's indoor search
+	if selected == -1 or script_no != 1 or busy or mission_over:
+		return
+	var u := selected
+	busy = true
+	if auto_react:
+		MissionScripts.m01_command(w, u, mission_hooks)
+		_mission_cmd_done()
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		MissionScripts.m01_command(w, u, mission_hooks)
+		call_deferred("_mission_cmd_finished"))
+
+
+func _mission_cmd_finished() -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_mission_cmd_done()
+
+
+func _mission_cmd_done() -> void:
+	busy = false
+	_after_command()
 
 
 # --- the reaction menu ------------------------------------------------------------

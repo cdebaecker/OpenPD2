@@ -73,10 +73,13 @@ func map_texture(campaign: String, index: int) -> Texture2D:
 
 
 ## A battle message (WMES.PCK, as message_text 0x471A00 reads it), translated, with its
-## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1);
-## ids 0x1A3 and up hold the same text in every entry of both campaigns.
+## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1,
+## the mission's chunk); ids 0x1A3 and up hold the same text in every entry of both campaigns.
 func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
-	var t := _translated("wmes", "%X" % id)
+	# a mission's own messages differ between entries: "<campaign>.<entry>.<id>" first
+	var t := _translated("wmes", "%s.%d.%X" % [campaign, entry, id])
+	if t == "":
+		t = _translated("wmes", "%X" % id)
 	if t == "":
 		if not _messages.has(campaign):
 			_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])

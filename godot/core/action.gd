@@ -886,7 +886,7 @@ static func take_off_map(w: Pd2World, k: int) -> void:
 
 static func _crew_pool_add(w: Pd2World, c: int) -> void:
 	w.crew[c * Pd2World.CREW + 5] = 0xFF
-	w.crew_pool[w.crew_pool_n & 0xFF] = c & 0xFF
+	w.pool_set(w.crew_pool_n, c)
 	w.crew_pool_n += 1
 
 
@@ -900,7 +900,7 @@ static func group_drop_player(w: Pd2World, g: int, k: int) -> void:
 		for i in 64:
 			var q := i * Pd2World.CREW
 			if w.crew[q + 4] <= w.time_ad92 and w.crew[q + 2] <= 2 and w.crew[q + 5] == 0xFF and not (w.crew[q + 6] & 3):
-				w.crew_pool[w.crew_pool_n] = i
+				w.pool_set(w.crew_pool_n, i)
 				w.crew_pool_n += 1
 	var limit := 0x1C if camp else 0x1B
 	var n := w.groups[G + 5]

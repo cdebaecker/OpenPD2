@@ -34,12 +34,22 @@ var phase := 3                  # DS:0x50DDC8: 0 = the player's phase (the mine 
 var memory: PackedByteArray     # AI memory DS:0x551DA0: 40 x 3 B (x, y, 0xFF)
 var groups: PackedByteArray     # 64 x 35 B (DS:0x50A35C)
 var combat: PackedByteArray     # combat record, 26 x 13 B (DS:0x506B39)
-# read by destroy's group removal (0x4549B0); the mission start (not ported) sets them
-var crew_pool := PackedByteArray()   # DS:0x50AD02: free pilots (0x8C B), count DS:0x50AD00
-var crew_pool_n := 0
-var time_ad92 := 0                   # DS:0x50AD92, compared with crew +4
+# DS:0x50AD00-0x50ADFF, the mission state block (rules.World.ds): the free-pilot count
+# (+0) and list (+2), +0x92 (compared with crew +4), the mission scripts' flags and points,
+# the alert (+0xF1) and the end code (+0xF2)
+const DS := 0x50AD00
+var ds := PackedByteArray()
+var crew_pool_n: int:
+	get: return ds16(0x50AD00)
+	set(v): set_ds16(0x50AD00, v)
+var time_ad92: int:
+	get: return ds16(0x50AD92)
+	set(v): set_ds16(0x50AD92, v)
 var mode_663a := 1                   # DS:0x50663A: 1 in the battle (0x487D70 -> 0x436530)
 var bombs := PackedByteArray()       # DS:0x50AC1C: timed explosives, 15 x 4 B (not ported)
+var mission_turn := 0                # DS:0x50663B: counted by the mission scripts
+var ds_506651 := 0                   # DS:0x506651: set by mission inits (read by 0x4361C0)
+var exits: Array = []                # DS:0x519FB0: a mission's exit hexes (its load script)
 var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (not ported)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
@@ -73,7 +83,7 @@ func _init(machines: PackedByteArray, launchers: PackedByteArray, ammo: PackedBy
 	groups.resize(64 * 35)
 	combat = PackedByteArray()
 	combat.resize(26 * 13)
-	crew_pool.resize(0x8C)
+	ds.resize(0x100)
 	bombs.resize(0x3C)
 	sensors.resize(0xA8)
 
@@ -92,12 +102,13 @@ func duplicate_world() -> Pd2World:
 	c.groups = groups.duplicate()
 	c.combat = combat.duplicate()
 	c.fire_point = fire_point
-	c.crew_pool = crew_pool.duplicate()
-	c.crew_pool_n = crew_pool_n
-	c.time_ad92 = time_ad92
+	c.ds = ds.duplicate()
 	c.mode_663a = mode_663a
 	c.phase = phase
 	c.bombs = bombs.duplicate()
+	c.mission_turn = mission_turn
+	c.ds_506651 = ds_506651
+	c.exits = exits.duplicate()
 	c.sensors = sensors.duplicate()
 	return c
 
@@ -216,6 +227,30 @@ func set_layer(L: String, x: int, y: int, v: int) -> void:
 
 
 # --- helpers named after the game functions (rules.World) --------------------------
+
+func ds8(addr: int) -> int:
+	return ds[addr - DS]
+
+
+func set_ds8(addr: int, v: int) -> void:
+	ds[addr - DS] = v & 0xFF
+
+
+func ds16(addr: int) -> int:
+	var v := ds[addr - DS] | ds[addr - DS + 1] << 8
+	return v - 0x10000 if v >= 0x8000 else v
+
+
+func set_ds16(addr: int, v: int) -> void:
+	ds[addr - DS] = v & 0xFF
+	ds[addr - DS + 1] = (v >> 8) & 0xFF
+
+
+## the free-pilot list, DS:0x50AD02 + i (a view of the block)
+func pool_set(i: int, v: int) -> void:
+	if 2 + i < ds.size():
+		ds[2 + i] = v & 0xFF
+
 
 func is_enemy(u: int) -> bool:                     # 0x47CD40
 	return sb(u, 0x36) >= 3

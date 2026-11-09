@@ -1595,11 +1595,56 @@ fields it reads.
 +5 looks like the number of units still present, and +33's low nibble a group
 status.
 
-**Mission 1** (PD2 chunk 0, the diversion and capture mission), emulated
-200 / 200 for the state check (0x499480). The mission continues while group 0 or
-group 2 still has units (+5 ≠ 0) and a clear status (+33 & 15 = 0); otherwise
-dialog 0x12B ends it. Its turn script offers escapes ("%s %sを脱出させますか？",
-not while carrying), and its init sets the camera to (5, 13).
+**When the tables run** (read in `mission_loop` and its callers): the load script
+(0x51F1B8) first; the init (0x51ECC8) in the pre‑battle screen (0x416CF0 → 0x4DD2F0);
+at a new mission the turn script with stage 2 (between `start_units` and the occupancy
+rebuild) and then the start script (0x51F0F8); in each turn, stage 1 after the player's
+support state, stage 0 in the computer's turn after the player's upkeep; the state
+check after every player command; the mission's command as unit‑menu entry 11.
+
+**Mission 1** (script 1, PD2 chunk 0: a diversion and a capture). Emulated 800 / 800 for
+the objective, init, turn script and command (`verify_m01`), 200 / 200 for the state
+check:
+- **State** (0x499480): the mission goes on while group 0 or group 2 has units (+5 ≠ 0)
+  and a clear status (+33 & 15 = 0); otherwise dialog 0x12B ends it.
+- **Objective** (0x4995E0): −1 once group 0 or 2 has a clear status, else 0x10A.
+- **Init** (0x499540): camera point (5, 13), drop points cleared, DS:0x50ADB1..0x50ADF0
+  copied from DS:0x524130 / 0x524150 (nothing in the code was seen to write them), and
+  DS:0x506651 = 0. **Load** (0x49A700): the 14 exit hexes at 0x519FE8 → 0x519FB0.
+- **Turn script** (0x49A190):
+  - stage 0: the mission turn counter DS:0x50663B + 1; while the alarm has not gone up
+    (DS:0x50AD6E / 0x50AD74 bit 0): if a timed explosive is about to go off (an entry
+    of DS:0x50AC1C with x ≠ −1 and fewer than 2 turns), both flags and the **alert**
+    (DS:0x50ADF1) are set and every computer unit (status 3–5, with a machine and
+    condition, order +3 = 1x) heads for a random one of those sites (+7/+8,
+    `random(n)`). Otherwise the alert goes up (DS:0x50AD74 bit 0) if fewer than 3
+    player units are at full condition, a player unit is spotted, any smoke is on the
+    map, fewer than 32 computer units stand, a spotted player unit is damaged, or any
+    crew's combat record shows a shot. Then the speech hook (not ported: it runs the
+    group flight engine 0x43BDB0 and the arrival scenes);
+  - stage 1, once the target is recovered (DS:0x50AD7A bit 0): each player unit on an
+    exit hex is asked "%s %sを脱出させますか？" (0xAA, given and family names; 実行 / 中止)
+    and leaves the map (0x47FFA0) on yes, unless it carries a unit (0xAB);
+  - once (DS:0x50AD4E bit 0): the group scan (0x4DE090), groups 0 and 2 placed at the
+    camera point, the speech window (0x4403D0);
+  - finally, with no player unit left on the map and no group 0, 2 or 4 still waiting
+    (members, +2 bits 4–5 clear) while the target is not recovered, the end code
+    DS:0x50ADF2 = 0x80.
+- **Command** (0x499F40, unit‑menu entry 11: **indoor search**): under 20 AP, 0xA9.
+  Otherwise "indoor search: 20 AP. Search?" (0xA5, はい / いいえ). On yes, on hex (47, 24) or
+  (46, 24) before the target is recovered: "target found, recovered" (0xA6), 20 AP, and
+  DS:0x50AD7A's low byte records the crew (bits 1–5) and bit 0. Elsewhere it looks for a
+  building (terrain type 7 or 8) in the ring around the unit: found, "nothing here"
+  (0xA7) and 20 AP; else "no building here" (0xA8). **Quirk:** it walks `spiral`'s
+  list (pairs of ints) 4 bytes at a time as (x, y) shorts, so it really tests the T
+  layer at offsets y₀, x₁, y₁, x₂, … (hexes of row 0): in practice "no building".
+
+**The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
+clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
+g mod 3 (DS:0x50AD99/9B + 4k), or for type 9 (+0x21 = 9x) the bytes at units[0] +
+0x33BC + 0x46 g, which past unit 254 is the group table. Groups 20–63 take the
+computer's points (DS:0x50ADA5/A7 + 4k). Groups 1, 3, …, 11 of type 0, 1 or 6 aim
+(+0x1A/+0x1B) at the camera point.
 
 ---
 

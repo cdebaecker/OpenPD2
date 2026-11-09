@@ -96,8 +96,9 @@ static func mission_end(w: Pd2World) -> void:
 
 
 ## Sandbox stand-in for the briefing: `count` DoLLS (crew 1..count, X4 PLDs) take the
-## unit slots 0..count-1, equipped like the mission's first enemy PLD, and are dropped on
-## the passable hexes farthest from the enemy. Returns their unit indices.
+## unit slots 0..count-1, equipped like the mission's first enemy PLD, are dropped on the
+## passable hexes farthest from the enemy and listed in group 0 by crew number. Returns
+## their unit indices.
 static func sandbox_squad(w: Pd2World, count := 4) -> Array:
 	var template := -1
 	for u in w.n_units:
@@ -130,6 +131,10 @@ static func sandbox_squad(w: Pd2World, count := 4) -> Array:
 		w.setb(u, 0xE, Move.max_ap(w, u))
 		out.append(u)
 	rebuild_occupancy(w)
+	# the briefing also lists them in a player group: group 0, by crew number (stand-in)
+	for i in out.size():
+		w.groups[6 + i] = w.ub(out[i], 0xB)
+	w.groups[5] = out.size()
 	return out
 
 
