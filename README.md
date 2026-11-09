@@ -21,7 +21,7 @@ Early. The tactical battle runs as a **sandbox**:
 
 Still missing:
 - the briefing and equipment screens;
-- the player's reaction menu and the magazine swaps;
+- the magazine swaps and the intercept prompt;
 - the mission event scripts and the victory checks;
 - the strategy layer, music and saves.
 
@@ -49,6 +49,9 @@ Controls:
 - M move, F fire, A aimed fire, Q anti-air fire, 1–4 weapon slot;
 - S search, C conceal;
 - Tab next unit, E end turn.
+
+When an enemy moves or fires near your units, the computer's turn pauses on the reaction
+menu: pick a unit, then its weapon, or ignore the enemy.
 
 Headless check, which loads every mission and plays two turns:
 

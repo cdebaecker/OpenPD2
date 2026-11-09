@@ -16,6 +16,7 @@ func _init() -> void:
 			var b = scene.instantiate()
 			b.campaign = camp
 			b.mission_index = m
+			b.auto_react = true
 			root.add_child(b)
 			await process_frame
 			var before := []

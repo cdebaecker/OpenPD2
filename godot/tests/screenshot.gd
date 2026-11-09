@@ -10,6 +10,7 @@ func _init() -> void:
 	var b = load("res://ui/battle.tscn").instantiate()
 	b.campaign = camp
 	b.mission_index = m
+	b.auto_react = true
 	root.add_child(b)
 	for i in 10:
 		await process_frame

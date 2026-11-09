@@ -26,6 +26,17 @@ var fire_map: Move.MoveMap = null
 var turn := 1
 var alert := 0
 var busy := false
+## The computer's turn runs on a worker thread so that the player's reaction menu can
+## pause it; auto_react answers the menu without asking (tests, headless runs).
+var auto_react := false
+var react_policy := Callable()     # auto_react's answers (tests); default: strongest weapon
+var ai_thread: Thread = null
+var ai_running := false
+var react_sem := Semaphore.new()
+var react_answer: Variant = 1
+var react_panel: PanelContainer = null
+var react_target := -1
+var react_menu: Array = []
 var hover := Vector2i(-1, -1)
 var last_ai_result := 0
 
@@ -33,6 +44,7 @@ var cam: Camera2D
 var overlay: Node2D
 var info: Label
 var log_box: RichTextLabel
+var hud_layer: CanvasLayer
 var slot_buttons: Array = []
 
 
@@ -53,6 +65,11 @@ class SandboxHooks extends AiTurnHooks:
 			# the player's units react: the game's menu loop (Action.player_reactions), with
 			# an automatic answer until the battle can pause the computer's turn for a menu
 			var mode := 10 if w.unit_class(t) >= 2 else 5
+			if not battle.auto_react:
+				var ask := func(menu: Array, tt: int) -> Variant: return battle.ask_reaction(menu, tt, mode)
+				return Action.player_reactions(w, rng, reactors, t, f, ask, self, easy)
+			if battle.react_policy.is_valid():
+				return Action.player_reactions(w, rng, reactors, t, f, battle.react_policy, self, easy)
 			var choose := func(menu: Array, tt: int) -> Variant:
 				var tp := w.pos(tt)
 				for b in menu:
@@ -152,6 +169,7 @@ static func hex_at(pt: Vector2) -> Vector2i:
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
+	hud_layer = layer
 	add_child(layer)
 	var panel := PanelContainer.new()
 	panel.position = Vector2(4, 4)
@@ -206,6 +224,9 @@ func _build_hud() -> void:
 
 
 func say(t: String) -> void:
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		call_deferred("say", t)
+		return
 	if log_box:
 		log_box.append_text(t + "\n")
 
@@ -506,8 +527,32 @@ func _end_turn() -> void:
 	for u in w.n_units:                  # 0x4361A0: the reacted flags
 		w.setb(u, 0, w.ub(u, 0) & ~0x40)
 	hooks.flag = 0
+	if auto_react:
+		var undefined0 := []
+		_end_turn_finish(AiTurn.run(w, rng, hooks, alert, false, undefined0), undefined0)
+		return
+	ai_running = true
+	ai_thread = Thread.new()
+	ai_thread.start(_ai_phase)
+
+
+func _ai_phase() -> void:
+	## Worker thread: the computer's turn. Only the reaction menu talks to the main
+	## thread meanwhile (ask_reaction); input is blocked by `busy`.
 	var undefined := []
 	var res := AiTurn.run(w, rng, hooks, alert, false, undefined)
+	call_deferred("_ai_done", res, undefined)
+
+
+func _ai_done(res: int, undefined: Array) -> void:
+	ai_thread.wait_to_finish()
+	ai_thread = null
+	ai_running = false
+	overlay.queue_redraw()
+	_end_turn_finish(res, undefined)
+
+
+func _end_turn_finish(res: int, undefined: Array) -> void:
 	last_ai_result = res
 	if not undefined.is_empty():
 		say("[color=gray](%d unit(s) reached a case the game leaves undefined; their orders ended there)[/color]" % undefined.size())
@@ -533,6 +578,95 @@ func _end_turn() -> void:
 	_check_end()
 
 
+# --- the reaction menu ------------------------------------------------------------
+
+func ask_reaction(menu: Array, t: int, mode: int) -> Variant:
+	## Called on the computer's thread by Action.player_reactions: shows the menu on the
+	## main thread and waits for the answer (0 ignore the enemy, 1 done, [unit, [slot]]).
+	call_deferred("_open_reaction_menu", menu, t, mode)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_reaction_menu(menu: Array, t: int, mode: int) -> void:
+	react_target = t
+	react_menu = menu
+	cam.position = hex_center(w.pos(t))
+	_show_reaction_units(menu, t, mode)
+	overlay.queue_redraw()
+
+
+func _reaction_panel(title: String) -> VBoxContainer:
+	if react_panel:
+		react_panel.queue_free()
+	react_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	react_panel.theme = theme
+	react_panel.position = Vector2(get_viewport().get_visible_rect().size.x - 236, 40)
+	var box := VBoxContainer.new()
+	react_panel.add_child(box)
+	var lbl := Label.new()
+	lbl.text = title
+	box.add_child(lbl)
+	hud_layer.add_child(react_panel)
+	return box
+
+
+func _show_reaction_units(menu: Array, t: int, mode: int) -> void:
+	var box := _reaction_panel("%s in reach. React with:" % unit_name(t))
+	var tp := w.pos(t)
+	for b in menu:
+		var bp := w.pos(b)
+		var btn := Button.new()
+		btn.text = "%s  (%d hexes, condition %d)" % [unit_name(b), Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y), w.ub(b, 0xD)]
+		btn.pressed.connect(_show_reaction_weapons.bind(menu, t, mode, b))
+		box.add_child(btn)
+	var ignore := Button.new()
+	ignore.text = "Ignore this unit"
+	ignore.pressed.connect(_answer_reaction.bind(0))
+	box.add_child(ignore)
+	var done := Button.new()
+	done.text = "Done"
+	done.pressed.connect(_answer_reaction.bind(1))
+	box.add_child(done)
+
+
+func _show_reaction_weapons(menu: Array, t: int, mode: int, b: int) -> void:
+	var box := _reaction_panel("%s: weapon" % unit_name(b))
+	var bp := w.pos(b)
+	var tp := w.pos(t)
+	var any := false
+	for s in Action.weapon_choices(w, b, mode, Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y)):
+		if s >= 4:
+			continue                # magazine swaps do nothing in this menu (0x472920)
+		any = true
+		var btn := Button.new()
+		btn.text = "Slot %d: range %d, rounds %d, attack %d" % [s + 1, w.weapon_range(b, s), w.slot_count(b, s),
+			Move.final_attack(w, b, s, mode == 10)]
+		btn.pressed.connect(_answer_reaction.bind([b, [s]]))
+		box.add_child(btn)
+	if not any:
+		var none := Label.new()
+		none.text = "No weapon can fire."
+		box.add_child(none)
+	var back := Button.new()
+	back.text = "Back"
+	back.pressed.connect(_show_reaction_units.bind(menu, t, mode))
+	box.add_child(back)
+
+
+func _answer_reaction(v: Variant) -> void:
+	if react_panel:
+		react_panel.queue_free()
+		react_panel = null
+	react_target = -1
+	react_menu = []
+	react_answer = v
+	overlay.queue_redraw()
+	react_sem.post()
+
+
 func _count_side(side: int) -> int:
 	var n := 0
 	for u in w.n_units:
@@ -551,7 +685,7 @@ func _check_end() -> void:
 # --- drawing ---------------------------------------------------------------------
 
 func _draw_overlay() -> void:
-	if w == null:
+	if w == null or (ai_running and react_panel == null):
 		return
 	if fire_map != null and mode != "move":
 		for ly in fire_map.h:
@@ -586,5 +720,9 @@ func _draw_overlay() -> void:
 			overlay.draw_arc(p, 16, 0, TAU, 24, Color(0.2, 0.2, 0.2), 2)
 		if u == selected:
 			overlay.draw_arc(p, 19, 0, TAU, 32, Color.YELLOW, 3)
+	if react_target != -1:
+		overlay.draw_arc(hex_center(w.pos(react_target)), 22, 0, TAU, 32, Color.RED, 3)
+		for b in react_menu:
+			overlay.draw_arc(hex_center(w.pos(b)), 20, 0, TAU, 32, Color(0.3, 1, 0.5), 2)
 	if w.on_map(hover.x, hover.y):
 		overlay.draw_arc(hex_center(hover), 22, 0, TAU, 6, Color(1, 1, 1, 0.7), 2)
