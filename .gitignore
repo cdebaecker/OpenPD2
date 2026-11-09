@@ -1,0 +1,31 @@
+# The original game never goes in this repository
+*.iso
+*.img
+*.bin
+*.cue
+*.ccd
+*.sub
+*.mds
+*.mdf
+data.z
+Pd2.exe
+*.PCK
+*.pck
+*.SLD
+*.sld
+*.pac
+*.GCP
+*.gcp
+/original/
+/import/
+
+# Godot
+.godot/
+*.translation
+/godot/export_presets.cfg
+/build/
+/export/
+
+# Python
+__pycache__/
+*.pyc
