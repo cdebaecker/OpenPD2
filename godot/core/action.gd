@@ -18,15 +18,15 @@ static func count(w: Pd2World, u: int, off: int, wide: bool) -> void:
 	var i := W.s8(w.ucrew(u, 15))
 	if i < 0:
 		return
-	var o := STATS_SIZE * i + off
+	var a := 0x506B39 + STATS_SIZE * i + off   # past the 26 records the game writes on
 	if wide:
-		var v := w.combat[o] | w.combat[o + 1] << 8
+		var v := w.mem8(a) | w.mem8(a + 1) << 8
 		if v < 0xFFFF:
 			v += 1
-		w.combat[o] = v & 0xFF
-		w.combat[o + 1] = v >> 8
-	elif w.combat[o] < 0xFF:
-		w.combat[o] += 1
+		w.mem_write(a, v & 0xFF)
+		w.mem_write(a + 1, v >> 8)
+	elif w.mem8(a) < 0xFF:
+		w.mem_write(a, w.mem8(a) + 1)
 
 
 static func mine_at(w: Pd2World, x: int, y: int) -> int:   # 0x46F650(x, y, -1, 1)
@@ -890,8 +890,8 @@ static func _crew_pool_add(w: Pd2World, c: int) -> void:
 	w.crew_pool_n += 1
 
 
-## 0x4549B0: take k out of player group g (rules.group_drop_player).
-static func group_drop_player(w: Pd2World, g: int, k: int) -> void:
+## 0x4549B0: take k out of player group g (rules.group_drop_player): 0 removed, 1 not listed.
+static func group_drop_player(w: Pd2World, g: int, k: int) -> int:
 	var G := g * 35
 	var c := w.sb(k, 0xB)
 	var camp := w.campaign != 0
@@ -916,9 +916,10 @@ static func group_drop_player(w: Pd2World, g: int, k: int) -> void:
 			for j in range(n, 16):
 				w.groups[G + 6 + j] = 0xFF
 		if camp and not by_crew and w.mode_663a:
-			return
+			return 0
 		_crew_pool_add(w, c)
-		return
+		return 0
+	return 1
 
 
 ## 0x441F40: take k out of computer group g (rules.group_drop).

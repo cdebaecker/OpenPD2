@@ -30,6 +30,7 @@ func _init() -> void:
 	b = load("res://ui/battle.tscn").instantiate()
 	b.campaign = "dash"
 	b.mission_index = 1
+	b.sortie_window = false
 	root.add_child(b)
 	await process_frame
 	var w: Pd2World = b.w

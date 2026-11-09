@@ -91,7 +91,8 @@ static func crew_shots(w: Pd2World, c: int) -> int:
 	var i := Pd2World.s8(w.crew[c * Pd2World.CREW + 15])
 	if i < 0:
 		return 0
-	return w.combat[13 * i + 4] | w.combat[13 * i + 5] << 8
+	var a := 0x506B39 + 13 * i            # past the 26 records the game reads on (into the units)
+	return w.mem8(a + 4) | w.mem8(a + 5) << 8
 
 
 # --- mission 1 (script 1: the PD2 campaign's first mission) ------------------------------

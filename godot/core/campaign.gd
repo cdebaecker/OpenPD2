@@ -324,3 +324,344 @@ static func mission_load(w: Pd2World, chunk: int, init: PackedByteArray, npc: Pa
 				_set_crew(w, c, 5, 0xFF)
 	w.mode_663a = 0
 	w.mission_turn = 0
+
+
+# --- the sortie screen (0x45ED60, "hensei_g.pac"; emulated by verify_sortie) -----------
+
+const SCENARIO := 0x50DE41
+
+
+## The sortie screen's windows (rules.SortieHooks): the mission's deploy check (table
+## 0x51EC68: 0 refuses, 0x10000 / -0x20000 / -0x40000 abort, else passes), its message
+## dialogs (0x4DD390: -100 / -101 / -102 abort), the refusal notes and the start question
+## (0x451E30: 1 yes, 0 no).
+class SortieHooks:
+	func deploy() -> int:
+		return 1
+
+	func dialog(msg: int, arg: Array) -> int:
+		return 0
+
+	func note(code: int, arg: int) -> int:
+		return 0
+
+	func ask(msg: int) -> int:
+		return 1
+
+
+static func _record(w: Pd2World, o: int) -> int:
+	return w.scenario[o] if o < w.scenario.size() else 0
+
+
+static func _machine(w: Pd2World, k: int) -> int:
+	return Flight.s8(Flight.ub(w, k, 0xC))
+
+
+static func _ammo12(w: Pd2World, k: int) -> int:
+	var n := 0
+	for p in 12:
+		if Flight.s8(Flight.ub(w, k, 0x1B + 2 * p)) == 12:
+			n += 1
+	return n
+
+
+static func _arrival(w: Pd2World, g: int) -> int:
+	return Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
+
+
+static func _ammo12_sum(w: Pd2World, members: Array) -> int:
+	var n := 0
+	for m in members:
+		n += _ammo12(w, m)
+	return n
+
+
+## The screen's opening (rules.sortie_open): transports 1, 3, .., 11 hand their members to
+## the group before them; the free-pilot list is rebuilt.
+static func sortie_open(w: Pd2World) -> void:
+	var pd2 := w.campaign != 0
+	for j in 6:
+		var e := 2 * j
+		var o := e + 1
+		var n := Flight.gb(w, o, 5)
+		if n and (pd2 or Flight.gb(w, o, 2) & 1):
+			for i in n:
+				var m := Flight.gb(w, o, 6 + i)
+				var c := Flight.gb(w, e, 5)
+				Flight.setgb(w, e, 6 + c, m)
+				Flight.setgb(w, e, 5, c + 1)
+				w.mem_write(CREWS + 16 * m + 5, e)
+			Flight.setgb(w, o, 5, 0)
+	var t92 := w.ds16(0x50AD92)
+	w.crew_pool_n = 0
+	for c in 64:
+		if _crew(w, c, 4) <= t92 and _crew(w, c, 2) < 3 and _crew(w, c, 5) == 0xFF and not _crew(w, c, 6) & 3:
+			w.pool_set(w.crew_pool_n, c)
+			w.crew_pool_n += 1
+
+
+## The screen's drop (rules.sortie_drop): group_drop_player, then flag bit 2 cleared.
+static func sortie_drop(w: Pd2World, g: int, k: int) -> int:
+	var res := Action.group_drop_player(w, g, k)
+	if res == 0:
+		w.setb(k, 0, w.ub(k, 0) & 0xFB)
+	return res
+
+
+## The start button's checks (rules.sortie_check): ["start"], ["refused", code, group],
+## ["mission"], ["need", group, i, message] or ["abort", code].
+static func sortie_check(w: Pd2World, hooks: SortieHooks) -> Array:
+	var pd2 := w.campaign != 0
+	var ok := true
+	var fail := 0
+	var who := 0
+	var aborts := {-102: 0x20000, -101: 0x40000, -100: -1}
+	if pd2 and _crew(w, 1, 5) == 0xFF:
+		fail = 1
+		ok = false
+	var last: Variant = null
+	for g in range(0, 12, 2):
+		if not (Flight.gb(w, g, 2) & 1 and Flight.gb(w, g, 3) & 1 and Flight.gb(w, g, 5)):
+			continue
+		var ground := 0
+		var pilots := 0
+		for i in Flight.gb(w, g, 5):
+			var b := Flight.gb(w, g, 6 + i)
+			var c3 := w.mem8(CREWS + 16 * b + 3)
+			if c3 == 0:
+				ground += w.mem8(MACHS + 31 * _machine(w, b) + 0xA)
+			elif c3 == 1:
+				last = w.mem8(MACHS + 31 * _machine(w, b) + 9)
+				pilots += last
+		if pilots < ground:
+			fail = 2
+			ok = false
+			who = g
+			break
+		if ground != 0 or pilots == 0:
+			if last == null:
+				w.fault = "sortie_check: reads an unset local (no pilot seen yet)"
+				return ["abort", -1]
+			if pilots - ground < last:
+				continue
+		fail = 4
+		ok = false
+		who = g
+		break
+	var n0 := 0
+	for g in [0, 2, 4]:
+		for i in Flight.gb(w, g, 5):
+			if Flight._machine_class(w, _machine(w, Flight.gb(w, g, 6 + i))) == 0:
+				n0 += 1
+	if n0 == 0:
+		fail = 3
+		ok = false
+	var r := hooks.deploy()
+	if r == -0x20000 or r == -0x40000:
+		return ["abort", -r]
+	if r == 0:
+		ok = false
+		fail = -1
+	elif r == 0x10000:
+		return ["abort", -1]
+	if not pd2:
+		var first := 10000
+		for g in 6:
+			if Flight.gb(w, g, 5) and Flight.gb(w, g, 2) & 1:
+				first = mini(first, _arrival(w, g))
+		for g in range(12, 20):
+			if Flight.gb(w, g, 0x21) & 0xF0 == 0x60 and Flight.gb(w, g, 5) and _arrival(w, g) < first:
+				var res := hooks.dialog(0x1E2, ["sign", Flight.gb(w, g, 1)])
+				if aborts.has(res):
+					return ["abort", aborts[res]]
+				ok = false
+				fail = -1
+	for g in 20:
+		if not Flight.gb(w, g, 5):
+			continue
+		var typ := Flight.gb(w, g, 0x21) & 0xF
+		var members := []
+		for j in 16:
+			if Flight.gb(w, g, 6 + j) != 0xFF:
+				members.append(Flight.gb(w, g, 6 + j))
+		for i in 3:
+			var kind := _record(w, 7 + typ * 0x1C + 7 * i)
+			var bad := false
+			match kind:
+				0:
+					bad = true
+					for m in members:
+						if _machine(w, m) == 10:
+							bad = false
+				1:
+					bad = _ammo12_sum(w, members) <= 2
+				2, 8:
+					for m in members:
+						if not _machine(w, m) in [7, 12]:
+							bad = true
+				3:
+					for m in members:
+						if _machine(w, m) != 8:
+							bad = true
+				4:
+					bad = _ammo12_sum(w, members) == 0
+				5:
+					if Flight.gb(w, g, 0x21) & 0xF:
+						var first := 10000
+						for h in 20:
+							if h != g and Flight.gb(w, h, 5) and not Flight.gb(w, h, 0x21) & 0xF and Flight.gb(w, h, 2) & 1:
+								first = mini(first, _arrival(w, h))
+						bad = first <= _arrival(w, g)
+				6:
+					bad = Flight.gb(w, g, 5) > 5
+				7:
+					bad = _ammo12_sum(w, members) < 10
+				9:
+					bad = not MissionScripts.table_byte(w, 0x3384 + 0x46 * g) & 1
+				10:
+					bad = not MissionScripts.table_byte(w, 0x3386 + 0x46 * g)
+			if bad:
+				var msg := (typ * 3 + 0x11 + i) * 3
+				var res := hooks.dialog(msg, ["name", Flight.gb(w, g, 0)])
+				if aborts.has(res):
+					return ["abort", aborts[res]]
+				return ["need", g, i, msg]
+	if ok:
+		return ["start"]
+	if fail == -1:
+		return ["mission"]
+	hooks.note(fail, who)
+	return ["refused", fail, who]
+
+
+## After "start the operation?" (rules.sortie_start): with yes the transports take their
+## pilots, escorts and drop tables place the groups, the mission flags and the explosive
+## and sensor lists are cleared; then, whatever the answer, the squad is refitted.
+static func sortie_start(w: Pd2World, yes := true) -> void:
+	if yes:
+		_sortie_split(w)
+	_sortie_refit(w)
+
+
+static func _sortie_split(w: Pd2World) -> void:
+	for g in range(0, 12, 2):
+		var o := g + 1
+		if not Flight.gb(w, g, 3) & 1:
+			continue
+		for f in [0x1D, 0x1E, 0x1F, 0x21]:
+			Flight.setgb(w, o, f, Flight.gb(w, g, f))
+		if g >= 6:
+			Flight.setgb(w, o, 0x1A, Flight.gb(w, g, 0x1A))
+			Flight.setgb(w, o, 0x1B, Flight.gb(w, g, 0x1B))
+		var i := 0
+		while i < Flight.gb(w, g, 5):
+			var b := Flight.gb(w, g, 6 + i)
+			if w.mem8(CREWS + 16 * Flight.s8(Flight.ub(w, b, 0xB)) + 3) == 1:
+				Action.group_drop_player(w, g, b)
+				var c := Flight.gb(w, o, 5)
+				Flight.setgb(w, o, 6 + c, b)
+				Flight.setgb(w, o, 5, c + 1)
+				i = 0
+				w.mem_write(CREWS + 16 * b + 5, o)
+			else:
+				i += 1
+	for g in range(12, 18):
+		if Flight.gb(w, g, 0x21) & 0xF0 == 0x90 and Flight.gb(w, g, 5):
+			Flight.setgb(w, g, 0x1A, MissionScripts.table_byte(w, 0x46 * g + 0x33BE))
+			Flight.setgb(w, g, 0x1B, MissionScripts.table_byte(w, 0x46 * g + 0x33BF))
+	for g in 20:
+		var sel := _record(w, 0x20 + (Flight.gb(w, g, 0x21) & 0xF) * 0x1C)
+		if sel != 2 and sel != 3:
+			continue
+		var base := 0x50ADB1 if sel == 2 else 0x50ADD1
+		var idx := Flight.s8(Flight.gb(w, g, 0x1F))
+		var t := Flight.gb(w, g, 0x21) & 0xF0
+		if t == 0x10 or t == 0x80:
+			for j in 16:
+				var m := Flight.gb(w, g, 6 + j)
+				if m != 0xFF and Flight._machine_class(w, Flight.s8(Flight.ub(w, m, 0xC))) < 2:
+					w.mem_write(UNITS + 55 * m + 9, w.mem8(base + 4 * idx))
+					w.mem_write(UNITS + 55 * m + 10, w.mem8(base + 4 * idx + 2))
+		elif t == 0x60:
+			Flight.setgb(w, g, 0x1A, w.ds8(0x50AD95))
+			Flight.setgb(w, g, 0x1B, w.ds8(0x50AD97))
+			for j in 16:
+				var m := Flight.gb(w, g, 6 + j)
+				if m != 0xFF:
+					w.mem_write(UNITS + 55 * m + 7, w.mem8(base + 4 * idx))
+					w.mem_write(UNITS + 55 * m + 8, w.mem8(base + 4 * idx + 2))
+	for i in range(0x4E, 0x8E):
+		w.ds[i] = 0
+	for i in range(0, 0x3C, 4):
+		w.bombs[i] = 0xFF
+	for i in range(0, 0xA8, 4):
+		w.sensors[i] = 0xFF
+
+
+static func _sortie_refit(w: Pd2World) -> void:
+	for g in 20:
+		if not Flight.gb(w, g, 5):
+			continue
+		for j in 16:
+			var m := Flight.gb(w, g, 6 + j)
+			if m == 0xFF:
+				continue
+			var base := UNITS + 55 * m
+			if m < 0x1B:
+				w.mem_write(base + 0xB, m)
+			w.mem_write(base + 0xD, w.mem8(MACHS + 31 * Flight.s8(w.mem8(base + 0xC)) + 2))
+			for s in 6:
+				if w.mem8(base + 0xF + 2 * s) != 0xFF:
+					w.mem_write(base + 0x10 + 2 * s, w.mem8(base + 0x10 + 2 * s) & 0xCF)
+			for p in 12:
+				var am := Flight.s8(w.mem8(base + 0x1B + 2 * p))
+				if am != -1:
+					w.mem_write(base + 0x1C + 2 * p, w.mem8(Flight.AMMOS + 12 * am) & 0x3F)
+			w.mem_write(base + 1, 0)
+			w.mem_write(base + 2, w.mem8(base + 2) & 0xF0)
+	var t92 := w.ds16(0x50AD92)
+	for u in 254:
+		var base := UNITS + 55 * u
+		if w.mem8(base + 0x36) < 3:
+			w.mem_write(base, w.mem8(base) & 0x84)
+			w.mem_write(base + 6, 0)
+			var c := Flight.s8(w.mem8(base + 0xB))
+			if w.mem8(CREWS + 16 * c + 4) <= t92:
+				w.mem_write(base + 0x36, 0)
+		else:
+			w.mem_write(base + 6, 0)
+	w.set_ds8(0x50ADF1, 0)
+
+
+## The screen's loop as its buttons drive it (rules.sortie_screen): sortie_open, then the
+## actions ["select", g] (a formable group: the buttons reach 0, 2, .., 10, 12-19),
+## ["join", p] (pool row p, 0-7), ["drop", row], ["start"] (the checks, the question,
+## sortie_start), ["back"]. Returns [result (0 started, 2 back), log].
+static func sortie_screen(w: Pd2World, hooks: SortieHooks, actions: Array) -> Array:
+	var log := []
+	sortie_open(w)
+	var sel := 0
+	for a in actions:
+		match a[0]:
+			"select":
+				var g: int = a[1] & ~1 if a[1] < 12 else a[1]
+				if Flight.gb(w, g, 2) & 1:
+					sel = g
+			"join":
+				if a[1] < w.crew_pool_n:
+					log.append(["join", sel, group_join(w, sel, w.ds[2 + a[1]])])
+			"drop":
+				var n := Flight.gb(w, sel, 5)
+				if a[1] < n and n:
+					log.append(["drop", sel, sortie_drop(w, sel, Flight.gb(w, sel, 6 + a[1]))])
+			"start":
+				var r := sortie_check(w, hooks)
+				log.append(["check"] + r)
+				if r[0] == "start":
+					var yes := hooks.ask(0x1C)
+					sortie_start(w, yes == 1)
+					if yes == 1:
+						return [0, log]
+			_:
+				return [2, log]
+	return [2, log]

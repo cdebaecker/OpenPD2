@@ -1783,7 +1783,56 @@ bytes), its NPC entry over crews 27–36. On the campaign's first chunk (DS:0x50
 groups 0 and 2 keep their count and members across it; on later chunks the player's
 groups with +2 bit 0 are emptied and every crew with +2 = 0 and +4 ≤ DS:0x50AD92 gets
 +5 = −1. Then the operation plan (0x443F60) and the sortie screen (0x45ED60) run before
-the battle (DS:0x50663A = 1, 0x436530).
+the battle (DS:0x50663A = 1, 0x436530); the sortie screen is §5.11.
+
+### 5.11 The sortie screen: Emulated
+
+The sortie screen (0x45ED60, "hensei_g.pac") runs before every battle, after the
+briefing (0x4DD2F0, which loads the mission's SCN_MIS record, 0x1C6 bytes, to
+DS:0x50DE41) and the operation plan. Emulated whole, 400 / 400 runs driven through its
+buttons (`verify_sortie`).
+
+- **Opening**: each transport group 1, 3, …, 11 with members (DASH: only with +2 bit 0)
+  hands them to the ground group before it (appended, crew +5 = that group; the
+  transport's count becomes 0). The free‑pilot list is rebuilt: crews with +4 ≤
+  DS:0x50AD92, +2 < 3, +5 = −1 and +6 bits 0–1 clear.
+- **Buttons** (0x437AC0 regions): the formable groups (+2 bit 0; the buttons reach groups
+  0, 2, …, 10 and 12–19); a free pilot joins the selected group through 0x454690 (§5.10;
+  its refusals show MES 0x1D8, 0x1D7, 0x1D6, 0x1D5, 0x1D4, 0x1D3, 0x1DB, 0x1DC for codes
+  1–8); a member leaves through group_drop_player (flag bit 2 cleared; not listed: 0x1CE).
+  The equipment screen (0x454E60) and the lists' sort (0x462390) are not ported.
+- **Start** — the checks, in order:
+  1. PD2: crew 1 (Yao) must be in a group (else MES 0x21);
+  2. each ground group 0, 2, …, 10 with +2 and +3 bit 0: its pilots' transport capacity
+     (machine +9) against its ground units' load (+0xA) — too little: 0x22, a spare
+     transport: 0x24 (with the group's name);
+  3. groups 0, 2, 4 hold a machine of class 0 (else 0x23);
+  4. the mission's deploy hook (table 0x51EC68) may refuse;
+  5. DASH: no rescue group (12–19, type 6) may arrive before the drop groups (0x1E2);
+  6. every group with members meets its type's three requirements from the mission
+     record (+7 + type × 0x1C, 7 bytes each): 0 a machine‑10 member; 1 more than 2
+     rounds of ammunition 12 (TX48); 2 and 8 only machines 7 and 12; 3 only machine 8;
+     4 at least one TX48; 5 appear before the groups of type 0; 6 at most 5 members; 7
+     at least 10 TX48; 9 / 10 the group's bytes at units[0] + 0x3384 / 0x3386 + 0x46 g.
+     A failure shows MES (type × 3 + 0x11 + i) × 3 with the group's name.
+  Then "start the operation?" (0x1C).
+- **Yes**: each ground group 0, 2, …, 10 with +3 bit 0 gives its transport (the next
+  group) its arrival turn, +0x1F and type (groups 6–10 also +0x1A/+0x1B), and its pilots
+  (crew +3 = 1) move there. Escorts (12–17, type 9) aim at their bytes at units[0] +
+  0x33BE + 0x46 g. Groups whose type's record entry +0x19 is 2 or 3 take positions from
+  DS:0x50ADB1 / 0x50ADD1 (index +0x1F): types 1 and 8 place their class 0–1 members,
+  type 6 heads for the camera point with its members' destination there. The mission
+  flags DS:0x50AD4E–0x50AD8D are cleared and the timed‑explosive and sensor lists
+  emptied.
+- **Yes or no**: every member of groups 0–19 is refitted — crew = unit for the player's
+  27, condition from the machine (+2), launcher slots unjammed, each pocket refilled to
+  its round's capacity, parts repaired. Units 0–253 below status 3 lose flag bits 0, 1,
+  3–6 and their support order, and take status 0 once their crew is available (+4 ≤
+  DS:0x50AD92); the alert is reset. With no the screen goes on.
+
+The combat records (DS:0x506B39) are read and written by index (crew +15): an index of
+26 or more runs past the 26 records into the 8 bytes before the unit table and on into
+unit 0, as the game does (the save holds such crews).
 
 ---
 

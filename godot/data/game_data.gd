@@ -119,6 +119,28 @@ func call_sign(campaign: String, n: int) -> String:
 	return signs[n] if n >= 0 and n < signs.size() else ""
 
 
+## A base-screen message (MES.PCK, which message_text reads while DS:0x50663A = 0: the
+## sortie screen, the briefing), translated (mes.csv: "<campaign>.<entry>.<id>", then
+## "<campaign>.<id>", then "<id>") and formatted; a line the entry leaves empty stays empty.
+func base_text(campaign: String, id: int, args := [], entry := 0) -> String:
+	if not _messages.has(campaign):
+		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
+	var tables: Array = _messages[campaign].get("mes", [])
+	var ja := ""
+	if entry < tables.size() and id < tables[entry].size():
+		ja = tables[entry][id]
+	if ja == "":
+		return format_text("", args)
+	var t := _translated("mes", "%s.%d.%X" % [campaign, entry, id])
+	if t == "":
+		t = _translated("mes", "%s.%X" % [campaign, id])
+	if t == "":
+		t = _translated("mes", "%X" % id)
+	if t == "":
+		t = ja
+	return format_text(t, args)
+
+
 ## An engine UI string (translations/ui.csv): the language's column, else English, else the key.
 func ui_text(key: String) -> String:
 	if not _translations.has("ui"):

@@ -29,6 +29,7 @@ func _battle(auto: bool):
 	b.campaign = "dash"
 	b.mission_index = 1
 	b.auto_react = auto
+	b.sortie_window = false
 	root.add_child(b)
 	await process_frame
 	b.rng = Pd2Random.new(SEED)

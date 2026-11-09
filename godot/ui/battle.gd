@@ -186,12 +186,6 @@ func _ready() -> void:
 	hooks = SandboxHooks.new(w, false, rng)
 	hooks.battle = self
 	names = {"crew": tables.crew_names, "machine": tables.machine_names}
-	# the sortie's squad: the player's groups (the new campaign forms PD2 mission 1's); with
-	# none (the sortie screen 0x45ED60 is not ported) the stand-in squad
-	squad = Mission.player_units(w)
-	sandbox = squad.is_empty()
-	if sandbox:
-		squad = Mission.sandbox_squad(w, 4)
 	var tex := GameData.map_texture(campaign, mission_index)
 	if tex:
 		var s := Sprite2D.new()
@@ -209,6 +203,16 @@ func _ready() -> void:
 	cam.limit_bottom = MAP * TILE_H
 	add_child(cam)
 	_build_hud()
+	_sortie()
+
+
+func _begin_battle() -> void:
+	# the sortie's squad: the player's groups as the sortie screen left them; with none
+	# formed (the sortie refused, or left) the stand-in squad
+	squad = Mission.player_units(w)
+	sandbox = squad.is_empty()
+	if sandbox:
+		squad = Mission.sandbox_squad(w, 4)
 	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the loader's layer reset
 	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
 	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
@@ -230,6 +234,174 @@ func _ready() -> void:
 		say("Turn 1. %d DoLLS dropped; %d enemy units on the map." % [squad.size(), _count_side(3)])
 	else:
 		say("Turn 1. %d DoLLS in the sortie, %d on the map; %d enemy units." % [squad.size(), landed.size(), _count_side(3)])
+
+
+# --- the sortie screen (0x45ED60) ----------------------------------------------------
+
+class BattleSortieHooks extends Campaign.SortieHooks:
+	## The sortie screen's windows in the battle: its dialogs and refusals go to the panel
+	## (MES.PCK texts); the mission's deploy hook (table 0x51EC68) is not ported and passes.
+	var battle
+
+	func dialog(msg: int, arg: Array) -> int:
+		battle.sortie_say(battle.mes(msg, [battle.sortie_arg(arg), ""]))
+		return 0
+
+	func note(code: int, who: int) -> int:
+		battle.sortie_say(battle.mes(code + 0x20, [battle.group_name(who)]))
+		return 0
+
+
+var sortie_hooks: BattleSortieHooks
+var sortie_window := true       # false: the sortie screen presses start at once (tests)
+var sortie_sel := 0
+var sortie_panel: PanelContainer
+var hud_panel: PanelContainer        # the command bar, hidden while the sortie screen is up
+var sortie_text := ""
+const JOIN_MESSAGES := {1: 0x1D8, 2: 0x1D7, 3: 0x1D6, 4: 0x1D5, 5: 0x1D4, 6: 0x1D3, 7: 0x1DB, 8: 0x1DC}
+
+
+func mes(id: int, args := []) -> String:
+	## a base-screen message (MES.PCK), translated and formatted
+	return GameData.base_text(campaign, id, args, mission_index).replace("@", "").replace("
+", "
+").strip_edges()
+
+
+func group_name(g: int) -> String:
+	## a group's name: entry +0 of the table at DS:0x50C881 (the call signs' second part)
+	return GameData.call_sign(campaign, 39 + Flight.gb(w, g, 0))
+
+
+func sortie_arg(arg: Array) -> String:
+	if arg.is_empty():
+		return ""
+	return GameData.call_sign(campaign, arg[1] + (39 if arg[0] == "name" else 0))
+
+
+func sortie_say(t: String) -> void:
+	sortie_text = t
+
+
+func _sortie() -> void:
+	## The sortie screen before the battle: the formable groups (+2 bit 0), their members
+	## and the free pilots; join, drop, start (the game's checks, then "start the
+	## operation?"). Without a window (auto_react, sortie_window false) it presses start once.
+	sortie_hooks = BattleSortieHooks.new()
+	sortie_hooks.battle = self
+	if auto_react or not sortie_window:
+		Campaign.sortie_screen(w, sortie_hooks, [["start"]])
+		_begin_battle()
+		return
+	Campaign.sortie_open(w)
+	sortie_sel = 0
+	for g in 20:
+		if Flight.gb(w, g, 2) & 1 and (g >= 12 or g % 2 == 0):
+			sortie_sel = g
+			break
+	_sortie_draw()
+
+
+func _sortie_draw(confirm := false) -> void:
+	if sortie_panel:
+		sortie_panel.queue_free()
+	sortie_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	sortie_panel.theme = theme
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
+	bg.set_content_margin_all(8)
+	sortie_panel.add_theme_stylebox_override("panel", bg)
+	sortie_panel.position = Vector2(16, 16)
+	if hud_panel:
+		hud_panel.visible = false
+	var box := VBoxContainer.new()
+	sortie_panel.add_child(box)
+	var title := Label.new()
+	title.text = ui("UI_SORTIE")
+	box.add_child(title)
+	var cols := HBoxContainer.new()
+	box.add_child(cols)
+	var groups_box := VBoxContainer.new()
+	cols.add_child(groups_box)
+	for g in 20:
+		if not Flight.gb(w, g, 2) & 1 or (g < 12 and g % 2 == 1):
+			continue
+		var b := Button.new()
+		b.text = "%s%s (%d)" % ["> " if g == sortie_sel else "", group_name(g), Flight.gb(w, g, 5)]
+		b.pressed.connect(func(): sortie_sel = g; _sortie_draw())
+		groups_box.add_child(b)
+	var members := VBoxContainer.new()
+	cols.add_child(members)
+	var ml := Label.new()
+	ml.text = group_name(sortie_sel)
+	members.add_child(ml)
+	for i in Flight.gb(w, sortie_sel, 5):
+		var k := Flight.gb(w, sortie_sel, 6 + i)
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.text = unit_name(k)
+		row.add_child(lbl)
+		var d := Button.new()
+		d.text = ui("UI_DROP")
+		d.pressed.connect(func():
+			if Campaign.sortie_drop(w, sortie_sel, k) == 1:
+				sortie_say(mes(0x1CE))
+			_sortie_draw())
+		row.add_child(d)
+		members.add_child(row)
+	var pool := VBoxContainer.new()
+	cols.add_child(pool)
+	var pl := Label.new()
+	pl.text = ui("UI_SORTIE_POOL")
+	pool.add_child(pl)
+	for i in w.crew_pool_n:
+		var c: int = w.ds[2 + i]
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.text = unit_name(c)
+		row.add_child(lbl)
+		var j := Button.new()
+		j.text = ui("UI_JOIN")
+		j.pressed.connect(func():
+			var code := Campaign.group_join(w, sortie_sel, c)
+			sortie_say(mes(JOIN_MESSAGES[code]) if JOIN_MESSAGES.has(code) else "")
+			_sortie_draw())
+		row.add_child(j)
+		pool.add_child(row)
+	if sortie_text != "":
+		var msg := Label.new()
+		msg.text = sortie_text
+		box.add_child(msg)
+	var buttons := HBoxContainer.new()
+	box.add_child(buttons)
+	if confirm:
+		var q := Label.new()
+		q.text = mes(0x1C)
+		buttons.add_child(q)
+		for yes in [true, false]:
+			var b := Button.new()
+			b.text = ui("UI_YES") if yes else ui("UI_NO")
+			b.pressed.connect(func():
+				Campaign.sortie_start(w, yes)
+				if yes:
+					sortie_panel.queue_free()
+					sortie_panel = null
+					hud_panel.visible = true
+					_begin_battle()
+				else:
+					_sortie_draw())
+			buttons.add_child(b)
+	else:
+		var st := Button.new()
+		st.text = ui("UI_START")
+		st.pressed.connect(func():
+			sortie_text = ""
+			var r := Campaign.sortie_check(w, sortie_hooks)
+			_sortie_draw(r[0] == "start"))
+		buttons.add_child(st)
+	hud_layer.add_child(sortie_panel)
 
 
 # --- geometry --------------------------------------------------------------------
@@ -259,6 +431,7 @@ func _build_hud() -> void:
 	hud_layer = layer
 	add_child(layer)
 	var panel := PanelContainer.new()
+	hud_panel = panel
 	panel.position = Vector2(4, 4)
 	var theme := Theme.new()
 	theme.default_font_size = 8

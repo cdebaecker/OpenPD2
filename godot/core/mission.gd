@@ -29,13 +29,15 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: A
 	if img.size() == 2:
 		w.static_mem[img[0]] = img[1]  # the exe's data around the tables (reads past them)
 	w.campaign = CAMPAIGN_FLAG.get(campaign, 0)
+	var rec: PackedByteArray = doc.get("record", PackedByteArray())
+	w.scenario = rec.slice(0, 0x1C6)   # DS:0x50DE41, as the briefing loads it (0x4DD2F0)
 	if save.size() == 2:
 		var base: int = save[0]
 		var data: PackedByteArray = save[1]
 		var put := func(addr: int, n: int) -> PackedByteArray:
 			return data.slice(addr - base, addr - base + n)
 		w.crew = put.call(0x506734, 64 * 16)
-		w.combat = put.call(0x506B39, 26 * 13)
+		w.combat = put.call(0x506B39, 0x506C93 - 0x506B39)   # the records and the 8 B after
 		w.units = put.call(0x506C93, 255 * 55)
 		w.groups = put.call(0x50A35C, 64 * 35)
 		w.ds = put.call(0x50AD00, 0xF5)
