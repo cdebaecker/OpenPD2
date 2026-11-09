@@ -1620,8 +1620,8 @@ check:
     `random(n)`). Otherwise the alert goes up (DS:0x50AD74 bit 0) if fewer than 3
     player units are at full condition, a player unit is spotted, any smoke is on the
     map, fewer than 32 computer units stand, a spotted player unit is damaged, or any
-    crew's combat record shows a shot. Then the speech hook (not ported: it runs the
-    group flight engine 0x43BDB0 and the arrival scenes);
+    crew's combat record shows a shot. Then the speech hook (§5.9: the group flight
+    engine 0x43BDB0 and the arrival scenes);
   - stage 1, once the target is recovered (DS:0x50AD7A bit 0): each player unit on an
     exit hex is asked "%s %sを脱出させますか？" (0xAA, given and family names; 実行 / 中止)
     and leaves the map (0x47FFA0) on yes, unless it carries a unit (0xAB);
@@ -1645,6 +1645,98 @@ g mod 3 (DS:0x50AD99/9B + 4k), or for type 9 (+0x21 = 9x) the bytes at units[0] 
 0x33BC + 0x46 g, which past unit 254 is the group table. Groups 20–63 take the
 computer's points (DS:0x50ADA5/A7 + 4k). Groups 1, 3, …, 11 of type 0, 1 or 6 aim
 (+0x1A/+0x1B) at the camera point.
+
+### 5.9 The group flight engine: Emulated
+
+Aircraft, transports, support batteries and set‑down teams move as **groups** on a
+15 × 15 grid of the operation area (DS:0x50A35C, 64 records of 35 B; groups 0–19 are
+the player's, 20–63 the computer's). Fields: +2 flags (bits 1–3: 3 = a radar, 4 =
+engaging; bits 4–5 the state: 0 waiting, 1 flying, 2 holding, 3 leaving; bits 6–7 the
+sub‑state), +5 the member count, +6.. 16 members, +0x16/+0x17 the position, +0x18/+0x19
+the drop point, +0x1A/+0x1B the target (x = 0xFF: follow group +0x1B), +0x1C the step's
+price still to pay, +0x1D the arrival turn (s16), +0x1F seen by radar, +0x20 a counter,
++0x21 the type (high nibble: 0 / 1 transports with an escort, 2 a transport of the
+group before it, 3 ground attack, 4 fighters, 5 a set‑down team, 6 a carrier, 9 an
+escort, 15 a ground site) and +0x22 the step along the line.
+
+**The flight turn** (0x43BDB0, emulated 1000 / 1000 whole, `verify_flight_turn`), run by
+the mission's speech hook in the computer's phase:
+1. the grid is cleared; for every group: its counter counts down while holding (or
+   flying with sub‑state 1); a type‑3 group with no ground‑attack round left becomes
+   type 4 (0x440310); a group whose counter ran out turns back (state 3) to a random one
+   of its side's three points, `random(3)` (0x440240; a player group of type 3 or 4 calls
+   the radio, event 0x11); a leaving group at its target leaves the grid; a waiting group
+   whose arrival time has come (0x43C3C0: the arrival turn, less the flight time
+   ⌈distance / the slowest member's speed⌉) starts flying from its drop point, with its
+   escort for odd groups below 12, and arrives at once if it starts on its target;
+2. the radar sweep (0x43CC90, below), then every follower whose leader is off the grid or
+   dead holds where it is (0x43CC30);
+3. twice: the grid is cleared; fighters pick targets (0x43D3E0: the other side's type 9,
+   then 4, 3, then below 3; the game tests the fighter's own target where it means the
+   candidate's); groups en route move (0x43C5E0: the slowest member's speed / 2 pays the
+   step price, 140 diagonal and 100 straight, leftover speed carried over), the others at
+   their goal arrive (0x43FC90); every group in flight engages (0x43D9C0).
+
+**Arriving** (0x43FC90) by type: transports call the radio and hold, their type‑9 escort
+heading for the camera point; a type‑2 transport sets the group before it down at its
+position (type 5, members flagged on map duty with x = y = −1) and leaves; type 3 holds,
+with sub‑state 2 when on the camera point (DS:0x50AD95/97), else once no member waits
+for a support destination; fighters following a fair target fight it (0x441130).
+
+**The air fight** (0x441130, emulated `verify_air_fight`): after the animation, each
+group fields its first two members; while both have someone alive the pairs a0–b0,
+a1–b1, a0–b1, a1–b0 fight the melee of §3 (the copy 0x4235B0 of 0x424490, weapon prompt
+0x1A7, alert DS:0x50ADF1). The losing player aircraft go down (0x441A80: crew marks by
+`random(100)`, carried units destroyed, a transport's cargo group loses all but 2 or 6
+of its units) and are destroyed; the computer's leave their group. The game's slips are
+kept: pair 2's "both down" for a computer attacker crashes a1 twice; pair 4's "both
+down" drops b1 (player attacker) or a0 (computer). With no pair left while both groups
+live the game loops forever. A wiped‑out group is reported (radio event 9 with a copy
+of its record) and leaves the grid.
+
+**Missiles** (0x43DD70 / 0x43E0C0 / 0x43DF50 / 0x43E3C0): a member's missile slots
+(launcher +8 kind 2, a loaded pocket, a non‑zero AA attack) fire at most twice per
+volley, at the group followed (attack) or the first enemy group in range flying away or
+engaging (defence; range = launcher +4 × 10 on the grid). Hit chance: launcher AA
+accuracy (+5) − the target crew's DEFENSE² (signed), 15 to 98; ANTI AIRCRAFT grows by 4
+per shot and 4 more per hit. Damage: AA attack × (100 − air armour − DEFENSE) / 100. A
+set‑down team (0x441810) meets the other side's groups on its hex: a ground site (type
+15) shoots it down on `random(200)` below their count; another team triggers radio event
+0x0A and clears its members' support orders.
+
+**The radar sweep** (0x43CC90, emulated 800 / 800, `verify_radar_sweep`): player groups
+with a radar (+2 bits 1–3 = 3 or 4) flying or holding, or fighters leaving, watch for
+computer groups not yet seen (+0x1F = 0) with bits 1–3 = 3. The watcher is the last one
+holding with sub‑state 0, else flying, else holding with sub‑state 1, then 2 (0x43D350).
+Each contact hex is shown once, every contact gets +0x1F = 1, and the watcher's radio
+reports their living count (event 0xD by default, 0xE for type 3; fighters flying or
+holding with sub‑state 0 report 0xC and turn on the nearest contact: state 2, sub‑state
+2, type 9 → 4). Event 0x10 cannot be reached there (no leaving group is ever picked).
+
+**The radar map** (0x43E510, emulated 300 / 300): opening it (DS:0x50DD44 = 1) clears the
+grid the first time and marks every group on the map but even groups below 12 still
+waiting; closed, the redraw (0x43F150) clears the grid. The grid is only read by the
+radar's drawing.
+
+**The radio** (0x4896C0, emulated 1500 / 1500, `verify_radio`): the chatter for event
+kinds 0–0x11, for groups below 20 with someone alive (kind 9 takes a copy of the lost
+group's record). It draws its lines and speakers with `random()`: each line is the first
+of its list on `random(10)` < 5, else another (`random(n − 1)`); the speaker mode is
+`random(n)` of the line's modes, each drawing `random(2)` for the window side; the face
+and voice come from the group's first member (crew name id, machine class, `random(2)` /
+`random(100)` for some). The lines are WMES messages 0x21–0x9A with the call signs
+(DS:0x50C7E5, 39 per campaign, then 34 more read past them), the time ("HH:MM" of
+(the mission turn + the group's +0x20 + DS:0x506651) × 5 minutes, 0x453900) or a count. With the radar closed, the first talk window
+opens it.
+
+**Mission 1's speech hook** (0x499830, emulated 1500 / 1500, `verify_m01_speech`): the
+flight turn, then for group 0 and then group 2, once each (flags DS:0x50AD76 / 0x50AD78),
+on its arrival turn with members: the speaker lookup (0x489510), its arrival scene
+(0xA1 / 0xA2 when the other group has arrived, 0xA3 otherwise, 0xA4 for a group whose
+type low nibble is not 0; group 0 ignores its second window's result there, group 2
+checks it), then its members are set down on the hexes of a word table on its stack:
+group 0 on (9, 30), (8, 29), (8, 30), (9, 34), (8, 33), (8, 34), group 2 on (9, 34),
+(8, 33), (8, 34); a member past the table gets whatever the stack holds.
 
 ---
 

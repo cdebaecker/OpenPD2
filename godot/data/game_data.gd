@@ -51,6 +51,8 @@ func tables(campaign: String) -> Dictionary:
 			"ammo_names": doc.get("ammo_names", {}),
 			"crew_names": doc.get("crew_names", []),
 			"crew": Marshalls.base64_to_raw(doc.get("crew", "")),
+			"call_signs": doc.get("call_signs", []),
+			"data_image": [int(doc.data_image[0]), Marshalls.base64_to_raw(doc.data_image[1])] if doc.has("data_image") else [],
 		}
 		_tables[campaign] = t
 	return _tables[campaign]
@@ -76,8 +78,11 @@ func map_texture(campaign: String, index: int) -> Texture2D:
 ## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1,
 ## the mission's chunk); ids 0x1A3 and up hold the same text in every entry of both campaigns.
 func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
-	# a mission's own messages differ between entries: "<campaign>.<entry>.<id>" first
+	# a mission's own messages differ between entries: "<campaign>.<entry>.<id>" first,
+	# then "<campaign>.<id>", then "<id>"
 	var t := _translated("wmes", "%s.%d.%X" % [campaign, entry, id])
+	if t == "":                    # then one campaign's (the radio lines differ between them)
+		t = _translated("wmes", "%s.%X" % [campaign, id])
 	if t == "":
 		t = _translated("wmes", "%X" % id)
 	if t == "":
@@ -87,6 +92,18 @@ func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
 		if entry < tables.size() and id < tables[entry].size():
 			t = tables[entry][id]
 	return format_text(t, args)
+
+
+## The radio's call sign n (DS:0x50C7E5, the campaign's set), translated (callsigns.csv,
+## key "<campaign>.<n>", else "<n>"; the English names are the game's own and need none).
+func call_sign(campaign: String, n: int) -> String:
+	var t := _translated("callsigns", "%s.%d" % [campaign, n])
+	if t == "":
+		t = _translated("callsigns", "%d" % n)
+	if t != "":
+		return t
+	var signs: Array = tables(campaign).call_signs
+	return signs[n] if n >= 0 and n < signs.size() else ""
 
 
 ## An engine UI string (translations/ui.csv): the language's column, else English, else the key.

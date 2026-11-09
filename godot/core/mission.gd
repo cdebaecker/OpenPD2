@@ -18,6 +18,9 @@ const CAMPAIGN_FLAG := {"pd2": 1, "dash": 0}   # DS:0x554B10: 1 reads pd2\ (0x40
 static func build(tables: Dictionary, doc: Dictionary, campaign: String) -> Pd2World:
 	var w := Pd2World.new(tables.machines, tables.launchers, tables.ammo, doc.S, UNITS)
 	w.n_units = 254                # the game's unit loops stop at 253
+	var img: Array = tables.get("data_image", [])
+	if img.size() == 2:
+		w.static_mem[img[0]] = img[1]  # the exe's data around the tables (reads past them)
 	var init: PackedByteArray = doc.init
 	for i in mini(init.size(), INIT_UNITS * 55):
 		w.units[INIT_FIRST * 55 + i] = init[i]

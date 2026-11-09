@@ -34,7 +34,7 @@ var phase := 3                  # DS:0x50DDC8: 0 = the player's phase (the mine 
 var memory: PackedByteArray     # AI memory DS:0x551DA0: 40 x 3 B (x, y, 0xFF)
 var groups: PackedByteArray     # 64 x 35 B (DS:0x50A35C)
 var combat: PackedByteArray     # combat record, 26 x 13 B (DS:0x506B39)
-# DS:0x50AD00-0x50ADFF, the mission state block (rules.World.ds): the free-pilot count
+# DS:0x50AD00-0x50ADF4, the mission state block (rules.World.ds): the free-pilot count
 # (+0) and list (+2), +0x92 (compared with crew +4), the mission scripts' flags and points,
 # the alert (+0xF1) and the end code (+0xF2)
 const DS := 0x50AD00
@@ -47,10 +47,13 @@ var time_ad92: int:
 	set(v): set_ds16(0x50AD92, v)
 var mode_663a := 1                   # DS:0x50663A: 1 in the battle (0x487D70 -> 0x436530)
 var bombs := PackedByteArray()       # DS:0x50AC1C: timed explosives, 15 x 4 B (not ported)
-var mission_turn := 0                # DS:0x50663B: counted by the mission scripts
+var mission_turn := 0                # DS:0x50663B (u16): counted by the mission scripts
 var ds_506651 := 0                   # DS:0x506651: set by mission inits (read by 0x4361C0)
 var exits: Array = []                # DS:0x519FB0: a mission's exit hexes (its load script)
 var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (not ported)
+var grid := PackedByteArray()        # *DS:0x50DD40: the flight engine's 16 x 16 marks (radar display)
+var radar := 0                       # DS:0x50DD44: 1 while the radar map is open
+var static_mem := {}                 # exe data the code may read past a table: address -> bytes
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
@@ -83,9 +86,10 @@ func _init(machines: PackedByteArray, launchers: PackedByteArray, ammo: PackedBy
 	groups.resize(64 * 35)
 	combat = PackedByteArray()
 	combat.resize(26 * 13)
-	ds.resize(0x100)
+	ds.resize(0xF5)                  # up to the machine table (DS:0x50ADF5)
 	bombs.resize(0x3C)
 	sensors.resize(0xA8)
+	grid.resize(256)
 
 
 func duplicate_world() -> Pd2World:
@@ -110,6 +114,9 @@ func duplicate_world() -> Pd2World:
 	c.ds_506651 = ds_506651
 	c.exits = exits.duplicate()
 	c.sensors = sensors.duplicate()
+	c.grid = grid.duplicate()
+	c.radar = radar
+	c.static_mem = static_mem
 	return c
 
 
@@ -224,6 +231,53 @@ func set_layer(L: String, x: int, y: int, v: int) -> void:
 		"T": T[x + MAP * y] = v & 0xFF
 		"F": F[x + MAP * y] = v & 0xFF
 		"O": O[x + MAP * y] = v & 0xFF
+
+
+## The byte at DS:addr from the parts of the data segment the world models, in the game's
+## layout, for code that reads past a table as the game does (rules.ds_byte): crew
+## 0x506734, combat records 0x506B39, units 0x506C93 (255 x 55; those not held read 0),
+## groups 0x50A35C, timed explosives 0x50AC1C, sensors 0x50AC58, the DS block 0x50AD00,
+## the record set 0x50ADF5 (machines, launchers, ammunition); else static_mem or 0.
+func mem8(addr: int) -> int:
+	if addr >= 0x506734 and addr < 0x506B34:
+		return crew[addr - 0x506734]
+	if addr >= 0x506B39 and addr < 0x506C93:
+		var o := addr - 0x506B39
+		return combat[o] if o < combat.size() else 0
+	if addr >= 0x506C93 and addr < 0x50A35C:
+		var o := addr - 0x506C93
+		return units[o] if o < units.size() else 0
+	if addr >= 0x50A35C and addr < 0x50A35C + 64 * 35:
+		return groups[addr - 0x50A35C]
+	if addr >= 0x50AC1C and addr < 0x50AC58:
+		return bombs[addr - 0x50AC1C]
+	if addr >= 0x50AC58 and addr < 0x50AD00:
+		return sensors[addr - 0x50AC58]
+	if addr >= DS and addr < DS + 0xF5:
+		return ds[addr - DS]
+	if addr >= 0x50ADF5 and addr < 0x50ADF5 + AMMO_BASE + 96 * AMMO:
+		return records[addr - 0x50ADF5]
+	for base in static_mem:
+		var data: PackedByteArray = static_mem[base]
+		if addr >= base and addr < base + data.size():
+			return data[addr - base]
+	return 0
+
+
+## Write a byte at DS:addr where the world models it (crew, units, groups, the DS block,
+## as rules.ds_write); elsewhere it sets fault.
+func mem_write(addr: int, v: int) -> void:
+	v &= 0xFF
+	if addr >= 0x506734 and addr < 0x506B34:
+		crew[addr - 0x506734] = v
+	elif addr >= 0x506C93 and addr < 0x50A35C and addr - 0x506C93 < units.size():
+		units[addr - 0x506C93] = v
+	elif addr >= 0x50A35C and addr < 0x50A35C + 64 * 35:
+		groups[addr - 0x50A35C] = v
+	elif addr >= DS and addr < DS + 0xF5:
+		ds[addr - DS] = v
+	else:
+		fault = "write at DS:0x%X" % addr
 
 
 # --- helpers named after the game functions (rules.World) --------------------------

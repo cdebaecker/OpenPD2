@@ -32,6 +32,7 @@ var alert: int:            # DS:0x50ADF1, the alert (in the DS block)
 	set(v): w.set_ds8(0x50ADF1, v)
 var script_no := 0          # DS:0x50CE72
 var mission_hooks: BattleMissionHooks
+var flight_hooks: BattleFlightHooks
 var mission_over := false
 var options := 0            # DS:0x551D29 (bit 1 easy, bit 5 training, bit 7 see all): none in the sandbox
 var busy := false
@@ -167,6 +168,9 @@ func _ready() -> void:
 	script_no = mission_index + (1 if campaign == "pd2" else 11)
 	mission_hooks = BattleMissionHooks.new()
 	mission_hooks.battle = self
+	flight_hooks = BattleFlightHooks.new()
+	flight_hooks.battle = self
+	flight_hooks.easy = options & 2 != 0
 	if script_no == 1:
 		MissionScripts.m01_init(w)           # in the game the pre-battle screen runs it (0x4DD2F0)
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
@@ -838,10 +842,51 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 	func scroll(x: int, y: int) -> int:
 		return 0
 
+	func speech() -> int:
+		## the mission's speech hook (table 0x51EEB8): mission 1's runs the flight turn and
+		## the arrival scenes (0x499830)
+		if battle.script_no == 1:
+			return MissionScripts.m01_speech(battle.w, battle.rng, battle.flight_hooks)
+		return 0
+
+
+class BattleFlightHooks extends Flight.Hooks:
+	## The flight engine's windows in the battle: the radio's lines go to the message log
+	## (their portraits and the radar map are not drawn yet); the air fight's melee asks
+	## its weapon prompt (0x1A7, as 0x424490). Runs on the computer turn's thread.
+	var battle
+
+	func radio_say(msg: int, args: Array, code: Variant) -> int:
+		battle.say_msg(msg, battle.radio_args(args))
+		return 0
+
+	func use_weapon(a: int, p: int) -> bool:
+		return battle.ask_prompt(battle.msg(0x1A7), true)
+
+
+func radio_args(args: Array) -> Array:
+	## the radio's format arguments as text: a call sign (DS:0x50C7E5), the time of
+	## 0x453900 ("HH:MM" of (t + d) x 5 minutes, hours past 23 wrapped) or a number (%d)
+	var out := []
+	for a in args:
+		match a[0]:
+			"sign":
+				out.append(GameData.call_sign(campaign, a[1]))
+			"time":
+				var m: int = (a[1] + a[2]) * 5
+				var h := m / 60
+				m = m % 60
+				if h > 23:
+					h = h % 24
+				out.append(String.chr(48 + h / 10) + String.chr(48 + h % 10) + ":" + String.chr(48 + m / 10) + String.chr(48 + m % 10))
+			_:
+				out.append(str(a[2]))
+	return out
+
 
 func _script_turn(stage: int) -> void:
 	## the turn script (table 0x51EFD8): stage 2 at a new mission, 1 after the player's turn,
-	## 0 in the computer's turn. Only mission 1's is ported; its speech hook is not.
+	## 0 in the computer's turn (which runs the speech hook). Only mission 1's is ported.
 	if script_no == 1:
 		MissionScripts.m01_turn(w, rng, stage, mission_hooks)
 

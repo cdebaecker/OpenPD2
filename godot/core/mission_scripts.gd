@@ -133,7 +133,7 @@ static func m01_init(w: Pd2World, table_524130 := PackedByteArray()) -> void:
 static func m01_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
 	var n_units := mini(w.units.size() / 55, 254)
 	if stage == 0:
-		w.mission_turn = (w.mission_turn + 1) & 0xFF
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
 		if not w.ds16(0x50AD6E) & 1:
 			if not w.ds16(0x50AD74) & 1:
 				var live := []
@@ -249,3 +249,60 @@ static func m01_command(w: Pd2World, u: int, hooks: Hooks) -> int:
 		return 0
 	res = hooks.message(0xA8)
 	return res if res in AI_ABORT else 0
+
+
+## m01_speech's word table on its stack: the hexes the arriving members take.
+const M01_LANDING := {0: [Vector2i(9, 30), Vector2i(8, 29), Vector2i(8, 30), Vector2i(9, 34), Vector2i(8, 33), Vector2i(8, 34)],
+		2: [Vector2i(9, 34), Vector2i(8, 33), Vector2i(8, 34)]}
+
+
+## 0x499830, mission 1's speech hook (rules.m01_speech): the flight turn, then groups 0
+## and 2 each play their arrival scene once and are set down. Returns 0 or an abort code.
+static func m01_speech(w: Pd2World, rng: Pd2Random, hooks: Flight.Hooks) -> int:
+	var r0: Variant = hooks.flight_turn()
+	var res: int = Flight.flight_turn(w, rng, hooks) if r0 == null else int(r0)
+	if res in AI_ABORT:
+		return res
+	for p in [[0, 0x50AD76, 2, 0x50AD78], [2, 0x50AD78, 0, 0x50AD76]]:
+		var grp: int = p[0]
+		var flag: int = p[1]
+		var other: int = p[2]
+		var other_flag: int = p[3]
+		var arr := Flight.s16(g(w, grp, 0x1D) | g(w, grp, 0x1E) << 8)
+		if w.ds8(flag) & 1 or arr > w.mission_turn or not g(w, grp, 5):
+			continue
+		w.set_ds8(flag, w.ds8(flag) | 1)
+		var R := func(o: int) -> int: return Flight.gb(w, grp, o)
+		var face: Variant = Flight._radio_speaker(w, rng, R)[1]
+		var steps := []
+		if g(w, grp, 0x21) & 0xF == 0:
+			if g(w, other, 5) and g(w, other, 0x21) & 0xF == 1 and w.ds8(other_flag) & 1:
+				steps = [["face", 3, 0x3A, null], ["say", 0xA1, 0x3A], ["face", face, 0xB, null], ["say", 0xA2, 0xB]]
+			else:
+				steps = [["face", face, 0x1A, 0], ["face", 0xC, 0x1A, 1], ["say", 0xA3, 0x1A]]
+		else:            # group 0 ignores its second window's result, group 2 checks it
+			steps = [["face", face, 0x1A, 0], ["face?" if grp == 0 else "face", 0xC, 0x1A, 1], ["say", 0xA4, 0x1A]]
+		for st in steps:
+			if st[0] == "say":
+				res = hooks.radio_say(st[1], [], st[2])
+			else:
+				res = Flight._radio_face(w, hooks, st[1], st[2], st[3])
+				if st[0] == "face?":
+					continue
+			if res in AI_ABORT:
+				hooks.radio_close(-1)
+				return res
+		hooks.radio_close(-1)
+		var spots: Array = M01_LANDING[grp]
+		var n := 0
+		for i in 16:
+			var k := g(w, grp, 6 + i)
+			if k == 0xFF:
+				continue
+			if n >= spots.size():
+				w.fault = "m01_speech: a member past the landing table (the game reads its stack)"
+				return 0
+			w.mem_write(Flight.UNITS + 55 * k + 9, spots[n].x)
+			w.mem_write(Flight.UNITS + 55 * k + 0xA, spots[n].y)
+			n += 1
+	return 0

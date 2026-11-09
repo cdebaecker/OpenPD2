@@ -166,6 +166,26 @@ def exe_va(exe, va, n):
 
 
 CREW_VA = 0x506734          # crew table, 64 x 16 B: 37-63 are the computer's pilots
+# The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
+# DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads
+# sign n from the first, past 38 on into the second, so both are exported as one list.
+CALL_SIGNS_VA = {'pd2': 0x501728, 'dash': 0x502C90}
+CALL_SIGNS = 39 + 34
+# The initialised data around the tables the world models, for code that reads past one
+# (Pd2World.mem8 / rules.ds_byte fall back to it).
+DATA_IMAGE = (0x506600, 0x50D000)
+
+
+def _exe_str(exe, va):
+    """The NUL-terminated cp932 string at va in Pd2.exe ('' outside its data)."""
+    try:
+        exe_va(exe, va, 1)
+    except SystemExit:
+        return ''
+    n = 0
+    while n < 64 and exe_va(exe, va + n, 1) != b'\0':
+        n += 1
+    return exe_va(exe, va, n).decode('cp932', 'replace')
 
 
 def export_tables(game, out):
@@ -183,6 +203,9 @@ def export_tables(game, out):
             'ammo_names': {a['id']: a['name'] for a in info['sets'][TABLE_SET[camp]]['ammunition']},
             'crew_names': info['crew_names'],
             'crew': b64(exe_va(exe, CREW_VA, 64 * 16)),
+            'call_signs': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CALL_SIGNS_VA[camp] + 4 * i, 4))[0])
+                           for i in range(CALL_SIGNS)],
+            'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0]))],
         }
         with open(os.path.join(out, 'tables', camp + '.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)
