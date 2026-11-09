@@ -437,6 +437,41 @@ look like arms, legs and sensors, but the names are still inferred.
 
 `apply_hit(..., pc98=True)` models this.
 
+**The player's fire command** (`cmd_fire`, 0x425AF0, behind the menu's normal / aimed /
+anti‑air fire; `rules.fire_target_map` / `fire_check` / `player_fire`): Emulated 51 / 51
+whole commands with the UI scripted, and the target map 60 / 60 on its own.
+1. **Weapon:** the picker offers slots 0–3; choices 4+ are its magazine swaps (they pay
+   their AP and never fire). A hand weapon (slot 2–3) with both manipulators broken is
+   refused (message 0x1A8).
+2. **Target map** (0x4118C0): an aircraft counts 6 levels higher while it is built.
+   - **Direct fire:** the search map of the weapon's range with penetration 1.
+   - **Indirect fire:** the spiral of the range, every hex with a clear arc.
+   - **Missiles:** hexes on that spiral less than 30 levels above the shooter and more
+     than 5 hexes away, holding a spotted unit of the other side, with a clear arc.
+     Armour type 4 counts only in mode 6, and mode 6 only at armour type 4.
+
+   Only hexes of this map can be clicked.
+3. **Decision** for the clicked hex. Its unit counts as none if it is an unspotted enemy.
+   - **Direct fire:**
+     - a smoke round fires at any hex;
+     - no unit or a friend: refused (0x1A9);
+     - an enemy on the ground fires;
+     - in mode 6, any enemy of armour type 4 fires; any other enemy is refused (0x1AB);
+     - an airborne enemy outside mode 6 is refused (0x1AA for armour type 4, no message
+       otherwise).
+   - **Indirect fire:** always asks first (0x1AC if the target is within the blast
+     radius, else 0x1AD with the AP).
+   - **Missiles:** ask first for an enemy on the ground, or any enemy in mode 6 (0x1AD);
+     otherwise refused (0x1A9).
+4. **Shot:**
+   - the fire area around the hex: blast radius 0 in modes 6 / 7 / 10, else the
+     launcher's;
+   - the fire resolution;
+   - the launcher's AP (doubled for aimed fire) and one round;
+   - if the shooter is spotted and has not reacted, the other side's return fire: the
+     reaction candidates shoot by the computer's rule (flag 1).
+5. The command repeats on the same weapon while the AP, the rounds and the unit last.
+
 **Hits without a shooter** (mines, map hazards; 0x413D90 with shooter −1): the
 "shooter is an ace" test still runs, on **unit −1**. Its crew byte is the byte just
 before the unit table: combat‑record byte 302 (DS:0x506C67). When that crew is an
@@ -547,13 +582,13 @@ against ground targets).
 
 ### 5.4 Reaction fire: Emulated (weapon choice and the computer's rolls)
 
-**When reactions are checked** (`near_sight`, 0x472410 builds the list, `reaction_loop` (0x472920) resolves it):
+**When reactions are checked** (`reaction_candidates`, 0x472410 builds the list, `reaction_loop` (0x472920) resolves it):
 - after each movement step (trigger flag 0);
 - after a unit fires, if it is **spotted** and has not itself reacted this turn
   (flag 1; the fire command `cmd_fire` (0x425AF0) and others);
 - from the other move routines (flag 10).
 
-**Who can react** (`near_sight`, 0x472410): every unit that meets all of these:
+**Who can react** (`reaction_candidates`, 0x472410): every unit that meets all of these:
 - on the other side, status ≠ 1, active;
 - its order nibble (unit +3, low or high nibble by the alert flag DS:0x50ADF1)
   is not 0xF;
@@ -592,7 +627,7 @@ and the weapon picker). These are not modelled.
 ### 5.5 Line of sight: Emulated; identical on PC‑98
 
 Checked with `tools/verify_rules.py`: 18,000 random lines (both variants) and
-1,500 full reaction‑candidate lists (`near_sight`, 0x472410) match the game.
+1,500 full reaction‑candidate lists (`reaction_candidates`, 0x472410) match the game.
 
 **Line of sight** (`line_of_sight`, 0x410A90; PC‑98 res DDF:A), from a viewer hex to a target hex:
 - **Heights:** the eye is the viewer hex's height + 1. An aircraft (class ≥ 2)
@@ -616,7 +651,7 @@ Checked with `tools/verify_rules.py`: 18,000 random lines (both variants) and
     the limit is allowed only on the target hex itself, so a target can stand in
     a forest, but you can't see through one.
 
-**Short range** (≤ 2 hexes, inside `near_sight` (0x472410)):
+**Short range** (≤ 2 hexes, inside `reaction_candidates` (0x472410)):
 - The game traces from the *target* toward the viewer with both line variants
   until each leaves the target hex.
 - The viewer sees the target unless **both** first hexes are 2 or more levels
@@ -870,7 +905,8 @@ All candidates must stand on terrain the unit's machine category can enter (§5.
   destination.
 
 **Enemy memory** (DS:0x551DA0, 3 B per player unit 0–39): a player unit's
-position is recorded when it is shot at by reaction fire (§5.4). The AI goes for
+position is recorded when it is shot at by reaction fire (§5.4). Emulated: the reaction loop (`reaction_loop`, 0x472920) writes it after its shots when at
+least one reactor fired. The AI goes for
 the nearest remembered position. An entry is forgotten (set to 0, 0, 0xFF) when
 that hex, or the unit's real position, is in the AI side's view.
 

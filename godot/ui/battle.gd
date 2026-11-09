@@ -22,6 +22,7 @@ var mode := "move"          # move / fire / aimed
 var move_mode := 1          # 0 high speed, 1 normal, 2 careful
 var slot := 0
 var mm: Move.MoveMap = null
+var fire_map: Move.MoveMap = null
 var turn := 1
 var alert := 0
 var busy := false
@@ -145,7 +146,7 @@ func _build_hud() -> void:
 	box.add_child(info)
 	var row := HBoxContainer.new()
 	box.add_child(row)
-	for b in [["Move [M]", "move"], ["Fire [F]", "fire"], ["Aimed [A]", "aimed"]]:
+	for b in [["Move [M]", "move"], ["Fire [F]", "fire"], ["Aimed [A]", "aimed"], ["Anti-air [Q]", "aa"]]:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.pressed.connect(_set_mode.bind(b[1]))
@@ -238,6 +239,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_M: _set_mode("move")
 			KEY_F: _set_mode("fire")
 			KEY_A: _set_mode("aimed")
+			KEY_Q: _set_mode("aa")
 			KEY_S: _cmd_search()
 			KEY_C: _cmd_conceal()
 			KEY_E: _end_turn()
@@ -247,8 +249,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 
 func _set_mode(m: String) -> void:
 	mode = m
-	_refresh_info()
-	overlay.queue_redraw()
+	_update_move_map()
 
 
 func _set_move_mode(i: int) -> void:
@@ -258,7 +259,7 @@ func _set_move_mode(i: int) -> void:
 
 func _set_slot(i: int) -> void:
 	slot = i
-	_refresh_info()
+	_update_move_map()
 
 
 func _select(u: int) -> void:
@@ -273,8 +274,11 @@ func _select(u: int) -> void:
 
 func _update_move_map() -> void:
 	mm = null
+	fire_map = null
 	if selected != -1 and w.active(selected):
 		mm = Move.move_map(w, selected, move_mode)
+		if mode != "move" and w.launcher_id(selected, slot) != -1:
+			fire_map = Action.fire_target_map(w, selected, slot, FIRE_MODES[mode])
 	_refresh_info()
 	overlay.queue_redraw()
 
@@ -300,7 +304,7 @@ func _click(h: Vector2i) -> void:
 	if mode == "move":
 		_cmd_move(h)
 	else:
-		_cmd_fire(h, 1 if mode == "aimed" else 0)
+		_cmd_fire(h, FIRE_MODES[mode])
 
 
 # --- commands ------------------------------------------------------------------
@@ -349,41 +353,55 @@ func _cmd_melee(u: int, h: Vector2i, cost: int) -> void:
 	_after_command()
 
 
+const FIRE_MODES := {"fire": 0, "aimed": 1, "aa": 6}
+const FIRE_MESSAGES := {0x1A8: "Both manipulators are broken: no hand weapons.",
+	0x1A9: "No target there.", 0x1AA: "Helicopters need anti-air fire.",
+	0x1AB: "Anti-air fire only at helicopters.",
+	0x1AC: "The target is within the blast radius. Fire?", 0x1AD: "Fire? (%d AP)"}
+
+
+func _fire_message(id: int, cost := 0) -> String:
+	## Stand-in texts: the game's own (message_text) come with the translation tables.
+	var t: String = FIRE_MESSAGES.get(id, "")
+	return t % cost if "%d" in t else t
+
+
 func _cmd_fire(h: Vector2i, fmode: int) -> void:
+	## The player's fire command (Action.fire_target_map / fire_check / player_fire,
+	## ported from cmd_fire 0x425AF0): only hexes of the target map can be clicked.
 	var u := selected
 	var lid := w.launcher_id(u, slot)
-	if lid == -1:
-		say("No weapon in slot %d." % (slot + 1))
-		return
-	if w.slot_count(u, slot) <= 0:
-		say("Slot %d is empty." % (slot + 1))
+	if lid == -1 or w.slot_count(u, slot) <= 0:
+		say("No loaded weapon in slot %d." % (slot + 1))
 		return
 	var cost := Move.fire_ap(w, u, slot, fmode)
 	if w.sb(u, 0xE) < cost:
 		say("Not enough AP (%d needed)." % cost)
 		return
-	var p := w.pos(u)
-	var d := Pd2World.hexdist(p.x, p.y, h.x, h.y)
-	if d > w.weapon_range(u, slot):
-		say("Out of range.")
+	if fire_map == null or fire_map.cell(h.x, h.y) != 1:
 		return
-	var kind := w.launcher(lid, 8) >> 5
-	if kind == 0 and not (Sight.line_of_sight(w, p.x, p.y, h.x, h.y, 1, 0) or Sight.line_of_sight(w, p.x, p.y, h.x, h.y, 1, 1)):
-		say("No line of sight.")
+	var check := Action.fire_check(w, u, slot, fmode, h.x, h.y)
+	if check[0] == Action.FIRE_REFUSED:
+		if check[1] != -1:
+			say(_fire_message(check[1]))
 		return
-	var o := w.O[h.x + MAP * h.y] - 1
-	var fm := fmode
-	var rad := w.launcher(lid, 9) & 7
-	if o != -1 and w.unit_class(o) >= 2:
-		fm = Move.FIRE_AA
-		rad = 0
-	var pts := Action.fire_area(w, rng, h.x, h.y, rad)
+	if check[0] == Action.FIRE_CONFIRM:
+		var dlg := ConfirmationDialog.new()
+		dlg.dialog_text = _fire_message(check[1], cost)
+		dlg.confirmed.connect(_do_fire.bind(u, fmode, h))
+		dlg.confirmed.connect(dlg.queue_free)
+		dlg.canceled.connect(dlg.queue_free)
+		add_child(dlg)
+		dlg.popup_centered()
+		return
+	_do_fire(u, fmode, h)
+
+
+func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
 	var before := {}
 	for q in w.n_units:
 		before[q] = w.ub(q, 0xD)
-	Action.fire_resolution(w, rng, u, slot, fm, h.x, h.y, pts, hooks)
-	Ai.spend_ap(w, u, cost)
-	w.set_slot_count(u, slot, w.slot_count(u, slot) - 1)
+	Action.player_fire(w, rng, u, slot, fmode, h.x, h.y, hooks, false, alert)
 	var hit := false
 	for q in w.n_units:
 		if w.ub(q, 0xD) < before[q]:
@@ -391,9 +409,6 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 			say("%s hits %s: %d damage" % [unit_name(u), unit_name(q), before[q] - w.ub(q, 0xD)])
 	if not hit:
 		say("%s fires: no hit." % unit_name(u))
-	if w.ub(u, 0) & 0x10 and not (w.ub(u, 0) & 0x40):
-		hooks.flag = 1
-		hooks.react(u)
 	_after_command()
 
 
@@ -517,6 +532,11 @@ func _check_end() -> void:
 func _draw_overlay() -> void:
 	if w == null:
 		return
+	if fire_map != null and mode != "move":
+		for ly in fire_map.h:
+			for lx in fire_map.w:
+				if fire_map.at(lx, ly) == 1:
+					overlay.draw_circle(hex_center(Vector2i(fire_map.x0 + lx, fire_map.y0 + ly)), 10, Color(1, 0.8, 0.2, 0.25))
 	if mm != null and mode == "move":
 		for ly in mm.h:
 			for lx in mm.w:

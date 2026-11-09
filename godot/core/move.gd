@@ -255,6 +255,7 @@ static func reaction_weapon(w: Pd2World, b: int, t: int) -> int:
 static func ai_reactions(w: Pd2World, rng: Pd2Random, reactors: Array, t: int, flag: int, fire: Callable) -> int:
 	var result := 0
 	var p := t
+	var fired := false
 	for b in reactors:
 		var slot := reaction_weapon(w, b, t)
 		if slot == -1:
@@ -267,9 +268,13 @@ static func ai_reactions(w: Pd2World, rng: Pd2Random, reactors: Array, t: int, f
 			var mm := (w.ub(t, 4) >> 4) & 3
 			p = 90 if mm == 0 else (75 if mm == 1 else (60 if mm == 2 else p))
 		if rng.r16(100) <= p:
+			fired = true
 			result |= int(fire.call(b, slot))
 			if result >= 4:
 				break
+	if fired and t >= 0 and t < 40:      # the AI remembers where it shot at t
+		w.memory[3 * t] = w.ub(t, 9)
+		w.memory[3 * t + 1] = w.ub(t, 10)
 	return result
 
 

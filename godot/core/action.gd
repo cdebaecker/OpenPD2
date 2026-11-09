@@ -411,3 +411,117 @@ static func ai_path(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 			if under == -1 and w.ub(u, 0) & 0x10 and not (w.ub(u, 0) & 0x40):
 				res |= hooks.react(u)
 	return res
+
+
+# --- the player's fire command (cmd_fire 0x425AF0) -----------------------------------
+
+const FIRE_FIRE := "fire"
+const FIRE_CONFIRM := "confirm"
+const FIRE_REFUSED := "refused"
+const AA_FIRE_MODES := [6, 7, 10]
+
+
+## 0x4118C0: the hexes u can fire at with `slot` in `mode` (1 / 0xFF cells), or null.
+static func fire_target_map(w: Pd2World, u: int, slot: int, mode: int) -> Move.MoveMap:
+	var up := w.pos(u)
+	var g := up.x + MAP * up.y
+	var h0 := w.H[g]
+	var side := 3 if w.is_enemy(u) else 0
+	var climb := w.unit_class(u) > 1
+	if climb:
+		w.H[g] = (h0 + 6) & 0xFF
+	var res := _fire_target_map(w, u, slot, mode, up, h0, side)
+	if climb:
+		w.H[g] = h0
+	return res
+
+
+static func _fire_target_map(w: Pd2World, u: int, slot: int, mode: int, up: Vector2i, h0: int, side: int) -> Move.MoveMap:
+	var rng_: int
+	var kind: int
+	if slot >= 0x80:
+		rng_ = w.ammo(w.pocket_ammo(u, slot - 0x80), 3)
+		kind = 99
+	else:
+		rng_ = w.weapon_range(u, slot) & 0xFF
+		kind = w.launcher(w.launcher_id(u, slot), 8) >> 5
+	var box := Move.move_box(up.x, up.y, rng_)
+	var wd: int = box[2]
+	var ht: int = box[3]
+	if not kind in [0, 1, 2, 99] or wd * ht < 2:
+		return null
+	if kind == 0:
+		return Sight.search_map(w, up.x, up.y, rng_, 1)
+	var mm := Move.MoveMap.new()
+	mm.x0 = box[0]
+	mm.y0 = box[1]
+	mm.w = wd
+	mm.h = ht
+	mm.cells = PackedByteArray()
+	mm.cells.resize(wd * ht)
+	mm.cells.fill(0xFF)
+	for p in Ai.spiral(up.x, up.y, rng_):
+		var i: int = (p.y - mm.y0) * wd - mm.x0 + p.x
+		if kind == 2:
+			if w.H[p.x + MAP * p.y] - h0 >= 30 or W.hexdist(p.x, p.y, up.x, up.y) <= 5:
+				continue
+			var o := w.O[p.x + MAP * p.y] - 1
+			if o == -1 or (3 if w.is_enemy(o) else 0) == side or not (w.ub(o, 0) & 0x10):
+				continue
+			if (w.armour(o) == 4) != (mode == 6):
+				continue
+		mm.cells[i] = 1 if Ai.arc_clear(w, up.x, up.y, p.x, p.y, 0) or Ai.arc_clear(w, up.x, up.y, p.x, p.y, 1) else 0xFF
+	return mm
+
+
+## cmd_fire's decision for a clicked hex: [FIRE_FIRE / FIRE_CONFIRM / FIRE_REFUSED, message id or -1].
+static func fire_check(w: Pd2World, u: int, slot: int, mode: int, x: int, y: int) -> Array:
+	if slot >= 2 and Ai.manipulator_state(w, u) == 2:
+		return [FIRE_REFUSED, 0x1A8]
+	var lid := w.launcher_id(u, slot)
+	var kind := w.launcher(lid, 8) >> 5
+	var t := w.O[x + MAP * y] - 1
+	if t != -1 and w.sb(t, 0x36) >= 3 and not (w.ub(t, 0) & 0x10):
+		t = -1
+	var enemy := t != -1 and w.sb(t, 0x36) >= 3
+	if kind == 0:
+		if w.warhead(u, slot) == SMOKE_WARHEAD:
+			return [FIRE_FIRE, -1]
+		if not enemy:
+			return [FIRE_REFUSED, 0x1A9]
+		if w.unit_class(t) < 2 or mode == 6:
+			if w.armour(t) == 4 or mode != 6:
+				return [FIRE_FIRE, -1]
+			return [FIRE_REFUSED, 0x1AB]
+		return [FIRE_REFUSED, 0x1AA if w.armour(t) == 4 else -1]
+	if kind == 1:
+		var radius := 0 if mode in AA_FIRE_MODES else w.launcher(lid, 9) & 7
+		var up := w.pos(u)
+		return [FIRE_CONFIRM, 0x1AC if radius >= W.hexdist(up.x, up.y, x, y) else 0x1AD]
+	if kind == 2:
+		if enemy and (w.unit_class(t) < 2 or mode == 6):
+			return [FIRE_CONFIRM, 0x1AD]
+		return [FIRE_REFUSED, 0x1A9]
+	return [FIRE_REFUSED, -1]
+
+
+## cmd_fire's shot: fire area, resolution, AP, round, and the other side's return fire.
+static func player_fire(w: Pd2World, rng: Pd2Random, u: int, slot: int, mode: int, x: int, y: int,
+		hooks: AiHooks = null, easy := false, alert := 0) -> int:
+	if hooks == null:
+		hooks = AiHooks.new()
+	var lid := w.launcher_id(u, slot)
+	var cost := Move.launcher_ap(w, lid) * (2 if mode == 1 else 1)
+	var radius := 0 if mode in AA_FIRE_MODES else w.launcher(lid, 9) & 7
+	var pts := fire_area(w, rng, x, y, radius)
+	fire_resolution(w, rng, u, slot, mode, x, y, pts, hooks, easy)
+	if w.fault != "":
+		return 0
+	Ai.spend_ap(w, u, cost)
+	w.set_slot_count(u, slot, w.slot_count(u, slot) - 1)
+	if w.ub(u, 0) & 0x10 and not (w.ub(u, 0) & 0x40):
+		var cands := Sight.reaction_candidates(w, u, alert, w.units.size() / 55)
+		if not cands.is_empty():
+			var shot := func(b: int, s: int) -> int: return reaction_shot(w, rng, b, s, u, 1, hooks, easy)
+			return Move.ai_reactions(w, rng, cands, u, 1, shot)
+	return 0

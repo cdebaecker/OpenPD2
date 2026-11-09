@@ -16,12 +16,12 @@ copy of the game. You need the POWER DoLLS 2 plus DASH CD: the CD image (`.img` 
 Early. The tactical battle runs as a **sandbox**:
 - each mission's map and enemy force;
 - a stand-in squad of four DoLLS;
-- moving, normal and aimed fire, search, conceal and melee;
+- moving; normal, aimed and anti-air fire through the original fire command (target map, refusals, confirmations, return fire); search, conceal and melee;
 - the computer's whole turn.
 
 Still missing:
 - the briefing and equipment screens;
-- the player's own fire and reaction menus;
+- the player's reaction menu and the magazine swaps;
 - the mission event scripts and the victory checks;
 - the strategy layer, music and saves.
 
@@ -46,7 +46,7 @@ campaigns.
 
 Controls:
 - left click selects or acts; right or middle drag pans; the wheel zooms;
-- M move, F fire, A aimed fire, 1–4 weapon slot;
+- M move, F fire, A aimed fire, Q anti-air fire, 1–4 weapon slot;
 - S search, C conceal;
 - Tab next unit, E end turn.
 
