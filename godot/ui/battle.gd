@@ -249,11 +249,11 @@ func _begin_battle() -> void:
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
-	if auto_react:
+	if auto_react or not Drop.pending(w):
 		_turn_start()
 		_begin_done()
 		return
-	# the first turn start runs on a worker thread: its airdrop asks the player
+	# a transport waits for the player: the first turn start runs on a worker thread
 	busy = true
 	ai_thread = Thread.new()
 	ai_thread.start(func():

@@ -391,6 +391,15 @@ static func control(w: Pd2World, rng: Pd2Random, u: int, passengers: Array, a: i
 	return 0
 
 
+## Will the airdrop ask the player? A type-0 transport group on the called point, ready.
+static func pending(w: Pd2World) -> bool:
+	for g in range(1, 64):
+		var g2 := Strike.gb(w, g, 2)
+		if W.s8(Strike.gb(w, g, 0x16)) == w.fire_point.x and W.s8(Strike.gb(w, g, 0x17)) == w.fire_point.y 				and g2 & 0x30 == 0x20 and not g2 & 0xC0 and Strike.gb(w, g, 0x21) >> 4 == 0 and g2 & 0x0E == 8:
+			return true
+	return false
+
+
 ## 0x44AEA0, at the turn start: the groups on the called point, by type.
 static func airdrop(w: Pd2World, rng: Pd2Random, hooks: Hooks = null) -> int:
 	if hooks == null:
