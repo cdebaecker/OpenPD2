@@ -119,6 +119,21 @@ func call_sign(campaign: String, n: int) -> String:
 	return signs[n] if n >= 0 and n < signs.size() else ""
 
 
+## A debrief text (RMES.SLD, which 0x4719D0 loads for the debrief 0x48FA40), translated
+## (rmes.csv: "<campaign>.<id>") or the game's own; an empty line stays empty.
+func debrief_text(campaign: String, id: int) -> String:
+	if not _messages.has(campaign):
+		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
+	var lines: Array = _messages[campaign].get("rmes", [])
+	var ja: String = lines[id] if id >= 0 and id < lines.size() else ""
+	if ja.strip_edges() == "":
+		return ""
+	var t := _translated("rmes", "%s.%X" % [campaign, id])
+	# the game's page breaks (0x0C), line breaks (CR) and waits for a click (@)
+	var out := format_text(t if t != "" else ja, [])
+	return out.replace(char(12), "").replace(char(13), char(10)).replace("@", char(10)).strip_edges()
+
+
 ## A base-screen message (MES.PCK, which message_text reads while DS:0x50663A = 0: the
 ## sortie screen, the briefing), translated (mes.csv: "<campaign>.<entry>.<id>", then
 ## "<campaign>.<id>", then "<id>") and formatted; a line the entry leaves empty stays empty.

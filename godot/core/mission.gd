@@ -16,9 +16,10 @@ const CAMPAIGN_FLAG := {"pd2": 1, "dash": 0}   # DS:0x554B10: 1 reads pd2\ (0x40
 
 
 static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: Array = [],
-		pick: Campaign.Hooks = null, crt: Campaign.CrtRand = null) -> Pd2World:
-	## The world of a mission. With the campaign's save image (save = [base, bytes]) it is
-	## the game's: the new-game state (crew, records, units, groups, DS block); with pick
+		pick: Campaign.Hooks = null, crt: Campaign.CrtRand = null, title_new := false) -> Pd2World:
+	## The world of a mission. With a save image (save = [base, bytes]: SAVEDATA.ORG, or the
+	## save a debrief left) it is the game's (Debrief.load_image; title_new: the title's new
+	## game, Debrief.new_game, PD2 only); with pick
 	## and crt the new campaign's first sortie (Campaign.new_campaign, 0x421B90) runs on
 	## it; then the mission load (Campaign.mission_load, 0x416CF0: INIT and NPC, chunk 1
 	## keeping groups 0 and 2). Without a save image (an older import): INIT, the roster
@@ -32,16 +33,11 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: A
 	var rec: PackedByteArray = doc.get("record", PackedByteArray())
 	w.scenario = rec.slice(0, 0x1C6)   # DS:0x50DE41, as the briefing loads it (0x4DD2F0)
 	if save.size() == 2:
-		var base: int = save[0]
-		var data: PackedByteArray = save[1]
-		var put := func(addr: int, n: int) -> PackedByteArray:
-			return data.slice(addr - base, addr - base + n)
-		w.stock = put.call(0x506654, 0x506734 - 0x506654)
-		w.crew = put.call(0x506734, 64 * 16)
-		w.combat = put.call(0x506B39, 0x506C93 - 0x506B39)   # the records and the 8 B after
-		w.units = put.call(0x506C93, 255 * 55)
-		w.groups = put.call(0x50A35C, 64 * 35)
-		w.ds = put.call(0x50AD00, 0xF5)
+		if title_new:                    # the title's new game (0x46D780 "0"): PD2's campaign state
+			Debrief.new_game(w, save[1])
+		else:
+			Debrief.load_image(w, save[1])   # 0x4987C0: the whole image (head, stock, crews, records, units ..)
+		w.n_units = 254
 		if pick != null and crt != null:
 			Campaign.new_campaign(w, crt, pick)
 		Campaign.mission_load(w, int(doc.get("mission", 0)) + 1, doc.init, doc.npc)
@@ -106,7 +102,8 @@ static func repair_all(w: Pd2World, u: int) -> void:
 
 ## When mission_loop returns: 0x4373B0 resets every unit (mode 0, not concealed or reacted,
 ## carrying nobody, +6 = 0, repaired, off the map) and empties the timer lists; 0x4374C0
-## marks units 0-39 whose machine has +0x1C set as destroyed.
+## marks units 0-39 whose machine has +0x1C set as destroyed (no machine: -1 reads the end
+## code DS:0x50ADF2, so those are marked whenever the mission ends with one).
 static func mission_end(w: Pd2World) -> void:
 	for u in mini(w.units.size() / 55, 254):
 		w.setb(u, 4, w.ub(u, 4) & 0xCF)
@@ -118,8 +115,8 @@ static func mission_end(w: Pd2World) -> void:
 		w.setb(u, 10, 0xFF)
 	w.bombs.fill(0)
 	w.sensors.fill(0)
-	for u in 40:
-		if w.machine(w.ub(u, 0xC), 0x1C):
+	for u in 40:          # the machine sign-extended: -1 reads DS:0x50ADF2, the end code
+		if w.mem8(0x50ADF5 + 31 * w.sb(u, 0xC) + 0x1C):
 			w.setb(u, 0, w.ub(u, 0) | 1)
 
 

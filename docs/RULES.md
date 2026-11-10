@@ -839,8 +839,9 @@ runs in this order. `phase` is DS:0x50DDC8: 0 = player, 3 = enemy.
 | the view centres on the first player unit | 0x436360 |
 
 **2. Player phase:** the "user turn start" banner, then commands (`command_loop`, 0x4EF600)
-until the turn ends. After every command the mission's state check runs
-(table 0x51EC68).
+until the turn ends. A command that leaves the end code DS:0x50ADF2 set ends the phase
+(§5.18). (Table 0x51EC68, once taken for a state check here, is the sortie screen's
+deploy check.)
 
 **3. End of the player's turn**, in order:
 1. mission state (`mission_state`, 0x484160);
@@ -960,7 +961,8 @@ begins gets its AP set to the maximum (§5.1).
 0x4373B0 resets every unit (0–253): movement mode 0, not concealed, not reacted,
 carrying nobody, +6 = 0, all parts and slot / pocket states repaired (0x429950), off the
 map; the timed‑explosive list (DS:0x50AC1C, 15 × 4 B) and the sensor list are emptied.
-Then 0x4374C0 marks units 0–39 whose machine has +0x1C set as destroyed.
+Then 0x4374C0 marks units 0–39 whose machine has +0x1C set as destroyed (a unit with
+no machine reads the end code DS:0x50ADF2 there: §5.18).
 
 ### 5.8 The computer side: generic AI and per‑mission event scripts
 
@@ -1550,7 +1552,7 @@ DASH missions apply damage directly. There are 16 tables of 23 entries (entry
 | Table | Caller | Role |
 |---|---|---|
 | 0x51EAE8 / 0x51EB48 / 0x51EBA8 / 0x51EC08 | 0x443F60 | sortie / deployment rules |
-| 0x51EC68 | main loop, after each player command | state check: 1 = continue, else a dialog |
+| 0x51EC68 | the sortie screen 0x45ED60 (0x460D60) | deploy check: 1 passes, 0 refuses (after a dialog) |
 | 0x51ECC8 | 0x4DD2F0 | mission init (camera, timers) |
 | 0x51ED28 | 0x444730 | objective message (an id or −1) |
 | 0x51EEB8 | 0x4403D0 | speech / message window hook |
@@ -2148,6 +2150,167 @@ group is retargeted.
 **Types 7 and 8:** their members on the map are set down where they are (mode 2); the group
 takes the called point and +2 high nibble 0xA.
 
+### 5.18 The end of a mission and the way back to the base: Emulated
+
+**How a mission ends** (`mission_loop` 0x436690). It clears the end code DS:0x50ADF2
+before it loads the mission. Then it leaves its turn loop:
+- when DS:0x50ADF2 is set after the mission's start script (stage 2), after the turn
+  script's stage 1 (the end of the player's phase) or after its stage 0 (the end of the
+  computer's turn). The mission scripts set it: 0x80 success, 0x83 success in part, 0x82
+  failure;
+- when the player's command loop (0x4EF600) returns. A unit command that leaves the end
+  code set ends the player's phase (code 0); the loop then runs on to the check after the
+  turn script. The command menu also returns:
+  - entry 0xB "withdraw" (WMES 0x1DE answered yes) gives **0x82, the scenario command**:
+    the loop breaks and calls the mission's hook from table 0x51F038 (by DS:0x50CE72),
+    and the end code is DS:0x50ADF2. Mission 1's hook (0x49A6C0) sets 0x80, so
+    withdrawing from mission 1 clears it. Entry 0 (0x4DE070) only shows "bad story
+    level". The other missions' hooks are not ported;
+  - entry 0xC (WMES 0x1DF) gives 0x81, which quits to the title;
+  - 0x99 becomes 0x82, and 0xC0 returns at once.
+
+On any code but 0xC0, the mission's end runs (§5.7: 0x4373B0, 0x4374C0). 0x4374C0
+sign-extends the machine number, so a unit without one (−1) reads DS:0x50ADF2, the end
+code itself, as its machine's +0x1C, and is marked destroyed. 0x436530 then writes
+savedata.tmp, a memory image of DS:0x506638..0x50ADF4 (0x47BD bytes after "PD2DATA\0";
+checksum 0x436130 at DS:0x50ADF3). Emulated: the hook 200 / 200 (`verify_scenario`), the
+mission end widened to units without a machine 214 / 214 (`verify_mission_start`).
+
+The table 0x51EC68 (mission 1's 0x499480, earlier taken for a state check after every
+command) has one caller, the sortie screen (0x460D60): it is the mission's deploy check
+(§5.11). Mission 1's passes when group 0 or 2 is formed and its status is clear, and
+otherwise shows MES 0x12B and refuses.
+
+**The title's new game** (0x46D780 with "0"; emulated 100 / 100, `verify_new_game`):
+- the campaign flag is set and PD2's SAVEDATA.ORG is loaded;
+- the mode word DS:0x506638 = 1, the step DS:0x50AD8E = DS:0x50AD92 = 1, DS:0x50AD94 = 0;
+- the experience counters are converted (`convert_exp`): each crew's record (+15) holds 5
+  counters at DS:0x506B34 + 13 r, and each becomes the ability's threshold less the
+  counter (AP from DS:0x50CC11 by +9, the others from DS:0x50CC4C by +0xA..+0xD);
+- crews 0–26 and units 0–26 are copied to DS:0x50CE73 / 0x50D023, outside the save;
+- the chunk DS:0x50663D and the mission DS:0x50CE72 = 1;
+- then the save and PD2's record set. game_mode_loop runs the new campaign (§5.10) next,
+  then the mission start.
+
+The title's other entries (continue, the mission list, DASH's own start) are not ported.
+
+**The debrief** (0x48FA40; game_mode_loop calls it with DS:0x50663A = 2 for any result
+from 0x80 up but 0x81). It clears DS:0x50663D, loads RMES.SLD (0x4719D0: its texts) and
+reads savedata.tmp back, so random()'s word DS:0x50AD90 is the saved one. USERDISK.ID's
+third word (0 on the CD) is the "disk flag" below.
+
+It was emulated whole: 200 / 200 random saves of both campaigns, every mode and result,
+with every branch reached (`verify_debrief`). The windows, pictures, fades, music and lists
+were stubbed (the lists close at once). DASH's SAVEDATA.ORG was read for the hand-over.
+The new campaign and the score screen 0x468490 were stubbed, and they write nothing to the
+save.
+
+The comparison covered the return code, the image it saves (or memory when it saves
+nothing), DS:0x50CE72, the campaign flag, the kept crews and units, clearinf.bin, and the
+two generators.
+
+In a campaign (mode 1), PD2 (flag 1):
+1. **The result.** At step 1 a failure (0x82) counts as 0x80.
+   - **Cleared** (0x80, 0x83): the step's flag DS:0x50AD41 + step is set, the clear
+     picture (M_CLR.pac) shows with its RMES texts, then the results screen. At step 1
+     these are the story, RMES 0x20–0x25. Otherwise they are chunk × 6 + 0x20 and + 0x21,
+     2 later for 0x83.
+   - **The last step (10) cleared** ends the campaign: end0.pac, RMES 0x66–0x69, the score
+     screen, the credits; 0x81, and nothing is saved.
+   - **A failure** clears the step's flag and shows m_fail.pac and the results screen. At
+     step 10 it is the game over: gameover.pac, RMES chunk × 6 + 0x24, 0x81.
+2. **The results screen** (0x495B70) lists every crew 0–63 with +4 up to DS:0x50AD92 and
+   +2 = 0 whose unit (by number) is in a group (+0 bit 2): the name, the unit's condition
+   and machine, and its state. A hurt crew is sent to hospital: +6 bit 0 is badly hurt,
+   bit 1 hurt. Its +7 = random(2) + 1 missions; it is 1 for crew 22, for crew 1 with bit 0
+   and for crew 0 with bit 1 alone.
+3. **The end checks.** The game is over (RMES 0x62–0x64, 0x81, no save) in two cases:
+   - from step 3, fewer than 3 drop‑troop crews (+3 = 0) or fewer than 3 air crews (+3 ≠ 0)
+     are alive. That is, units 0–63 with +0x36 = 0 whose crew has +2 = 0 and +4 up to the
+     step;
+   - from step 5, fewer than half the steps are cleared (the flags DS:0x50AD42..).
+4. **The next step** (below step 10): step + 1, its mission from DS:0x50CC0D (from step 8
+   DS:0x50CC17). That table gives PD2 missions 1, 3, 2, 5, 7, 8, 6, then DASH at step 8 (see
+   below), then 4, 9, 10 at steps 8–10 after DASH. DS:0x50AD8E = DS:0x50AD92 = the step;
+   DS:0x50CE72 = DS:0x50663D = the mission. Then:
+   - **New stock:** every machine, launcher and round whose restock size (machine +0x1D,
+     launcher +0xF, round +0xA, signed) is above the stock raises the stock to that size.
+     Rounds 0xF, 0x10 and 0x29 do so only with the disk flag. The records that come with
+     this step (+0x1C / +0xE / +9 = 0, and +0x1E / +0x10 / +0xB = the step) are listed;
+   - **recruits:** each crew whose +4 is the step and +2 = 0 takes its unit (+0xB = the
+     crew, +0x36 = 0);
+   - **the groups are emptied:** groups 0–11 lose every member through group_drop_player,
+     the unit's bit 2 cleared, until they are empty. Then every crew with +4 up to the step
+     and +2 < 3 leaves its group (+5); a refusal of a crew with +2 = 0 shows a note. Its
+     unit's bit 2 is cleared;
+   - **the hospital:** the hurt crews (with +4 up to the step and +2 < 3) count +7 down by
+     one. At 0, or always for crew 1, they are back: +6 bits 0–1 are cleared, and their
+     unit loses its launchers and rounds.
+5. **The units** 0–63 whose crew (by number) has +4 up to DS:0x50AD92 and +2 = 0 are
+   restored:
+   - each comes off the map (bit 3), is no longer spotted, concealed or reacted, and has its
+     parts repaired (+1 = 0, +2 low nibble 0);
+   - a destroyed one (+0 bit 0 or 1) loses its launchers, rounds and machine, and the two
+     bits;
+   - the others have their slots' states cleared. Each loaded pocket gets its round's full
+     magazine (ammunition +0 low 6 bits), but the code writes it to the pocket numbered
+     like the slot. Then each slot's pocket moves to pocket 6 + slot, the slot points there,
+     and pockets 0–5 are emptied.
+6. **The restock** of every machine, launcher and round of the steps so far (+0x1C / +0xE
+   / +9 = 0 and +0x1E / +0x10 / +0xB up to DS:0x50AD92; launchers 6, 7 and 0x15 only with
+   the disk flag):
+   - the count held is the stock plus what units 0–63 carry whose crew has +2 ≤ 2 and +4 up
+     to DS:0x50AD92 (launchers: below it), with 0xFF past 255 (0x495EA0 / 0x495F00 /
+     0x495F70);
+   - with x the restock size, a count below x adds x, and otherwise rand() % x + 1 (the C
+     runtime's generator, §5.10), capped at 255;
+   - then the count over 3x comes off the stock (to 0 at least). For rounds the register
+     keeps the amount just added when the count is not over 3x, so that amount comes off
+     again: rounds only fall.
+7. **Experience** of 30 on 0x80, 10 on 0x83 and 0 otherwise (ATTACK, ANTI AIRCRAFT,
+   CLOSE‑COMBAT, DEFENSE; AP 9 / 3 / 0; grow_* 0x4710C0..0x471430). It goes to the crews
+   whose unit still has bit 2, which step 4 has just cleared, so after a normal step nobody
+   gains any.
+8. **The wrecks:** units 0–253 with a machine and +0 bit 0 lose their launchers, rounds
+   and machine. DS:0x50AD94 = 0.
+9. **PD2's step 8 goes on in DASH:**
+   - the 27 crews and units are kept aside (DS:0x50CE73 / 0x50D023), the flag is cleared and
+     DASH's SAVEDATA.ORG is loaded (random()'s word with it);
+   - its counters are converted, the mode is 1 at step 1, and the new campaign's pilot
+     choice runs (0x421B90);
+   - then mission 12 (chunk 2) at step 1, with DASH's record set;
+   - DASH's caps: machine 6 and launchers 6, 7 and 0x15 lose the count over 13; rounds 0xF,
+     0x10 and 0x29 become 99 less what the units carry.
+10. Then savedata.tmp is written and the debrief returns 0x80.
+
+DASH (flag 0) follows the same steps with these differences:
+- the clear also sets clearinf.bin's CLEAR_FLAG + 10 + chunk;
+- before its end checks (RMES 0x6E–0x70), units 0–26 get +0x36 = 0;
+- its last step is 11, its missions come from DS:0x50CC14, and a failure at steps 1, 4, 6
+  and 8 (DS:0x519020) skips the next step;
+- the new stock raises machine 6 only with the disk flag, and launchers only for 6, 7 and
+  0x15 with it;
+- the restore fills the magazines twice. The hospital also lets crews 0 and 18 back at
+  once and skips counts of 0xFF. There is no experience;
+- the restock applies the caps after every item;
+- the mode becomes 1, and when mission 4 is next the campaign goes back to PD2 at step 8:
+  crews and units 0–26 return from DS:0x50CE73 / 0x50D023 with the four abilities they have
+  now (+0xA..+0xD), and PD2's record set is loaded;
+- its step 10 cleared shows the credits (staff2_*.pac) and goes on.
+
+Single missions (mode 2) and replays (mode 3) only show their pictures. DASH mode 2
+cleared on chunk 3 sets CLEAR_FLAG + 14.
+
+**The next mission** (game_mode_loop): after 0x80 it reads the saved mode word and
+DS:0x50AD92 back. While the mode is 1 and DS:0x50AD92 is at most 20, it runs the mission
+start 0x416CF0, which reads savedata.tmp and loads chunk DS:0x50663D from pd2\ or dash\ by
+the flag (§5.10, then the sortie §5.11). Otherwise the game goes back to the title.
+0x4783A0, the title's case 3, is the opening (op_*.pac) and changes no state.
+
+`rules.debrief` / `Debrief.debrief` (with `results_screen`, `mission_exit`,
+`scenario_command`, `new_game`, `next_mission`; fixtures 400 / 400 with the scenario and
+new-game cases).
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |
@@ -2203,7 +2366,7 @@ takes the called point and +2 high nibble 0xA.
      dialogs (reaction menu, mine clearing, "enemy discovered"), and the event
      scripts;
    - then port the event scripts mission by mission (226 KB in all; mission 1's
-     state check is done), starting with the shared helpers (0x4DE090, 0x4DD390,
+     deploy check is done), starting with the shared helpers (0x4DE090, 0x4DD390,
      0x4403D0) and the group record fields.
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.

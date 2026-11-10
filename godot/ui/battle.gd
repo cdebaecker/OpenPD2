@@ -11,6 +11,12 @@ const MAP := 72
 
 var campaign := "dash"
 var mission_index := 0
+## The campaign's state a debrief hands to the next mission (game_mode_loop 0x487D70: the
+## save, savedata.tmp, read back by the next mission start 0x416CF0): the save image, the
+## mission number DS:0x50CE72 and PD2's kept crews and units (DS:0x50CE73, not saved).
+static var carry := {}
+var debrief_panel: PanelContainer = null
+var debrief_result := -1        # the debrief's code (0x80 next mission, 0x81 the title), -1 none yet
 
 var w: Pd2World
 var rng: Pd2Random
@@ -171,9 +177,21 @@ func _ready() -> void:
 	var save := GameData.save_image(campaign)
 	var pick: Campaign.Hooks = Campaign.Hooks.new() if mission_index == 0 else null
 	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
-	w = Mission.build(tables, doc, campaign, save, pick, crt)
-	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22
+	var carried := carry
+	carry = {}
+	if not carried.is_empty():
+		save = [Debrief.SAVE_BASE, carried.image]     # the debrief's save: no new campaign
+		pick = null
+	# PD2's first mission starts as the title's new game does (0x46D780 "0"); DASH's start
+	# (the title's other entries) is not ported: its SAVEDATA.ORG as it is
+	w = Mission.build(tables, doc, campaign, save, pick, crt, carried.is_empty() and pick != null and campaign == "pd2")
+	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22;
+	# after a debrief, the number it set
 	script_no = mission_index + (1 if campaign == "pd2" else 11)
+	if not carried.is_empty():
+		script_no = int(carried.script)
+		w.stash = carried.stash
+	w.script_no = script_no
 	mission_hooks = BattleMissionHooks.new()
 	mission_hooks.battle = self
 	flight_hooks = BattleFlightHooks.new()
@@ -219,9 +237,13 @@ func _begin_battle() -> void:
 	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
 	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
 	# upkeep and AP, then the turn start (LAB_00436b39)
+	w.set_ds8(0x50ADF2, 0)               # mission_loop clears the end code first
 	Mission.layers_reset(w)
 	Mission.start_units(w)
 	_script_turn(2)
+	if w.ds8(0x50ADF2):                  # the end code after the start script: the mission ends
+		_end_mission(w.ds8(0x50ADF2))
+		return
 	Mission.rebuild_occupancy(w)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
@@ -261,8 +283,16 @@ func _begin_done() -> void:
 
 class BattleSortieHooks extends Campaign.SortieHooks:
 	## The sortie screen's windows in the battle: its dialogs and refusals go to the panel
-	## (MES.PCK texts); the mission's deploy hook (table 0x51EC68) is not ported and passes.
+	## (MES.PCK texts). The mission's deploy hook (table 0x51EC68, called only by the sortie
+	## screen, 0x460D60): mission 1's (0x499480) wants group 0 or 2 formed and clear, else
+	## its dialog 0x12B and a refusal; the other missions' are not ported and pass.
 	var battle
+
+	func deploy() -> int:
+		if battle.script_no != 1 or MissionScripts.m01_state(battle.w) == 1:
+			return 1
+		battle.sortie_say(battle.mes(0x12B))
+		return MissionScripts.m01_state_result(0)
 
 	func dialog(msg: int, arg: Array) -> int:
 		battle.sortie_say(battle.mes(msg, [battle.sortie_arg(arg), ""]))
@@ -689,9 +719,12 @@ func _build_hud() -> void:
 		slot_buttons.append(btn)
 	var row4 := HBoxContainer.new()
 	box.add_child(row4)
-	for b in [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
+	var cmds := [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
 			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
-			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]] + ([[ui("UI_INDOOR_SEARCH") + " [I]", _cmd_mission]] if script_no == 1 else []):
+			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn], [ui("UI_WITHDRAW") + " [W]", _cmd_withdraw]]
+	if script_no == 1:
+		cmds.append([ui("UI_INDOOR_SEARCH") + " [I]", _cmd_mission])
+	for b in cmds:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.pressed.connect(b[1])
@@ -775,6 +808,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_K: _cmd_carry_mode()
 			KEY_U: _cmd_item_mode()
 			KEY_E: _end_turn()
+			KEY_W: _cmd_withdraw()
 			KEY_I: _cmd_mission()
 			KEY_TAB: _next_unit()
 			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
@@ -1298,7 +1332,7 @@ func _end_turn() -> void:
 	say("[b]Enemy phase[/b]")
 	if auto_react:
 		var r := _enemy_phase()
-		_end_turn_finish(r[0], r[1])
+		_end_turn_finish(r[0], r[1], r[2])
 		return
 	ai_running = true
 	ai_thread = Thread.new()
@@ -1306,8 +1340,12 @@ func _end_turn() -> void:
 
 
 func _enemy_phase() -> Array:
+	## [the computer's result, its undefined units, the end code]: mission_loop leaves its
+	## turn loop when DS:0x50ADF2 is set after the turn script's stage 1 or stage 0
 	Turn.support_fire(w, 0)
 	_script_turn(1)
+	if w.ds8(0x50ADF2):
+		return [0, [], w.ds8(0x50ADF2)]
 	Turn.clear_spotted_all(w, options)
 	_view_reset(0)
 	Turn.recon_pass(w, 0)                # still the player's phase
@@ -1318,7 +1356,7 @@ func _enemy_phase() -> Array:
 	Turn.recon_pass(w, 3)
 	var sres := _strikes(3)                # 0x4E37A0(3)
 	if sres in Ai.AI_ABORT:
-		return [sres, []]
+		return [sres, [], 0]
 	Turn.memory_forget(w)
 	Turn.clear_reacted_all(w)
 	hooks.flag = 0
@@ -1330,27 +1368,33 @@ func _enemy_phase() -> Array:
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
 	_script_turn(0)
+	if w.ds8(0x50ADF2):
+		return [res, undefined, w.ds8(0x50ADF2)]
 	Turn.clear_strikes(w)                # 0x46F590(0)
 	_turn_start()
-	return [res, undefined]
+	return [res, undefined, 0]
 
 
 func _ai_phase() -> void:
 	## Worker thread: the enemy phase. Only the questions talk to the main thread meanwhile;
 	## input is blocked by `busy`.
 	var r := _enemy_phase()
-	call_deferred("_ai_done", r[0], r[1])
+	call_deferred("_ai_done", r[0], r[1], r[2])
 
 
-func _ai_done(res: int, undefined: Array) -> void:
+func _ai_done(res: int, undefined: Array, end_code := 0) -> void:
 	ai_thread.wait_to_finish()
 	ai_thread = null
 	ai_running = false
 	overlay.queue_redraw()
-	_end_turn_finish(res, undefined)
+	_end_turn_finish(res, undefined, end_code)
 
 
-func _end_turn_finish(res: int, undefined: Array) -> void:
+func _end_turn_finish(res: int, undefined: Array, end_code := 0) -> void:
+	if end_code:
+		busy = false
+		_end_mission(end_code)
+		return
 	last_ai_result = res
 	if not undefined.is_empty():
 		say("[color=gray](%d unit(s) reached a case the game leaves undefined; their orders ended there)[/color]" % undefined.size())
@@ -1646,19 +1690,176 @@ func _script_turn(stage: int) -> void:
 
 
 func _script_state() -> void:
-	## the state check (table 0x51EC68), after every command, and the end code DS:0x50ADF2
+	## After a command: command_loop (0x4EF600) ends the player's phase when the end code
+	## DS:0x50ADF2 is set; mission_loop then runs to its check after the turn script.
+	if mission_over or busy:
+		return
+	if w.ds8(0x50ADF2):
+		_end_turn()
+
+
+func _cmd_withdraw() -> void:
+	## The command menu's withdraw (entry 0xB): WMES 0x1DE, yes = 0x82; mission_loop leaves
+	## its turn loop, the mission's scenario hook (table 0x51F038) sets the end code.
+	if busy or mission_over:
+		return
+	if auto_react:
+		_withdraw()
+		return
+	_confirm(msg(0x1DE), _withdraw)
+
+
+func _withdraw() -> void:
+	var code := Debrief.scenario_command(w, script_no)
+	if code == -1:
+		say(uif("UI_NOT_PORTED_HOOK", ["0x51F038", script_no]))
+		return
+	_end_mission(code, true)
+
+
+func _end_mission(code: int, exited := false) -> void:
+	## mission_loop's exit (Debrief.mission_exit: the mission's end, 0x4373B0 / 0x4374C0),
+	## then game_mode_loop: a result from 0x80 up (but 0x81) goes to the debrief 0x48FA40
+	## (DS:0x50663A = 2); its 0x80 starts the next mission while the campaign goes on.
 	if mission_over:
 		return
-	if script_no == 1 and MissionScripts.m01_state(w) == -1:
-		say_msg(0x12B)
-		_end_mission()
-	elif w.ds8(0x50ADF2):
-		_end_mission()
-
-
-func _end_mission() -> void:
 	mission_over = true
-	say("[b]%s[/b]" % ui("UI_MISSION_OVER"))
+	if not exited:
+		code = Debrief.mission_exit(w, code)
+	say("[b]%s[/b]" % uif("UI_MISSION_END", ["0x%X" % code]))
+	w.set_ds16(0x50AD90, rng.state)            # random()'s word goes into the save
+	if code < 0x80 or code == 0x81:
+		debrief_result = 0x81
+		_show_debrief([], [])
+		return
+	var dh := BattleDebriefHooks.new()
+	dh.battle = self
+	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
+	debrief_result = Debrief.debrief(w, code, rng, crt, dh)
+	if w.fault != "":
+		say("[color=red]rules fault: %s[/color]" % w.fault)
+		w.fault = ""
+	_show_debrief(dh.lines, Debrief.next_mission(w) if debrief_result == 0x80 else [])
+
+
+class BattleDebriefHooks extends Debrief.Hooks:
+	## The debrief's pictures and lists as lines of the debrief panel (the pictures and
+	## the credits are not shown); SAVEDATA.ORG and the record sets from the import; the
+	## new campaign's pilot choice (PD2's hand-over to DASH) filled at random, as the
+	## battle's first mission does; clearinf.bin's flags in user://clearinf.bin.
+	var battle
+	var lines := []
+
+	func screen(kind: String, data: Variant = null) -> int:
+		match kind:
+			"clear", "fail", "gameover", "ending", "single":
+				lines.append("[b]%s[/b]" % battle.ui("UI_DEBRIEF_" + kind.to_upper()))
+				for id in data:
+					var t: String = GameData.debrief_text(battle.campaign, id)
+					if t != "":
+						lines.append(t)
+			"results":
+				for r in data:
+					var st: String = battle.ui(["UI_DEBRIEF_OK", "UI_DEBRIEF_INJURED", "UI_DEBRIEF_HURT", "UI_DEBRIEF_INJURED"][r[1]])
+					if r[4]:
+						st = battle.ui("UI_DEBRIEF_LOST")
+					lines.append("  %s: %s (%s %d)" % [battle.crew_name(r[0]), st, battle.machine_name(r[2]), r[3]])
+			"new_items":
+				for i in data[0]:
+					lines.append(battle.uif("UI_DEBRIEF_NEW", [battle.machine_name(i)]))
+				for i in data[1]:
+					lines.append(battle.uif("UI_DEBRIEF_NEW", [battle._name_of("launcher_names", i)]))
+				for i in data[2]:
+					lines.append(battle.uif("UI_DEBRIEF_NEW", [battle._name_of("ammo_names", i)]))
+			"recruits":
+				for c in data:
+					lines.append(battle.uif("UI_DEBRIEF_RECRUIT", [battle.crew_name(c)]))
+			"recovered":
+				lines.append(battle.uif("UI_DEBRIEF_RECOVERED", [battle.crew_name(data[0])]))
+			"handover":
+				lines.append("[b]%s[/b]" % battle.ui("UI_DEBRIEF_HANDOVER"))
+		return 0
+
+	func load_save(flag: int) -> PackedByteArray:
+		var img: Array = GameData.save_image("pd2" if flag else "dash")
+		return img[1] if img.size() == 2 else PackedByteArray()
+
+	func new_campaign(w: Pd2World) -> int:
+		return Campaign.new_campaign(w, Campaign.CrtRand.new(int(Time.get_unix_time_from_system())), Campaign.Hooks.new())
+
+	func campaign_set(w: Pd2World) -> void:
+		var t := GameData.tables("pd2" if w.campaign else "dash")
+		w.records = Pd2World.new(t.machines, t.launchers, t.ammo, PackedByteArray(), 1).records
+
+	func clear_flag(i: int) -> void:
+		var path := "user://clearinf.bin"
+		var buf := PackedByteArray()
+		if FileAccess.file_exists(path):
+			buf = FileAccess.get_file_as_bytes(path)
+		if buf.size() < 0x22:
+			buf = "CLEAR_FLAG".to_ascii_buffer()
+			buf.resize(0x22)
+		if i < buf.size():
+			buf[i] = 1
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		if f:
+			f.store_buffer(buf)
+
+
+func crew_name(c: int) -> String:
+	var crew_names: Array = names.crew
+	var n := w.cb(c, 0) if c >= 0 and c < 64 else -1
+	return "".join(crew_names[n]) if n >= 0 and n < crew_names.size() else "#%d" % c
+
+
+func machine_name(m: int) -> String:
+	var mach: Array = names.machine
+	return mach[m] if m >= 0 and m < mach.size() else "-"
+
+
+func _show_debrief(lines: Array, nxt: Array) -> void:
+	## The debrief panel: its lines, then the next mission (game_mode_loop: the mission
+	## start 0x416CF0 with the debrief's save) or the way back to the mission list.
+	if debrief_panel:
+		debrief_panel.queue_free()
+	debrief_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	debrief_panel.theme = theme
+	debrief_panel.position = Vector2(220, 20)
+	hud_layer.add_child(debrief_panel)
+	var box := VBoxContainer.new()
+	debrief_panel.add_child(box)
+	var text := RichTextLabel.new()
+	text.bbcode_enabled = true
+	text.fit_content = true
+	text.custom_minimum_size = Vector2(420, 0)
+	text.text = "\n".join(lines) if not lines.is_empty() else ui("UI_MISSION_OVER")
+	box.add_child(text)
+	if not nxt.is_empty():
+		var go := Button.new()
+		go.text = ui("UI_NEXT_MISSION")
+		go.pressed.connect(_next_mission.bind(nxt))
+		box.add_child(go)
+	var back := Button.new()
+	back.text = ui("UI_BACK_TO_MISSIONS")
+	back.pressed.connect(func(): get_tree().change_scene_to_file("res://ui/boot.tscn"))
+	box.add_child(back)
+
+
+func _next_mission(nxt: Array) -> void:
+	## game_mode_loop's next round: the next battle scene with the debrief's save (its
+	## campaign flag and chunk DS:0x50663D), the mission number and PD2's kept crews
+	carry = {"image": Debrief.save_image(w), "script": w.script_no, "stash": w.stash}
+	var scene: PackedScene = load("res://ui/battle.tscn")
+	var b := scene.instantiate()
+	b.campaign = "pd2" if nxt[0] else "dash"
+	b.mission_index = int(nxt[1]) - 1
+	b.auto_react = auto_react
+	b.sortie_window = sortie_window
+	get_tree().root.add_child(b)
+	get_tree().current_scene = b
+	queue_free()
 
 
 func _cmd_mission() -> void:

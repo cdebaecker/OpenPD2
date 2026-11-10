@@ -270,7 +270,8 @@ def export_missions(game, out, pal):
 def export_messages(game, out):
     """The game's message tables, as message_text (0x471A00) reads them: WMES.PCK (the
     battle's, read when DS:0x50663A is set) and MES.PCK (the others), one LZSS entry per
-    index (DS:0x50663D - 1), each a list of strings numbered from 0 (Shift-JIS, decoded)."""
+    index (DS:0x50663D - 1), each a list of strings numbered from 0 (Shift-JIS, decoded);
+    and RMES.SLD (one LZSS block: the debrief's texts, which 0x4719D0 loads for 0x48FA40)."""
     for camp in CAMPAIGNS:
         folder = os.path.join(game, camp)
         fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
@@ -281,6 +282,9 @@ def export_messages(game, out):
                 dc = pd2dt.decode_chunk(c)
                 entries.append([t.decode('cp932', 'replace') for t in dc.split(b'\0')] if dc else [])
             doc[key] = entries
+        if 'RMES.SLD' in fs:
+            dc = pd2dt.decode_chunk(open(fs['RMES.SLD'], 'rb').read())
+            doc['rmes'] = [t.decode('cp932', 'replace') for t in dc.split(b'\0')] if dc else []
         os.makedirs(os.path.join(out, camp), exist_ok=True)
         with open(os.path.join(out, camp, 'messages.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)

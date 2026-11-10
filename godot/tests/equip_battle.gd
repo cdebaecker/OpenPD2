@@ -1,7 +1,9 @@
 extends SceneTree
 ## The sortie screen's armament panel in the battle, driven through its buttons: a PD2
 ## free pilot without a machine takes one from the stock (the stock drops by one), fits
-## slot 1 from its list, closes, then joins a group.
+## slot 1 from its list, closes, then joins a group. At PD2's step 1 every pilot is in a
+## group, so the battle is step 2's (mission 3), from mission 1's debrief: its recruits
+## have no machine.
 
 func _press(b, button: Variant, answers: Array) -> void:
 	b._equip_press(button)
@@ -13,9 +15,15 @@ func _press(b, button: Variant, answers: Array) -> void:
 
 func _init() -> void:
 	await process_frame
+	var gd = root.get_node("GameData")
+	var w0 := Mission.build(gd.tables("pd2"), gd.mission("pd2", 0), "pd2", gd.save_image("pd2"),
+			Campaign.Hooks.new(), Campaign.CrtRand.new(7), true)
+	Debrief.mission_exit(w0, 0x80)
+	Debrief.debrief(w0, 0x80, Pd2Random.new(0), Campaign.CrtRand.new(7), Debrief.Hooks.new())
 	var b = load("res://ui/battle.tscn").instantiate()
+	b.carry = {"image": Debrief.save_image(w0), "script": w0.script_no, "stash": w0.stash}
 	b.campaign = "pd2"
-	b.mission_index = 0
+	b.mission_index = Debrief.chunk(w0) - 1
 	root.add_child(b)
 	for i in 5:
 		await process_frame
