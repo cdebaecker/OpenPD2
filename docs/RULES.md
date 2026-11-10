@@ -830,7 +830,8 @@ runs in this order. `phase` is DS:0x50DDC8: 0 = player, 3 = enemy.
 |---|---|
 | airdrop approaches | 0x44AEA0 |
 | the player side's fire‑support strikes (§5.13) | `strike_executor` (0x4E37A0(0)) |
-| reinforcements enter the map ("進入開始!!") | 0x44F2E0 |
+| the player side's strike marks again (as `refresh_strikes`) | 0x483ED0(0) |
+| reinforcements enter or leave the map ("進入開始!!", §5.14) | 0x44F2E0 |
 | timed recon points rescan their area, then count down | 0x480910, table DS:0x50AC58 |
 | timed explosives (bombs set with a fuse) go off | 0x480280, table DS:0x50AC1C |
 | every unit's "has reacted" flag is cleared | `clear_reacted_all` (0x4361A0) |
@@ -1885,6 +1886,8 @@ act. A group is **held** when its +2 bits 4–5 are 2 and bits 6–7 are 2.
      - **Reaction fire:** it is spotted at every step and draws reaction fire (flag 10).
      - **End of the flight:** it stops within its slot's range of the aim.
      - **Shot down:** the same member index runs again.
+     - A flight line point with x = −1 ends the game's list: a striker standing off the
+       map does not move.
      - **Otherwise:** it leaves the map where it is, the displaced unit comes back, a round
        is used, "爆弾投下" (0x207, warhead 0) or "ロケット発射" (0x208, warhead 2) shows, and
        the slot fires over the strike area. Order 3, also when the aim is off the map.
@@ -1941,6 +1944,56 @@ target machine's ground armour) / 100.
 Edge cases kept from the game:
 - an aimed unit already off the map is struck at (−1, −1); the port reads nothing there;
 - an entry row of 72 clears a byte past the occupancy layer, which the port skips.
+
+### 5.14 Reinforcements: Emulated
+
+At the turn start, after the player's strikes and their marks (0x483ED0(0), which leaves
+the same state as `refresh_strikes`: 150 / 150), reinforcements arrive or leave (0x44F2E0;
+`rules.reinforcements`, `Strike.reinforcements`). Emulated whole: 150 / 150 random states (`verify_reinforcements`),
+with the game's unit removal and a scripted reaction loop. The routine reads some of its
+locals before writing them; the check puts the same values on the emulator's stack.
+
+It runs for **type‑6 groups** (+0x21 high nibble 6) among groups 0–19 that are:
+- positioned on the called point (+0x16 / +0x17 = DS:0x50AD95 / 0x50AD97);
+- in state 2 (+2 bits 4–5 = 2).
+
+**Arriving** (+2 bits 6–7 = 0), member by member:
+1. **Entry** (0x44F030): a random first hex and edge hex on the side the group comes from
+   (+0x1F, 0–7). The member is set on the edge hex.
+2. **Message:** "%s%d 進入開始!!" (0x1FF), with the group's call sign and the member slot
+   counter (1–16). The member is deployed (flags | 0x0C).
+3. **First step** (0x44F730, mode 2): the member steps onto the first hex, unspotted.
+4. **Walk to its destination** (+7 / +8; 0x44FD50). An occupied destination is replaced by
+   the first hex of the growing spirals around it (radius 1–71) that is passable for
+   category 0, 30 or more high, and free. The walk follows the line (0x480CD0) step by
+   step (0x44F730, mode 0).
+5. **Each step:**
+   - the unit the member displaced comes back (DS:0x514E04, hex DS:0x523E48 / 0x523E4C);
+   - the member is spotted when an active computer‑side unit has it within its recon range
+     (0x44FC70);
+   - spotted and not yet reacted, it draws reaction fire (flag 10). Shot down, the
+     displaced unit comes back and the walk ends.
+6. **Result:** a member that is not destroyed and keeps condition gets status 1, and the
+   next slot is taken. Otherwise the same slot runs again, since `destroy` took the member
+   out of the group (a member left in place would loop forever).
+7. **Group:** with any arrived, +0x20 = 4 and +2 bits 6–7 = 2.
+
+**Leaving** (+2 bits 6–7 = 1), every member:
+1. It walks out to an edge hex (the entry routine's, taken as its destination). The game's
+   easy‑mode bit is forced on for its reaction fire (DS:0x551D29 bit 1).
+2. It gets status 0, its hex is emptied unless it is destroyed, and it leaves the map
+   (`remove_from_map`).
+3. **Group:** with any gone, the group is retargeted back (`group_retarget(-1, 0)`) and
+   +2 | 0x30.
+
+**Quirks kept from the game:**
+- The entry for side 3 reads the previous member's b before setting it (for the first
+  member, a leftover stack value). A side outside 0–7 sets nothing and keeps the previous
+  values; the port starts them at 0.
+- A path point whose x is −1 ends the game's list, so a unit standing off the map does
+  not move. The same holds for the strikers' flight (§5.13).
+- An edge hex on row 72 makes the game read and write the byte past the occupancy layer.
+  The port skips that byte.
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

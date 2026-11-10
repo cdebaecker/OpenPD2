@@ -1116,10 +1116,12 @@ func _view_reset(side: int) -> void:
 func _turn_start() -> void:
 	## mission_loop's LAB_00436b39 (w.phase is 3 here): smoke clears (0x483B50), spotted
 	## flags (0x437440), the computer's view and recon pass, the AI memory of spotted
-	## DoLLS (0x480C60); then the player's phase, view and recon pass, and the player's
-	## fire-support strikes (0x4E37A0(0)). (The date window 0x4361C0, the camera 0x436360
-	## and 0x4F3DA0 are display; the airdrop approaches 0x44AEA0 and 0x483ED0 are not
-	## ported.)
+	## DoLLS (0x480C60); then the player's phase, view and recon pass, the player's
+	## fire-support strikes (0x4E37A0(0)) and their marks (0x483ED0(0), as refresh_strikes),
+	## the reinforcements (0x44F2E0) and the reaction flags cleared. (The date window
+	## 0x4361C0, the camera 0x436360 and 0x4F3DA0 are display; the airdrop approaches
+	## 0x44AEA0, the sensors 0x480910, the timed explosives 0x480280 and the mission's hook
+	## 0x51F038 are not ported.)
 	Turn.smoke_clears(w, rng)
 	Turn.clear_spotted_all(w, options)
 	Turn.clear_view(w, 3)
@@ -1129,6 +1131,9 @@ func _turn_start() -> void:
 	_view_reset(0)
 	Turn.recon_pass(w, 0)
 	_strikes(0)
+	AiTurn.refresh_strikes(w, 0)         # 0x483ED0(0)
+	_reinforcements()                     # 0x44F2E0
+	Turn.clear_reacted_all(w)
 
 
 func _end_turn() -> void:
@@ -1268,12 +1273,15 @@ class BattleStrikeHooks extends Strike.Hooks:
 	var w: Pd2World
 	var rng: Pd2Random
 
-	func react(u: int, cands: Array) -> int:
+	func react(u: int, cands: Array, easy := false) -> int:
 		var h = battle.hooks
 		var f: int = h.flag
+		var e: bool = h.easy
 		h.flag = 10
+		h.easy = h.easy or easy        # DS:0x551D29 bit 1 forced on (a leaving reinforcement)
 		var res: int = h.react(u)
 		h.flag = f
+		h.easy = e
 		return res
 
 	func radio(kind: int, g: int) -> int:
@@ -1322,6 +1330,27 @@ func _strikes(side: int) -> int:
 			say("[color=orange]%s destroyed[/color]" % unit_name(k))
 	return res
 
+
+func _reinforcements() -> int:
+	## 0x44F2E0 (Strike.reinforcements): type-6 groups on the called point arrive or leave.
+	## The game's leftover locals start at 0.
+	var sh := BattleStrikeHooks.new()
+	sh.battle = self
+	sh.w = w
+	sh.rng = rng
+	var before := []
+	for k in w.n_units:
+		before.append([w.ub(k, 0) & 1, w.pos(k)])
+	var res := Strike.reinforcements(w, rng, sh)
+	for k in w.n_units:
+		if w.ub(k, 0) & 1 and not before[k][0]:
+			say("[color=orange]%s destroyed[/color]" % unit_name(k))
+		elif before[k][1] == Vector2i(-1, -1) and w.active(k):
+			say("%s enters the map" % unit_name(k))
+	if w.fault != "":
+		say("[color=red]rules fault: %s[/color]" % w.fault)
+		w.fault = ""
+	return res
 
 func radio_args(args: Array) -> Array:
 	## the radio's format arguments as text: a call sign (DS:0x50C7E5), the time of

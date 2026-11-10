@@ -14,8 +14,9 @@ const ABORT := [0x10000, 0x20000, 0x40000]
 ## What the executor leaves to the game (display and player input).
 class Hooks extends RefCounted:
 	## The reaction fire a striker flying in draws (reaction_loop 0x472920, flag 10):
-	## the loop's result bits (>= 4: u was destroyed) or an abort code.
-	func react(u: int, cands: Array) -> int:
+	## the loop's result bits (>= 4: u was destroyed) or an abort code. easy: the game's
+	## easy-mode bit is forced on (DS:0x551D29 bit 1, a leaving reinforcement).
+	func react(u: int, cands: Array, easy := false) -> int:
 		return 0
 
 	## Radio chatter (0x4896C0): 0 or an abort code.
@@ -289,7 +290,7 @@ static func move(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int, mode: int,
 		if w.ub(u, 0) & 0x10 and not w.ub(u, 0) & 0x40:
 			var cands := Sight.reaction_candidates(w, u, w.ds8(0x50ADF1))
 			if not cands.is_empty():
-				res = hooks.react(u, cands)
+				res = hooks.react(u, cands, false)
 				if res in ABORT:
 					return res
 	if res < 4:
@@ -308,7 +309,7 @@ static func fly(w: Pd2World, rng: Pd2Random, u: int, slot: int, hooks: Hooks) ->
 	w.setb(u, 0, w.ub(u, 0) & 0xCF)
 	var res := 0
 	var i := 0
-	while i < pts.size() and res == 0:
+	while i < pts.size() and pts[i].x != -1 and res == 0:   # (x = -1 ends the game's list)
 		res = move(w, rng, pts[i].x, pts[i].y, u, 0, hooks)
 		if res in ABORT:
 			return res
@@ -452,6 +453,240 @@ static func _hurt(w: Pd2World, k: int, s: int, t: int, gi: int, hooks: Hooks) ->
 			if res in ABORT:
 				return res
 		Action.destroy(w, t)
+	return 0
+
+
+# --- reinforcements entering and leaving (0x44F2E0) -----------------------------------
+
+## 0x44F030(d): [a, b, px, py] for a type-6 member from side d (+0x1F); side 3's upper
+## branch reads the previous b; another d returns [] (the caller keeps its values).
+static func reinf_entry(rng: Pd2Random, d: int, stale_b: int) -> Array:
+	match d:
+		0:
+			var a := rng.r16(36) + 18
+			return [a, 1, a, 0]
+		1:
+			if rng.r16(100) < 0x32:
+				var a := 70 - rng.r16(18)
+				return [a, 1, a, 0]
+			var v := rng.r16(18) + 1
+			return [70 - (v & 1), v, 71 - (v & 1), v]
+		2:
+			var v := rng.r16(36) + 18
+			return [70 - (v & 1), v, 71 - (v & 1), v]
+		3:
+			if rng.r16(100) > 0x31:
+				var a := 70 - (stale_b & 1)
+				var b := 72 - rng.r16(18)
+				return [a, b, a + 1, b]
+			var a2 := 71 - rng.r16(18)
+			return [a2, 70, a2, 71]
+		4:
+			var a := rng.r16(36) + 18
+			return [a, 70, a, 71]
+		5:
+			if rng.r16(100) < 0x32:
+				var a := rng.r16(18) + 1
+				return [a, 70, a, 71]
+			var b := 71 - rng.r16(18)
+			return [1, b, 0, b]
+		6:
+			var b := rng.r16(36) + 18
+			return [1, b, 0, b]
+		7:
+			if rng.r16(100) < 0x32:
+				var b := rng.r16(18) + 1
+				return [1, b, 0, b]
+			var a := rng.r16(18) + 1
+			return [a, 1, a, 0]
+	return []
+
+
+## 0x44FC70: u spotted if an active computer-side unit has it within its recon range.
+static func reinf_seen(w: Pd2World, u: int) -> void:
+	var up := w.pos(u)
+	for i in w.n_units:
+		if w.sb(i, 0x36) > 2 and w.active(i):
+			var p := w.pos(i)
+			if W.hexdist(up.x, up.y, p.x, p.y) <= Sight.recon_range(w, i).x:
+				w.setb(u, 0, w.ub(u, 0) | 0x10)
+				return
+	w.setb(u, 0, w.ub(u, 0) & 0xEF)
+
+
+static func _o_set(w: Pd2World, x: int, y: int, v: int) -> void:
+	if x + MAP * y >= 0 and x + MAP * y < MAP * MAP:   # (row 72: the game writes past the layer)
+		w.O[x + MAP * y] = v
+
+
+## 0x44F730: one step of an arriving or leaving member (own saved unit DS:0x514E04).
+static func reinf_move(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int, mode: int, hooks: Hooks, easy := false) -> int:
+	var sv: Array = w.reinf_saved
+	if mode == 1:
+		if sv[0] == -1:
+			return 0
+		var k: int = sv[0]
+		w.setb(k, 9, sv[1])
+		w.setb(k, 10, sv[2])
+		_o_set(w, sv[1], sv[2], (k + 1) & 0xFF)
+		if w.sb(k, 0x36) > 2 and k < 0xFE and Ai.in_view(w, sv[1], sv[2], 0):
+			w.setb(k, 0, w.ub(k, 0) | 0x10)
+		sv[0] = -1
+		return 0
+	if w.pos(u) == Vector2i(x, y):
+		return 0
+	var prev := Action.move_unit(w, u, x, y)
+	w.setb(u, 4, w.ub(u, 4) & 0xCF)
+	if sv[0] != -1:
+		var k: int = sv[0]
+		_o_set(w, sv[1], sv[2], (k + 1) & 0xFF)
+		w.setb(k, 9, sv[1])
+		w.setb(k, 10, sv[2])
+		if w.sb(k, 0x36) > 2 and Ai.in_view(w, sv[1], sv[2], 0):
+			w.setb(k, 0, w.ub(k, 0) | 0x10)
+		w.reinf_saved = [-1, 0, 0]
+	if prev != -1:
+		w.reinf_saved = [prev, x, y]
+	if mode == 2:
+		w.setb(u, 0, w.ub(u, 0) & 0xEF)
+	else:
+		reinf_seen(w, u)
+	var res := 0
+	if w.ub(u, 0) & 0x10 and not w.ub(u, 0) & 0x40:
+		var cands := Sight.reaction_candidates(w, u, w.ds8(0x50ADF1))
+		if not cands.is_empty():
+			res = hooks.react(u, cands, easy)
+			if res in ABORT:
+				return res
+	if res > 3:
+		reinf_move(w, rng, 0, 0, u, 1, hooks)
+		return 2
+	return 0
+
+
+## 0x44FD50: u goes to its destination (+7 / +8), or the first free, passable, 30+ high
+## hex of the spirals around an occupied one.
+static func reinf_walk(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks, easy := false) -> int:
+	var tx := w.ub(u, 7)
+	var ty := w.ub(u, 8)
+	if _occupant(w, tx, ty) != -1:
+		var found := false
+		var rad := 1
+		var cx := tx
+		var cy := ty
+		while not found and rad <= 0x47:
+			for h in Ai.spiral(cx, cy, rad):
+				if Ai.passable(w, 0, h.x, h.y) and w.H[h.x + MAP * h.y] > 0x1D and _occupant(w, h.x, h.y) == -1:
+					tx = h.x
+					ty = h.y
+					found = true
+					break
+			rad += 1
+	var p := w.pos(u)
+	var pts := path(w, p.x, p.y, tx, ty)
+	w.setb(u, 0, w.ub(u, 0) & 0xCF)
+	var res := 0
+	for q in pts:
+		if res or q.x == -1:      # (x = -1 ends the game's list: a unit off the map stays)
+			break
+		res = reinf_move(w, rng, q.x, q.y, u, 0, hooks, easy)
+		if res in ABORT:
+			return res
+	return 0
+
+
+## 0x44F2E0, at the turn start: type-6 groups 0-19 on the called point arrive (+2 bits
+## 6-7 = 0) or leave (bits 6-7 = 1). stale: the routine's locals before their first
+## write (a, b, arrival x / y, departure x / y; leftover stack values in the game).
+## Returns 0, an abort code, or -1 where the game would loop forever (w.fault is set).
+static func reinforcements(w: Pd2World, rng: Pd2Random, hooks: Hooks = null, stale: Array = [0, 0, 0, 0, 0, 0]) -> int:
+	if hooks == null:
+		hooks = Hooks.new()
+	var a: int = stale[0]
+	var b: int = stale[1]
+	var ax: int = stale[2]
+	var ay: int = stale[3]
+	var dx: int = stale[4]
+	var dy: int = stale[5]
+	for g in 20:
+		if gb(w, g, 0x16) == 0xFF or gb(w, g, 0x21) & 0xF0 != 0x60 or gb(w, g, 2) & 0x30 != 0x20:
+			continue
+		if W.s8(gb(w, g, 0x16)) != w.fire_point.x or W.s8(gb(w, g, 0x17)) != w.fire_point.y:
+			continue
+		var phase := gb(w, g, 2) & 0xC0
+		var n := 0
+		if phase == 0:
+			var i := 0
+			var last := Vector2i(-1, -1)
+			while i < 16:
+				var k := gb(w, g, 6 + i)
+				if k == 0xFF:
+					i += 1
+					continue
+				if last == Vector2i(i, k) and (w.ub(k, 0) & 1 or w.ub(k, 0xD) == 0):
+					w.fault = "reinforcements: the game loops on this member forever"
+					return -1
+				last = Vector2i(i, k)
+				var e := reinf_entry(rng, W.s8(gb(w, g, 0x1F)), b)
+				if not e.is_empty():
+					a = e[0]
+					b = e[1]
+					ax = e[2]
+					ay = e[3]
+				a = maxi(a, 1)
+				b = maxi(b, 1)
+				if b > 69:
+					b = 70
+				a = mini(a, 70 - (b & 1))
+				w.setb(k, 9, ax)
+				w.setb(k, 10, ay)
+				hooks.line(0x1FF, [["sign", gb(w, g, 1)], ["num", "%d", i + 1]])   # the slot counter (1-16)
+				w.setb(k, 0, w.ub(k, 0) | 0x0C)
+				hooks.panel(k)
+				var res := reinf_move(w, rng, a, b, k, 2, hooks)
+				if res in ABORT:
+					return res
+				res = reinf_walk(w, rng, k, hooks)
+				if res in ABORT:
+					return res
+				if not w.ub(k, 0) & 1 and w.ub(k, 0xD):
+					n += 1
+					i += 1
+					w.setb(k, 0x36, 1)
+			if n:
+				setgb(w, g, 0x20, 4)
+				setgb(w, g, 2, gb(w, g, 2) & 0x3F | 0x80)
+		elif phase == 0x40:
+			for i in 16:
+				var k := gb(w, g, 6 + i)
+				if k == 0xFF:
+					continue
+				hooks.panel(k)
+				var e := reinf_entry(rng, W.s8(gb(w, g, 0x1F)), b)
+				if not e.is_empty():
+					a = e[0]
+					b = e[1]
+					dx = e[2]
+					dy = e[3]
+				a = maxi(a, 1)
+				b = maxi(b, 1)
+				if b > 69:
+					b = 70
+				a = mini(a, 70 - (b & 1))
+				w.setb(k, 7, dx)
+				w.setb(k, 8, dy)
+				var res := reinf_walk(w, rng, k, hooks, true)
+				if res in ABORT:
+					return res
+				w.setb(k, 0x36, 0)
+				if not w.ub(k, 0) & 1:
+					var p := w.pos(k)
+					_o_set(w, p.x, p.y, 0)
+				Action.take_off_map(w, k)
+				n += 1
+			if n:
+				Ai.group_retarget(w, g, -1, 0)
+				setgb(w, g, 2, gb(w, g, 2) | 0x30)
 	return 0
 
 

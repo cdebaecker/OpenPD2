@@ -261,8 +261,10 @@ static func move_unit(w: Pd2World, u: int, x: int, y: int) -> int:
 		return -1
 	if (w.on_map(op.x, op.y) or op.x == 0 or op.x == 71 or op.y == 0 or op.y == 71 or (op.y & 1 and op.x == 70)) 			and op.x + MAP * op.y >= 0 and op.x + MAP * op.y < MAP * MAP:   # (a striker's entry row 72)
 		w.O[op.x + MAP * op.y] = 0
-	var prev := w.O[x + MAP * y]
-	w.O[x + MAP * y] = (u + 1) & 0xFF
+	var prev := 0
+	if x + MAP * y >= 0 and x + MAP * y < MAP * MAP:
+		prev = w.O[x + MAP * y]
+		w.O[x + MAP * y] = (u + 1) & 0xFF   # (a hex on row 72: the game writes past the layer)
 	var d := Ai.ai_direction(op.x, op.y, x, y)
 	if d == -1:
 		d = w.ub(u, 5) & 7
