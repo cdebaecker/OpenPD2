@@ -46,17 +46,18 @@ var time_ad92: int:
 	get: return ds16(0x50AD92)
 	set(v): set_ds16(0x50AD92, v)
 var mode_663a := 1                   # DS:0x50663A: 1 in the battle (0x487D70 -> 0x436530)
-var bombs := PackedByteArray()       # DS:0x50AC1C: timed explosives, 15 x 4 B (not ported)
+var bombs := PackedByteArray()       # DS:0x50AC1C: timed explosives, 15 x 4 B (x, y, fuse, hook flag)
 var mission_turn := 0                # DS:0x50663B (u16): counted by the mission scripts
 var ds_506651 := 0                   # DS:0x506651: set by mission inits (read by 0x4361C0)
 var exits: Array = []                # DS:0x519FB0: a mission's exit hexes (its load script)
-var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (not ported)
+var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (x, y, turns, round)
 var grid := PackedByteArray()        # *DS:0x50DD40: the flight engine's 16 x 16 marks (radar display)
 var radar := 0                       # DS:0x50DD44: 1 while the radar map is open
 var static_mem := {}                 # exe data the code may read past a table: address -> bytes
 var scenario := PackedByteArray()    # DS:0x50DE41: the mission's SCN_MIS record (0x1C6 B, 0x4DD2F0)
 var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, launchers, rounds)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
+var drop_saved := [-1, 0, 0]      # DS:0x514D18 / 0x523E34 / 0x523E38: the unit a transport displaced, its hex
 var reinf_saved := [-1, 0, 0]     # DS:0x514E04 / 0x523E48 / 0x523E4C: the unit an arriving member displaced, its hex
 var strike_saved := [-1, 0, 0]    # DS:0x51F3B4 / 0x5243B0 / 0x5243B4: the unit a striker flying in displaced, its hex
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
@@ -112,6 +113,7 @@ func duplicate_world() -> Pd2World:
 	c.fire_point = fire_point
 	c.strike_saved = strike_saved.duplicate()
 	c.reinf_saved = reinf_saved.duplicate()
+	c.drop_saved = drop_saved.duplicate()
 	c.ds = ds.duplicate()
 	c.mode_663a = mode_663a
 	c.phase = phase

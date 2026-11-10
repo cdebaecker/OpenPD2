@@ -22,6 +22,7 @@ var selected := -1
 var mode := "move"          # move / fire / aimed
 var move_mode := 1          # 0 high speed, 1 normal, 2 careful
 var slot := 0
+var item_pocket := 0     # the pocket the item command uses (mode "item")
 var mm: Move.MoveMap = null
 var fire_map: Move.MoveMap = null
 var carry_hexes: Array = []
@@ -45,6 +46,7 @@ var ai_thread: Thread = null
 var ai_running := false
 var react_sem := Semaphore.new()
 var react_answer: Variant = 1
+var hex_pick: Array = []         # the hexes a question on the worker thread waits a click on
 var react_panel: PanelContainer = null
 var react_target := -1
 var react_menu: Array = []
@@ -225,7 +227,26 @@ func _begin_battle() -> void:
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
-	_turn_start()
+	if auto_react:
+		_turn_start()
+		_begin_done()
+		return
+	# the first turn start runs on a worker thread: its airdrop asks the player
+	busy = true
+	ai_thread = Thread.new()
+	ai_thread.start(func():
+		_turn_start()
+		call_deferred("_begin_finished"))
+
+
+func _begin_finished() -> void:
+	ai_thread.wait_to_finish()
+	ai_thread = null
+	busy = false
+	_begin_done()
+
+
+func _begin_done() -> void:
 	var landed := squad.filter(func(u): return w.active(u))
 	if not landed.is_empty():
 		_select(landed[0])
@@ -669,6 +690,7 @@ func _build_hud() -> void:
 	var row4 := HBoxContainer.new()
 	box.add_child(row4)
 	for b in [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
+			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
 			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn]] + ([[ui("UI_INDOOR_SEARCH") + " [I]", _cmd_mission]] if script_no == 1 else []):
 		var btn := Button.new()
 		btn.text = b[0]
@@ -736,6 +758,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			cam.zoom = (cam.zoom * 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
 		elif ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			cam.zoom = (cam.zoom / 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
+		elif ev.button_index == MOUSE_BUTTON_LEFT and not hex_pick.is_empty():
+			var h := hex_at(get_global_mouse_position())
+			if h in hex_pick or hex_pick == ["any"]:
+				_answer_hex(h)
 		elif ev.button_index == MOUSE_BUTTON_LEFT and not busy:
 			_click(hex_at(get_global_mouse_position()))
 	elif ev is InputEventKey and ev.pressed and not ev.echo and not busy:
@@ -747,6 +773,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_S: _cmd_search()
 			KEY_C: _cmd_conceal()
 			KEY_K: _cmd_carry_mode()
+			KEY_U: _cmd_item_mode()
 			KEY_E: _end_turn()
 			KEY_I: _cmd_mission()
 			KEY_TAB: _next_unit()
@@ -788,6 +815,8 @@ func _update_move_map() -> void:
 			move_dests = Action.move_destinations(w, selected, mm)
 		if mode in FIRE_MODES and w.launcher_id(selected, slot) != -1:
 			fire_map = Action.fire_target_map(w, selected, slot, FIRE_MODES[mode])
+		elif mode == "item" and w.pocket_ammo(selected, item_pocket) != -1:
+			fire_map = Action.fire_target_map(w, selected, 0x80 + item_pocket, 0)
 	_refresh_info()
 	overlay.queue_redraw()
 
@@ -812,6 +841,9 @@ func _click(h: Vector2i) -> void:
 		return
 	if mode == "carry":
 		_cmd_carry_click(h)
+		return
+	if mode == "item":
+		_cmd_item_click(h)
 		return
 	if mode == "move":
 		_cmd_move(h)
@@ -847,6 +879,12 @@ func say_msg(id: int, args := []) -> void:
 
 func ui(key: String) -> String:
 	return GameData.ui_text(key)
+
+
+func uif(key: String, args: Array) -> String:
+	## a UI text with format arguments; without the translations (OpenPD2) the bare key
+	var t := ui(key)
+	return t % args if t.find("%") != -1 else t
 
 
 func _cmd_move(h: Vector2i) -> void:
@@ -923,6 +961,31 @@ func ask_choice(text: String, options: Array, default: Variant) -> Variant:
 	call_deferred("_open_choice", text, options)
 	react_sem.wait()
 	return react_answer
+
+
+func ask_hex(text: String, hexes: Array, default: Variant) -> Variant:
+	## a hex clicked on the map (ui_map_click), on a worker thread; hexes are marked ("any":
+	## every hex is taken), the panel's button answers -2. auto_react / the main thread: default.
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return default
+	call_deferred("_open_hex", text, hexes)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_hex(text: String, hexes: Array) -> void:
+	hex_pick = hexes if not hexes.is_empty() else ["any"]
+	var box := _reaction_panel(text.replace("@", "\n").strip_edges())
+	var btn := Button.new()
+	btn.text = ui("UI_CANCEL")
+	btn.pressed.connect(_answer_hex.bind(-2))
+	box.add_child(btn)
+	overlay.queue_redraw()
+
+
+func _answer_hex(v: Variant) -> void:
+	hex_pick = []
+	_answer_reaction(v)
 
 
 func _open_choice(text: String, options: Array) -> void:
@@ -1011,6 +1074,93 @@ func _confirm(text: String, then: Callable) -> void:
 	dlg.canceled.connect(dlg.queue_free)
 	add_child(dlg)
 	dlg.popup_centered()
+
+
+# --- the item command (the machine status window's "use", 0x4279F0 -> 0x4286D0 -> 0x4ECC60)
+
+class BattleItemHooks extends Item.Hooks:
+	## the throw's question was asked on the main thread before (answer 0 = yes)
+	var battle
+
+	func mine_blast(x: int, y: int) -> void:
+		battle.hooks.mine_blast(x, y)
+
+	func discovered(u: int) -> int:
+		battle.say_msg(0x1C7)                      # 0x47E790: "enemy discovered"
+		return 0
+
+
+func _cmd_item_mode() -> void:
+	## pick a pocket whose round can be used (ammo +8 bit 5, rounds left); a second press
+	## goes to the next one
+	if selected == -1:
+		return
+	var u := selected
+	var usable := []
+	for p in 4:
+		var a := w.pocket_ammo(u, p)
+		if a != -1 and w.ammo(a, 8) & 0x20 and w.pocket_count(u, p):
+			usable.append(p)
+	if usable.is_empty():
+		say(ui("UI_NO_ITEM"))
+		return
+	var i := usable.find(item_pocket)
+	item_pocket = usable[(i + 1) % usable.size()] if mode == "item" and i != -1 else usable[0]
+	mode = "item"
+	var a := w.pocket_ammo(u, item_pocket)
+	var names: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	say(uif("UI_ITEM_PICK", [item_pocket + 1, str(names.get(str(a), "#%d" % a)), Item.use_ap(w, u, item_pocket)]))
+	_update_move_map()
+
+
+func _cmd_item_click(h: Vector2i) -> void:
+	## 0x4279F0's checks (both manipulators broken: 0x1B9; AP: ui_not_enough_ap), 0x4286D0's
+	## (a broken pocket: 0x1B8), the target map, then 0x4ECC60 with its question
+	var u := selected
+	var p := item_pocket
+	if w.pocket_ammo(u, p) == -1 or not w.pocket_count(u, p):
+		return
+	if Ai.manipulator_state(w, u) == 2:
+		say_msg(0x1B9)
+		return
+	var ap := Item.use_ap(w, u, p)
+	if w.sb(u, 0xE) < ap:
+		say_msg(0x1AE, [ap])
+		return
+	if w.pocket_state(u, p) == 2:
+		say_msg(0x1B8)
+		return
+	if fire_map == null or fire_map.cell(h.x, h.y) != 1:
+		return
+	var a := w.pocket_ammo(u, p)
+	var wh := w.ammo(a, 8) & 15
+	if wh == 9:
+		_do_item(u, p, ap, h)
+		return
+	var up := w.pos(u)
+	var radius := 0 if wh == Action.MINE_WARHEAD else 1
+	var dist := Pd2World.hexdist(up.x, up.y, h.x, h.y)
+	var q := 0x1CC if (radius < dist or wh != 1) else 0x1CB
+	# 0x1CC shows the AP needed, the AP left and the distance (0x4ED25A); 0x1CB none
+	_confirm(msg(q, [ap, w.sb(u, 0xE), dist] if q == 0x1CC else []), _do_item.bind(u, p, ap, h))
+
+
+func _do_item(u: int, p: int, ap: int, h: Vector2i) -> void:
+	var ih := BattleItemHooks.new()
+	ih.battle = self
+	var before := {}
+	for q in w.n_units:
+		before[q] = [w.ub(q, 0xD), w.ub(q, 0) & 0x10]
+	Item.command(w, rng, u, p, ap, h.x, h.y, ih, options & 2 != 0)
+	if w.pocket_count(u, p) == 0:
+		w.setb(u, 0x1B + 2 * p, 0xFF)          # clear_pocket (0x4286D0)
+	for q in w.n_units:
+		if w.ub(q, 0xD) < before[q][0]:
+			say("%s: %d damage" % [unit_name(q), before[q][0] - w.ub(q, 0xD)])
+		elif w.is_enemy(q) and w.ub(q, 0) & 0x10 and not before[q][1]:
+			say("%s spotted" % unit_name(q))
+	mode = "move"
+	_after_command()
 
 
 func _cmd_search() -> void:
@@ -1118,10 +1268,9 @@ func _turn_start() -> void:
 	## flags (0x437440), the computer's view and recon pass, the AI memory of spotted
 	## DoLLS (0x480C60); then the player's phase, view and recon pass, the player's
 	## fire-support strikes (0x4E37A0(0)) and their marks (0x483ED0(0), as refresh_strikes),
-	## the reinforcements (0x44F2E0) and the reaction flags cleared. (The date window
-	## 0x4361C0, the camera 0x436360 and 0x4F3DA0 are display; the airdrop approaches
-	## 0x44AEA0, the sensors 0x480910, the timed explosives 0x480280 and the mission's hook
-	## 0x51F038 are not ported.)
+	## the reinforcements (0x44F2E0), the sensors (0x480910), the timed explosives
+	## (0x480280) and the reaction flags cleared. (The date window 0x4361C0, the camera
+	## 0x436360 and 0x4F3DA0 are display.) The airdrop (0x44AEA0) comes first.
 	Turn.smoke_clears(w, rng)
 	Turn.clear_spotted_all(w, options)
 	Turn.clear_view(w, 3)
@@ -1130,9 +1279,12 @@ func _turn_start() -> void:
 	w.phase = 0
 	_view_reset(0)
 	Turn.recon_pass(w, 0)
+	_airdrop()                            # 0x44AEA0
 	_strikes(0)
 	AiTurn.refresh_strikes(w, 0)         # 0x483ED0(0)
 	_reinforcements()                     # 0x44F2E0
+	Item.sensors_tick(w)                  # 0x480910
+	_bombs()                              # 0x480280
 	Turn.clear_reacted_all(w)
 
 
@@ -1352,6 +1504,118 @@ func _reinforcements() -> int:
 		w.fault = ""
 	return res
 
+class BattleBombHooks extends Turn.BombHooks:
+	## The explosions go to the message log (the animation is not drawn, so none is
+	## skipped). The bomb hook (table 0x51F158) is mission 1's no-op; other missions'
+	## hooks are not ported.
+	var battle
+
+	func explosion(x: int, y: int) -> bool:
+		battle.say("explosion at %d, %d" % [x, y])
+		return false
+
+	func mine_blast(x: int, y: int) -> void:
+		battle.say("mine explodes at %d, %d" % [x, y])
+
+	func bomb_hook(i: int) -> int:
+		if battle.script_no != 1:
+			battle.say("[color=gray](the mission's bomb hook is not ported)[/color]")
+		return 0
+
+
+func _bombs() -> int:
+	## 0x480280 (Turn.timed_explosives): the fuses count down, a bomb at 0 goes off.
+	var bh := BattleBombHooks.new()
+	bh.battle = self
+	var before := []
+	for k in w.n_units:
+		before.append(w.ub(k, 0) & 1)
+	var res := Turn.timed_explosives(w, rng, bh, options)
+	for k in w.n_units:
+		if w.ub(k, 0) & 1 and not before[k]:
+			say("[color=orange]%s destroyed[/color]" % unit_name(k))
+	return res
+
+
+class BattleDropHooks extends Drop.Hooks:
+	## The airdrop in the battle: the transport's clicks, its menu, the passengers and their
+	## hexes are asked on the worker thread (auto_react: the transport opens its menu at
+	## once and drops everyone); melee is the game's; the reaction fire the live hooks'.
+	var battle
+	var w: Pd2World
+	var rng: Pd2Random
+
+	func line(msg: int, args: Array = []) -> void:
+		battle.say_msg(msg, battle.radio_args(args))
+
+	func react(u: int, cands: Array, easy := false) -> int:
+		var h = battle.hooks
+		var f: int = h.flag
+		h.flag = 10
+		var res: int = h.react(u)
+		h.flag = f
+		return res
+
+	func discovered(u: int) -> int:
+		battle.say_msg(0x1C7)
+		return 0
+
+	func panel(u: int) -> void:
+		battle.call_deferred("_focus", u)
+
+	func click(u: int, dests: Array) -> Variant:
+		# ui_map_click mode 4 takes the marked hexes: the move command's and the transport's
+		return battle.ask_hex(battle.uif("UI_TRANSPORT_MOVE", [battle.unit_name(u), w.sb(u, 0xE)]), dests + [w.pos(u)], w.pos(u))
+
+	func ask2(msg: int, args: Array) -> int:
+		return 0 if battle.ask_prompt(battle.msg(msg, args), true) else 1
+
+	func drop_menu(u: int) -> int:
+		return battle.ask_choice(battle.ui("UI_DROP_MENU"), [[battle.ui("UI_DROP_ONE"), 0],
+			[battle.ui("UI_DROP_ALL"), 1], [battle.ui("UI_CANCEL"), -2]], 1)
+
+	func pick(units: Array) -> int:
+		var opts := []
+		for k in units:
+			opts.append([battle.unit_name(k), k])
+		opts.append([battle.ui("UI_CANCEL"), -2])
+		return battle.ask_choice(battle.ui("UI_DROP_WHO"), opts, -2)
+
+	func drop_click(k: int, hexes: Array) -> Variant:
+		return battle.ask_hex(battle.uif("UI_DROP_WHERE", [battle.unit_name(k)]), hexes, -2)
+
+	func box(msg: int) -> int:
+		return 1 if battle.ask_box(battle.msg(msg), true) else 0
+
+	func melee(a: int, b: int) -> int:
+		return battle.hooks.melee(a, b)
+
+
+func _focus(u: int) -> void:
+	if w.on_map(w.pos(u).x, w.pos(u).y):
+		cam.position = hex_center(w.pos(u))
+
+
+func _airdrop() -> int:
+	## 0x44AEA0 (Drop.airdrop): transports on the called point bring their passengers in
+	var dh := BattleDropHooks.new()
+	dh.battle = self
+	dh.w = w
+	dh.rng = rng
+	var before := []
+	for k in w.n_units:
+		before.append([w.ub(k, 0) & 1, w.active(k)])
+	var res := Drop.airdrop(w, rng, dh)
+	for k in w.n_units:
+		if w.ub(k, 0) & 1 and not before[k][0]:
+			say("[color=orange]%s destroyed[/color]" % unit_name(k))
+		elif w.active(k) and not before[k][1]:
+			say("%s lands" % unit_name(k))
+	if w.fault != "":
+		say("[color=red]rules fault: %s[/color]" % w.fault)
+		w.fault = ""
+	return res
+
 func radio_args(args: Array) -> Array:
 	## the radio's format arguments as text: a call sign (DS:0x50C7E5), the time of
 	## 0x453900 ("HH:MM" of (t + d) x 5 minutes, hours past 23 wrapped) or a number (%d)
@@ -1360,6 +1624,8 @@ func radio_args(args: Array) -> Array:
 		match a[0]:
 			"sign":
 				out.append(GameData.call_sign(campaign, a[1]))
+			"name":
+				out.append(GameData.call_sign(campaign, 39 + a[1]))   # a group name (DS:0x50C881)
 			"time":
 				var m: int = (a[1] + a[2]) * 5
 				var h := m / 60
@@ -1535,6 +1801,9 @@ func _draw_overlay() -> void:
 	if mode == "carry":
 		for hx in carry_hexes:
 			overlay.draw_circle(hex_center(hx), 14, Color(0.4, 1, 0.6, 0.35))
+	for h in hex_pick:
+		if h is Vector2i:
+			overlay.draw_circle(hex_center(h), 11, Color(0.3, 1, 0.5, 0.35))
 	if fire_map != null and mode != "move" and mode != "carry":
 		for ly in fire_map.h:
 			for lx in fire_map.w:

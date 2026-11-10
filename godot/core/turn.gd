@@ -63,6 +63,7 @@ static func recon_pass(w: Pd2World, phase: int) -> Array:
 	for u in w.n_units:
 		if (3 if w.is_enemy(u) else 0) == phase and w.active(u):
 			out.append_array(Action.step_search(w, u, (w.ub(u, 4) >> 4) & 3))
+	Item.sensors_scan(w)                 # the sensor list (0x50AC58), as the game ends 0x483490
 	return out
 
 
@@ -153,3 +154,89 @@ static func clear_spotted_all(w: Pd2World, options := 0) -> void:
 static func clear_reacted_all(w: Pd2World) -> void:
 	for u in w.n_units:
 		w.setb(u, 0, w.ub(u, 0) & 0xBF)
+
+
+# --- timed explosives (0x480280, the turn start) --------------------------------------
+
+## What the timed explosives leave to the game (rules.BombHooks).
+class BombHooks extends RefCounted:
+	## A bomb's explosion window opens (0x40F730): true if the animations were turned off.
+	func start() -> bool:
+		return false
+
+	## One hex's explosion is animated (0x417410): true if the player skipped it.
+	func explosion(x: int, y: int) -> bool:
+		return false
+
+	## A mine's explosion (0x473330).
+	func mine_blast(x: int, y: int) -> void:
+		pass
+
+	## The mission's bomb hook (table 0x51F158) for entry i: 0 or an abort code.
+	func bomb_hook(i: int) -> int:
+		return 0
+
+
+## The end of the explosion animation 0x417410 (unless option bit 0x10): a unit at
+## condition 0 on the hex has the hex emptied.
+static func explosion_clear(w: Pd2World, x: int, y: int, options := 0) -> void:
+	if options & 0x10:
+		return
+	var o := w.O[x + 72 * y] - 1
+	if o != -1 and w.ub(o, 0xD) == 0:
+		Action.clear_hex(w, x, y)
+
+
+## 0x480280: the 15 timed explosives count down; one at 0 goes off over its hex and the
+## six around it (rules.timed_explosives). options: DS:0x551D29.
+static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = null, options := 0) -> int:
+	if hooks == null:
+		hooks = BombHooks.new()
+	var easy := options & 2 != 0
+	var skip := false
+	var b := w.bombs
+	for i in 15:
+		var x := W.s8(b[4 * i])
+		var y := W.s8(b[4 * i + 1])
+		if x == -1 or not w.on_map(x, y) or W.s8(b[4 * i + 2]) < 1:
+			if x == 0 or x > 0x47:
+				b[4 * i] = 0xFF
+		else:
+			b[4 * i + 2] = (b[4 * i + 2] - 1) & 0xFF
+		if not (w.on_map(x, y) and b[4 * i + 2] == 0):
+			continue
+		if not skip:
+			skip = hooks.start()
+		var hx := x
+		var hy := y
+		for j in 7:
+			if w.on_map(hx, hy):
+				if not skip:
+					skip = hooks.explosion(hx, hy)
+					explosion_clear(w, hx, hy, options)
+				var o := w.O[hx + 72 * hy] - 1
+				if o != -1:
+					var dmg := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+					if dmg and Fire.apply_hit(w, rng, o, dmg, -1, 12, easy) == "destroyed":
+						Action.destroy(w, o)
+				if not w.campaign and Action.mine_at(w, hx, hy):
+					if not skip:
+						hooks.mine_blast(hx, hy)
+						explosion_clear(w, hx, hy, options)
+					w.F[hx + 72 * hy] &= 0x3F
+					if o != -1 and w.active(o) and w.unit_class(o) < 2:
+						var dmg2 := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+						if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
+							Action.destroy(w, o)
+			if j < 6:
+				var d: Vector2i = Move.NEIGHBOURS[y & 1][j]
+				hx = x + d.x
+				hy = y + d.y
+		if b[4 * i + 3] != 0xFF:
+			var res := hooks.bomb_hook(i)
+			if res in [0x10000, 0x20000, 0x40000]:
+				w.bombs = b
+				return res
+		b[4 * i] = 0xFF
+	w.bombs = b
+	return 0

@@ -637,7 +637,8 @@ variable), so it is never used for moving.
 | Melee | the step cost + 2 (§5.2) | the "消費ＡＰは%3dです" prompt |
 | Carry / release | 8 (4 with engineering) / 2 | `cmd_search` (0x426B10); the manual |
 | Clear a mine | 4 | messages 0x1A3, 0x1C9 |
-| Conceal, lay mines, throw | shown in their prompts; not yet decoded | `cmd_conceal` (0x426C00), 0x428D80, 0x46A6D0 |
+| Use an item (throw, place a sensor) | the round's ammo +7 low 5 bits (§5.16) |
+| Conceal, lay mines | shown in their prompts; not yet decoded | `cmd_conceal` (0x426C00), 0x428D80, 0x46A6D0 |
 
 Each shot also uses one round from the slot's pocket. Launcher +8 bits 5–7 are
 the launcher **kind** (2 = missile, which triggers interception), and launcher
@@ -828,12 +829,12 @@ runs in this order. `phase` is DS:0x50DDC8: 0 = player, 3 = enemy.
 
 | Step | Routine |
 |---|---|
-| airdrop approaches | 0x44AEA0 |
+| airdrop approaches (§5.17) | 0x44AEA0 |
 | the player side's fire‑support strikes (§5.13) | `strike_executor` (0x4E37A0(0)) |
 | the player side's strike marks again (as `refresh_strikes`) | 0x483ED0(0) |
 | reinforcements enter or leave the map ("進入開始!!", §5.14) | 0x44F2E0 |
-| timed recon points rescan their area, then count down | 0x480910, table DS:0x50AC58 |
-| timed explosives (bombs set with a fuse) go off | 0x480280, table DS:0x50AC1C |
+| sensors rescan their area, then count down (§5.16) | 0x480910, table DS:0x50AC58 |
+| timed explosives (bombs set with a fuse) go off (§5.15) | 0x480280, table DS:0x50AC1C |
 | every unit's "has reacted" flag is cleared | `clear_reacted_all` (0x4361A0) |
 | the view centres on the first player unit | 0x436360 |
 
@@ -1994,6 +1995,158 @@ It runs for **type‑6 groups** (+0x21 high nibble 6) among groups 0–19 that a
   not move. The same holds for the strikers' flight (§5.13).
 - An edge hex on row 72 makes the game read and write the byte past the occupancy layer.
   The port skips that byte.
+
+### 5.15 Timed explosives: Emulated
+
+At the turn start, after the reinforcements, the 15 timed explosives (DS:0x50AC1C: x, y,
+fuse, hook flag) are run in order (0x480280; `rules.timed_explosives`,
+`Turn.timed_explosives`). Emulated whole: 1,500 / 1,500 random states (`verify_bombs`).
+The explosion animation is stubbed by its state effect, below.
+
+**Countdown:**
+- An entry on the map with a fuse of 1 or more counts down by one.
+- Any other entry (none, off the map, or a fuse below 1) is cleared (x = 0xFF) when its x
+  is 0 or above 71.
+
+**Going off:** an entry on the map whose fuse is now 0 goes off over its hex and the six
+around it, in direction order 0–5. On each hex that is on the map:
+1. **Animation:** the explosion is animated (0x417410), unless the player has skipped the
+   animations this turn. Its end empties the hex of a unit at condition 0 (`clear_hex`).
+   Option bit 0x10 turns that animation, and so the emptying, off.
+2. **Damage:** the unit there, read after that, takes the no‑shooter damage (round 12,
+   mode 4). The hit is applied when it does damage.
+3. **Mines** (DASH only): a mine on the hex goes off. It is animated, with the same
+   emptying, then cleared. An active ground unit read before takes that damage again,
+   applied even at 0.
+
+**Afterwards:** unless the entry's fourth byte is 0xFF, the mission's bomb hook runs (table
+0x51F158 by mission number, with the entry's index; mission 1's, 0x49A6F0, does nothing).
+Then the entry is cleared.
+
+### 5.16 Items and sensors: Emulated
+
+**Using an item.** A pocket round with ammo +8 bit 5 set can be used from the machine status
+window (0x4279F0, the pocket menu 0x427FF0). It costs the round's AP (ammo +7, low 5 bits).
+
+**Refusals:**
+- both manipulators broken (0x1B9);
+- not enough AP;
+- a broken pocket (0x1B8, checked in 0x4286D0).
+
+**Target:** the hex must be on the target map, `fire_target_map(u, 0x80 + pocket)`: the
+spiral of the round's range (ammo +3), hexes with a clear arc.
+
+**The item command** (0x4ECC60; `rules.item_command`, `Item.command`) then runs. Emulated
+whole after the click: 500 / 500 random states (`verify_items`).
+
+**A sensor round** (warhead 9):
+- It goes into the sensor list (DS:0x50AC58, 42 × 4 B: x, y, turns, round), with 4 turns,
+  in the first free entry. Free means no x, or x / y outside the map's rows and columns.
+- The game's loop then goes on from entry 22, so every free entry from 22 on is filled
+  too: a quirk.
+- The sensor searches at once, and each computer‑side unit it spots shows "敵ユニットを発見"
+  (0x1C7).
+
+**Any other round:**
+- **Question:** 0x1CB ("投擲ユニットにも損害を与える恐れがあります") when it is warhead 1 and
+  the target lies within its radius. Otherwise 0x1CC, with the AP needed, the AP left and
+  the distance.
+- **Area:** the radius is 0 for a mine round and 1 otherwise; the area is the strike area
+  (§5.13).
+- **The throw** (0x4ED380), per hex:
+  - smoke (warhead 8) lays smoke;
+  - an empty hex in DASH takes a mine of the thrower's side from a mine round, even on a
+    mine;
+  - a unit there takes the hit roll, random(100) < 98, which never hits an aircraft. A
+    miss gives it DEFENCE +1;
+  - a hit gives a kill credit if it kills, then the item damage (0x4EDA00) and the item
+    hit (0x4EDEB0);
+  - DASH mines go off as in the fire routine (§4), hitting a unit of class below 3.
+- **No experience:** there is no ATTACK growth and no shot count.
+- **Item damage:** the fire damage formula with these differences:
+  - the damage class table differs at armour 1, warhead 13 (200);
+  - the attack comes from the thrower's class (ATTACK and the round's ground attack, or
+    ANTI AIRCRAFT / 2 and its air attack);
+  - the cover divisor applies in every class, with the cover doubled when the target is
+    *spotted*.
+- **Item hit:** one part‑damage roll, random(12). Each part steps from intact to damaged to
+  broken, with no 50 % rolls. A thrower destroyed by its own throw is removed after the
+  hexes.
+
+**After use:** the pocket loses a round. An empty pocket is cleared (`clear_pocket`).
+
+**Sensors search as "unit −1"** (0x4806A0):
+- **Search map:** the round's recon range (+4) and penetration (+5) around the sensor.
+- **View:** the map is marked in the view of unit −1's side. Unit −1's record is the 55
+  bytes before the unit table, in the combat records.
+- **Spotting** (0x47F150, mode 8): units on hexes seen, not of that side, not armour 3, are
+  spotted. So are aircraft that unit −1's own recon sees (its record's recon range, from
+  its position; `sees_unit(o, −1)` has the viewer second). That position is 6 levels
+  higher when unit −1's machine is airborne.
+
+**Every recon pass** (0x483490, stage 0) ends with each sensor on the map with turns left
+searching. **At the turn start** (0x480910) each such sensor counts down and searches. One
+that is off the map or spent is dropped.
+
+### 5.17 Airdrops: Emulated
+
+First at the turn start (0x44AEA0; `rules.airdrop`, `Drop.airdrop`): the groups positioned
+on the called point with +2 bits 4–5 = 2 and 6–7 = 0, by type (+0x21 >> 4). Emulated whole
+with the player's clicks, menus and confirmations scripted: 23 / 23 random states
+(`verify_airdrop`; melee and the reaction loop scripted).
+
+**Type 0, transports** (+2 & 0x0E = 8). Each member in turn:
+1. **Load:** it carries the previous group's members that are not destroyed or deployed
+   (flags & 9). Each takes its machine's size (+0xA) of the transport machine's capacity
+   (+9). Once a member does not fit, no later one does. With no passenger left, the
+   transports stop.
+2. **Entry** (0x44AC10): random hexes on its side (+0x1F) — the edge hex it is set on and
+   the first hex. It shows "%s %s降下アプローチ開始！" (0x1F7: the carried group's name and
+   call sign) and gets its full AP.
+3. **The player flies it** (0x44BAC0):
+   - every reaction flag is cleared; any reaction fire on the first step (mode 2,
+     unspotted) ends its turn;
+   - while it has AP, is not destroyed and the drop menu has not finished: a click on a
+     neighbour steps there (0x44C1B0, 1 AP, spotted as reinforcements are, reaction fire
+     with flag 10; shot down, its passengers drop where it was); a click elsewhere asks
+     0x1DC and flies the line (0x44D0D0); a click on the transport opens the drop menu
+     (ui_map_click mode 4 takes only marked hexes — the move command's and the
+     transport's — and returns the hex's occupant, which is what is compared);
+   - out of AP: "空域離脱!! 各機降下開始!!" (0x1F5) and everyone drops around it; otherwise
+     "空域離脱!!" (0x1F6). It leaves from the last clicked hex: its hex emptied, the unit it
+     displaced (DS:0x514D18) back, x = y = −1.
+4. **Lost:** a transport destroyed or at condition 0 has its slot run again.
+5. **Afterwards:** the carried group's +2 high nibble becomes 0xA and its position this
+   group's; this group is retargeted back and +2 | 0x30.
+
+**The drop menu** (0x44C7F0):
+- **One by one:** a passenger, then a hex. Hexes within 2, passable, 30 or more high, free
+  or holding a ground enemy, are marked; none: 0x1F0. The click is taken wherever it is,
+  then confirmed (0x1F4). The menu ends when no passenger is left.
+- **All:** in DASH confirmed first (0x213). Everyone drops around the transport.
+- When done, the transport leaves.
+
+**A drop** (0x44B300):
+- **Hex check:** the hex is refused when it holds a unit of the dropper's side or an
+  aircraft, the dropper's category cannot cross it, it is lower than 30, or (but for
+  set‑downs, mode 2) on random(100) < 30. The first acceptable hex of growing spirals
+  (radius 1–71) is taken instead. None: 0x1F1 (but for set‑downs) and the unit is
+  destroyed.
+- **On an enemy:** 0x1BB, then melee again while both stand. The defender falling lets it
+  land; the attacker falling, or both, ends it.
+- **Landing:** a random facing; a jump (mode 0) by a non‑ace damages a leg on
+  random(100) > 89 (0x1F2). Then it searches (step_search, mode 0; enemies found are
+  announced) and is deployed (flags | 0x0C).
+- **Dropping everyone** (0x44B960): for each passenger, x and y come from two separate
+  picks among the radius‑6 spiral (its centre excluded). So a unit can be set on
+  (70, odd row), off the map, where the game's search reads past its window.
+
+**Type 1** (+2 & 0x0E = 8): the previous group's members drop around the last of them on
+the map (mode 1). Its +2 high nibble becomes 0xA and its position the called point; this
+group is retargeted.
+
+**Types 7 and 8:** their members on the map are set down where they are (mode 2); the group
+takes the called point and +2 high nibble 0xA.
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

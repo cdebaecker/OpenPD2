@@ -862,7 +862,7 @@ static func player_move(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mod
 
 ## 0x46ED80: empty a hex's occupancy (on the map, or on its edge rows / columns).
 static func clear_hex(w: Pd2World, x: int, y: int) -> void:
-	if w.on_map(x, y) or x == 0 or x == 71 or y == 0 or y == 71 or (y & 1 and x == 70):
+	if (w.on_map(x, y) or x == 0 or x == 71 or y == 0 or y == 71 or (y & 1 and x == 70)) 			and x + MAP * y >= 0 and x + MAP * y < MAP * MAP:   # (row 72: the game writes past the layer)
 		w.O[x + MAP * y] = 0
 
 
