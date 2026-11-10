@@ -36,6 +36,7 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: A
 		var data: PackedByteArray = save[1]
 		var put := func(addr: int, n: int) -> PackedByteArray:
 			return data.slice(addr - base, addr - base + n)
+		w.stock = put.call(0x506654, 0x506734 - 0x506654)
 		w.crew = put.call(0x506734, 64 * 16)
 		w.combat = put.call(0x506B39, 0x506C93 - 0x506B39)   # the records and the 8 B after
 		w.units = put.call(0x506C93, 255 * 55)

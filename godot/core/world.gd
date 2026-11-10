@@ -55,6 +55,7 @@ var grid := PackedByteArray()        # *DS:0x50DD40: the flight engine's 16 x 16
 var radar := 0                       # DS:0x50DD44: 1 while the radar map is open
 var static_mem := {}                 # exe data the code may read past a table: address -> bytes
 var scenario := PackedByteArray()    # DS:0x50DE41: the mission's SCN_MIS record (0x1C6 B, 0x4DD2F0)
+var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, launchers, rounds)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
@@ -119,6 +120,7 @@ func duplicate_world() -> Pd2World:
 	c.radar = radar
 	c.static_mem = static_mem
 	c.scenario = scenario
+	c.stock = stock.duplicate()
 	return c
 
 
@@ -241,6 +243,8 @@ func set_layer(L: String, x: int, y: int, v: int) -> void:
 ## groups 0x50A35C, timed explosives 0x50AC1C, sensors 0x50AC58, the DS block 0x50AD00,
 ## the record set 0x50ADF5 (machines, launchers, ammunition); else static_mem or 0.
 func mem8(addr: int) -> int:
+	if addr >= 0x506654 and addr < 0x506654 + stock.size():
+		return stock[addr - 0x506654]
 	if addr >= 0x506734 and addr < 0x506B34:
 		return crew[addr - 0x506734]
 	if addr >= 0x506B39 and addr < 0x506C93:
@@ -272,7 +276,9 @@ func mem8(addr: int) -> int:
 ## as rules.ds_write); elsewhere it sets fault.
 func mem_write(addr: int, v: int) -> void:
 	v &= 0xFF
-	if addr >= 0x506734 and addr < 0x506B34:
+	if addr >= 0x506654 and addr < 0x506654 + stock.size():
+		stock[addr - 0x506654] = v
+	elif addr >= 0x506734 and addr < 0x506B34:
 		crew[addr - 0x506734] = v
 	elif addr >= 0x506B39 and addr < 0x506C93 and addr - 0x506B39 < combat.size():
 		combat[addr - 0x506B39] = v

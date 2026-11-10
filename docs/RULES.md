@@ -1800,7 +1800,8 @@ buttons (`verify_sortie`).
   0, 2, …, 10 and 12–19); a free pilot joins the selected group through 0x454690 (§5.10;
   its refusals show MES 0x1D8, 0x1D7, 0x1D6, 0x1D5, 0x1D4, 0x1D3, 0x1DB, 0x1DC for codes
   1–8); a member leaves through group_drop_player (flag bit 2 cleared; not listed: 0x1CE).
-  The equipment screen (0x454E60) and the lists' sort (0x462390) are not ported.
+  Its member button 1 opens the armament screen (§5.12); the lists' sort (0x462390) is not
+  ported.
 - **Start** — the checks, in order:
   1. PD2: crew 1 (Yao) must be in a group (else MES 0x21);
   2. each ground group 0, 2, …, 10 with +2 and +3 bit 0: its pilots' transport capacity
@@ -1833,6 +1834,39 @@ buttons (`verify_sortie`).
 The combat records (DS:0x506B39) are read and written by index (crew +15): an index of
 26 or more runs past the 26 records into the 8 bytes before the unit table and on into
 unit 0, as the game does (the save holds such crews).
+
+### 5.12 The armament screen: Emulated
+
+Opened from the sortie screen for one player unit (0x454E60, "busou_g?.pac"; emulated
+whole, 600 / 600 runs through its buttons and lists, `verify_equipment`). Everything
+it fits comes from the base's **stock**, kept in the save: one count per machine
+(DS:0x506654), launcher (DS:0x506674) and round (DS:0x5066D4). Fitting takes one, removing
+gives it back:
+- a pocket's round (0x457320); a slot's launcher with the pocket it loads from (0x457250);
+  everything (0x457130): the six slots, pockets 0–5 and the machine (machine = −1).
+- **Machine** (button 2): the list (0x457870) offers, for a ground crew (crew +3 = 0),
+  machines of class 0–1 and, for an air crew, class 2 — with machine +0x1C = 0 and +0x1E ≤
+  DS:0x50AD92 (available by now), each with its stock; one out of stock is refused (MES
+  0x1B0). The pick first returns everything to stock, then takes the machine.
+- **A slot** (buttons 6–11): (launcher, round) pairs (0x4582D0) — launchers whose mask
+  (+0, 16 bits) meets the machine's slot mask (machine +0xB + 2 × slot), with +0xE = 0 and
+  +0x10 ≤ DS:0x50AD92, and each of its rounds (+0xA..+0xC) available by now; "remove"
+  first when the slot is filled. Out of stock: 0x1B3 (launcher), 0x1B4 (round). Slot s
+  loads from pocket s + 6, filled to the round's capacity (+0, 6 bits).
+- **A pocket** (0–5, up to the machine's +0x17): remove, a pocket item (rounds with +9 = 0,
+  +8 bit 4, available, and +8 bit 5 or a kind 10–13) or a spare magazine for a fitted
+  launcher with +9 bit 3 (its rounds). An empty list notes 0x1B6 / 0x1B9 — and then the
+  pocket is emptied, the picker's −2 being read as "remove".
+- **Remove all** (button 3, 0x1A3) and **undo** (button 5, after a machine change or a
+  removal: 0x1A5) — undo frees everything, restores the unit as it was on opening, and
+  takes its machine, launchers and pockets 0–5 from the stock again (not pockets 6–11:
+  the game's slip).
+- **Close** (button 4): in a group, a unit left without a machine (0x1DA) or whose machine
+  no longer fits (class changed; or an air group with two pilots and a different machine
+  unless both are 7 / 12; class 2–3 in a group above 10, class 4–5 below 12; 0x1A4) is
+  asked to leave it (group_drop_player, flag bit 2 cleared).
+Not ported: the list sort buttons, the right‑click menu (0x45A700, unit templates with
+reg_unit.dat) and a Ctrl + Alt debug key.
 
 ---
 

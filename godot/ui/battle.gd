@@ -343,6 +343,10 @@ func _sortie_draw(confirm := false) -> void:
 		var lbl := Label.new()
 		lbl.text = unit_name(k)
 		row.add_child(lbl)
+		var arm := Button.new()
+		arm.text = ui("UI_ARM")
+		arm.pressed.connect(_equip_begin.bind(k))
+		row.add_child(arm)
 		var d := Button.new()
 		d.text = ui("UI_DROP")
 		d.pressed.connect(func():
@@ -362,6 +366,10 @@ func _sortie_draw(confirm := false) -> void:
 		var lbl := Label.new()
 		lbl.text = unit_name(c)
 		row.add_child(lbl)
+		var arm := Button.new()
+		arm.text = ui("UI_ARM")
+		arm.pressed.connect(_equip_begin.bind(c))
+		row.add_child(arm)
 		var j := Button.new()
 		j.text = ui("UI_JOIN")
 		j.pressed.connect(func():
@@ -401,6 +409,199 @@ func _sortie_draw(confirm := false) -> void:
 			var r := Campaign.sortie_check(w, sortie_hooks)
 			_sortie_draw(r[0] == "start"))
 		buttons.add_child(st)
+	hud_layer.add_child(sortie_panel)
+
+
+# --- the armament screen (0x454E60) ---------------------------------------------------
+
+class EquipDriveHooks extends Equipment.Hooks:
+	## Answers the screen's lists and questions from a queue; past its end it records the
+	## request and cancels (lists -2, questions 0): a dry run finds the next question.
+	var answers: Array
+	var request: Variant = null
+	var notes: Array = []
+
+	func _init(a: Array) -> void:
+		answers = a.duplicate()
+
+	func pick(kind: String, entries: Array) -> int:
+		if not answers.is_empty():
+			return answers.pop_front()
+		if request == null:
+			request = ["pick", kind, entries]
+		return -2
+
+	func ask(msg: int) -> int:
+		if not answers.is_empty():
+			return answers.pop_front()
+		if request == null:
+			request = ["ask", msg]
+		return 0
+
+	func note(msg: int) -> int:
+		notes.append(msg)
+		return 0
+
+
+var equip_sess: Dictionary = {}
+var equip_button: Variant = null     # the button being answered
+var equip_answers: Array = []
+var equip_request: Variant = null
+var equip_text := ""
+const PICK_OFFSET := {"machine": 6, "slot": 0xD, "item": 7, "pocket": 0}
+
+
+func _equip_begin(k: int) -> void:
+	equip_sess = Equipment.open(w, k)
+	equip_button = null
+	equip_text = ""
+	_equip_draw()
+
+
+func _equip_press(b: Variant) -> void:
+	equip_button = b
+	equip_answers = []
+	equip_text = ""
+	_equip_advance()
+
+
+func _equip_answer(a: int) -> void:
+	equip_answers.append(a)
+	_equip_advance()
+
+
+func _equip_advance() -> void:
+	## dry-run the button with the answers so far; a new question shows, else it runs
+	var dry := w.duplicate_world()
+	var ds := equip_sess.duplicate(true)
+	var dh := EquipDriveHooks.new(equip_answers)
+	Equipment.step(dry, ds, dh, equip_button)
+	equip_request = dh.request
+	if equip_request == null:
+		var hk := EquipDriveHooks.new(equip_answers)
+		Equipment.step(w, equip_sess, hk, equip_button)
+		equip_button = null
+		var lines := []
+		for n in hk.notes:
+			lines.append(mes(n))
+		equip_text = "\n".join(lines)
+		if equip_sess.done:
+			equip_sess = {}
+			_sortie_draw()
+			return
+	else:
+		var lines := []
+		for n in dh.notes:
+			lines.append(mes(n))
+		equip_text = "\n".join(lines)
+	_equip_draw()
+
+
+func _name_of(table: String, id: int) -> String:
+	var t: Dictionary = GameData.tables(campaign).get(table, {})
+	return str(t.get(str(id), "#%d" % id))
+
+
+func _equip_entry_text(kind: String, e: Variant) -> String:
+	if e is String:
+		return ui("UI_REMOVE") if e == "remove" else ui("UI_ITEM")
+	match kind:
+		"machine":
+			var mn: Array = names.machine
+			return "%s (%s)" % [mn[e] if e < mn.size() else "#%d" % e, ui("UI_STOCK") % w.mem8(Equipment.STOCK_MACH + e)]
+		"slot":
+			return "%s / %s (%s, %s)" % [_name_of("launcher_names", e[0]), _name_of("ammo_names", e[1]),
+				ui("UI_STOCK") % w.mem8(Equipment.STOCK_LAUN + e[0]), ui("UI_STOCK") % w.mem8(Equipment.STOCK_AMMO + e[1])]
+		"pocket":
+			return ui("UI_MAGAZINE") % _name_of("launcher_names", Flight.s8(e[1]))
+		_:
+			return "%s (%s)" % [_name_of("ammo_names", e), ui("UI_STOCK") % w.mem8(Equipment.STOCK_AMMO + e)]
+
+
+func _equip_draw() -> void:
+	if sortie_panel:
+		sortie_panel.queue_free()
+	sortie_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	sortie_panel.theme = theme
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
+	bg.set_content_margin_all(8)
+	sortie_panel.add_theme_stylebox_override("panel", bg)
+	sortie_panel.position = Vector2(16, 16)
+	var box := VBoxContainer.new()
+	sortie_panel.add_child(box)
+	var k: int = equip_sess.k
+	var title := Label.new()
+	title.text = "%s: %s" % [ui("UI_ARMAMENT"), unit_name(k)]
+	box.add_child(title)
+	var m := Flight.s8(w.ub(k, 0xC))
+	var rows := VBoxContainer.new()
+	box.add_child(rows)
+	var add_row := func(label: String, btn: String, b: Variant) -> void:
+		var row := HBoxContainer.new()
+		var bt := Button.new()
+		bt.text = btn
+		bt.disabled = equip_request != null
+		bt.pressed.connect(_equip_press.bind(b))
+		row.add_child(bt)
+		var l := Label.new()
+		l.text = label
+		row.add_child(l)
+		rows.add_child(row)
+	var mn: Array = names.machine
+	add_row.call(mn[m] if m >= 0 and m < mn.size() else ui("UI_EMPTY"), ui("UI_MACHINE"), "machine")
+	if m >= 0:
+		for s in 6:
+			var lid := Flight.s8(w.ub(k, 0xF + 2 * s))
+			var txt := ui("UI_EMPTY")
+			if lid != -1:
+				var p := w.ub(k, 0x10 + 2 * s) & 0xF
+				var a := Flight.s8(w.ub(k, 0x1B + 2 * p))
+				txt = "%s / %s" % [_name_of("launcher_names", lid), _name_of("ammo_names", a) if a != -1 else "-"]
+			add_row.call(txt, ui("UI_SLOT") % (s + 1), ["slot", s])
+		for p in mini(w.mem8(Equipment.MACHS + 31 * m + 0x17), 6):
+			var a := Flight.s8(w.ub(k, 0x1B + 2 * p))
+			add_row.call(_name_of("ammo_names", a) if a != -1 else ui("UI_EMPTY"), ui("UI_POCKET") % (p + 1), ["pocket", p])
+	if equip_text != "":
+		var msg := Label.new()
+		msg.text = equip_text
+		box.add_child(msg)
+	if equip_request != null:
+		var q := VBoxContainer.new()
+		box.add_child(q)
+		if equip_request[0] == "ask":
+			var l := Label.new()
+			l.text = mes(equip_request[1])
+			q.add_child(l)
+			var hb := HBoxContainer.new()
+			q.add_child(hb)
+			for yes in [true, false]:
+				var bt := Button.new()
+				bt.text = ui("UI_YES") if yes else ui("UI_NO")
+				bt.pressed.connect(_equip_answer.bind(1 if yes else 0))
+				hb.add_child(bt)
+		else:
+			var kind: String = equip_request[1]
+			var ents: Array = equip_request[2]
+			for j in ents.size():
+				var bt := Button.new()
+				bt.text = _equip_entry_text(kind, ents[j])
+				bt.pressed.connect(_equip_answer.bind(PICK_OFFSET[kind] + j))
+				q.add_child(bt)
+			var cb := Button.new()
+			cb.text = ui("UI_CANCEL")
+			cb.pressed.connect(_equip_answer.bind(-2))
+			q.add_child(cb)
+	var buttons := HBoxContainer.new()
+	box.add_child(buttons)
+	for pair in [["UI_CLEAR", "clear"], ["UI_UNDO", "undo"], ["UI_CLOSE", "close"]]:
+		var bt := Button.new()
+		bt.text = ui(pair[0])
+		bt.disabled = equip_request != null
+		bt.pressed.connect(_equip_press.bind(pair[1]))
+		buttons.add_child(bt)
 	hud_layer.add_child(sortie_panel)
 
 
