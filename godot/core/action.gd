@@ -259,7 +259,7 @@ static func move_unit(w: Pd2World, u: int, x: int, y: int) -> int:
 	var op := w.pos(u)
 	if op.x == x and op.y == y:
 		return -1
-	if w.on_map(op.x, op.y) or op.x == 0 or op.x == 71 or op.y == 0 or op.y == 71 or (op.y & 1 and op.x == 70):
+	if (w.on_map(op.x, op.y) or op.x == 0 or op.x == 71 or op.y == 0 or op.y == 71 or (op.y & 1 and op.x == 70)) 			and op.x + MAP * op.y >= 0 and op.x + MAP * op.y < MAP * MAP:   # (a striker's entry row 72)
 		w.O[op.x + MAP * op.y] = 0
 	var prev := w.O[x + MAP * y]
 	w.O[x + MAP * y] = (u + 1) & 0xFF

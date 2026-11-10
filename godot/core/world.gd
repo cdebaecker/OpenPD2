@@ -57,6 +57,7 @@ var static_mem := {}                 # exe data the code may read past a table: 
 var scenario := PackedByteArray()    # DS:0x50DE41: the mission's SCN_MIS record (0x1C6 B, 0x4DD2F0)
 var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, launchers, rounds)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
+var strike_saved := [-1, 0, 0]    # DS:0x51F3B4 / 0x5243B0 / 0x5243B4: the unit a striker flying in displaced, its hex
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
 
@@ -108,6 +109,7 @@ func duplicate_world() -> Pd2World:
 	c.groups = groups.duplicate()
 	c.combat = combat.duplicate()
 	c.fire_point = fire_point
+	c.strike_saved = strike_saved.duplicate()
 	c.ds = ds.duplicate()
 	c.mode_663a = mode_663a
 	c.phase = phase

@@ -2,7 +2,7 @@ extends Node2D
 ## The tactical battle, sandbox edition: one mission's map and enemy force (INIT), a
 ## stand-in squad (Mission.sandbox_squad), the player's commands and the computer's
 ## whole turn, all through the ported rules in core/. What is not ported yet (briefing,
-## event scripts, the strike executor, magazine swaps) is replaced by the simplest
+## event scripts, magazine swaps) is replaced by the simplest
 ## stand-in and listed in engine/README.md.
 
 const TILE_W := 48
@@ -1116,8 +1116,10 @@ func _view_reset(side: int) -> void:
 func _turn_start() -> void:
 	## mission_loop's LAB_00436b39 (w.phase is 3 here): smoke clears (0x483B50), spotted
 	## flags (0x437440), the computer's view and recon pass, the AI memory of spotted
-	## DoLLS (0x480C60); then the player's phase, view and recon pass. (The date window
-	## 0x4361C0, the camera 0x436360 and 0x4F3DA0 are display.)
+	## DoLLS (0x480C60); then the player's phase, view and recon pass, and the player's
+	## fire-support strikes (0x4E37A0(0)). (The date window 0x4361C0, the camera 0x436360
+	## and 0x4F3DA0 are display; the airdrop approaches 0x44AEA0 and 0x483ED0 are not
+	## ported.)
 	Turn.smoke_clears(w, rng)
 	Turn.clear_spotted_all(w, options)
 	Turn.clear_view(w, 3)
@@ -1126,12 +1128,13 @@ func _turn_start() -> void:
 	w.phase = 0
 	_view_reset(0)
 	Turn.recon_pass(w, 0)
+	_strikes(0)
 
 
 func _end_turn() -> void:
-	## mission_loop (0x436690) after the player's commands, call by call (the strike executor
-	## 0x4E37A0 is not ported). It runs on a worker thread: the computer's turn and the
-	## mission script may ask the player (reactions, interception, escapes).
+	## mission_loop (0x436690) after the player's commands, call by call. It runs on a
+	## worker thread: the computer's turn, its strikes and the mission script may ask the
+	## player (reactions, interception, counter-battery, escapes).
 	if busy or mission_over:
 		return
 	busy = true
@@ -1156,6 +1159,9 @@ func _enemy_phase() -> Array:
 	Turn.refill_ap(w, Turn.PHASE_ENEMY)
 	Turn.clear_view(w, 3)
 	Turn.recon_pass(w, 3)
+	var sres := _strikes(3)                # 0x4E37A0(3)
+	if sres in Ai.AI_ABORT:
+		return [sres, []]
 	Turn.memory_forget(w)
 	Turn.clear_reacted_all(w)
 	hooks.flag = 0
@@ -1251,6 +1257,70 @@ class BattleFlightHooks extends Flight.Hooks:
 
 	func use_weapon(a: int, p: int) -> bool:
 		return battle.ask_prompt(battle.msg(0x1A7), true)
+
+
+class BattleStrikeHooks extends Strike.Hooks:
+	## The strike executor (0x4E37A0) in the battle: a striker flying in draws the reaction
+	## fire of the live hooks (flag 10), the radio goes through the flight engine's, the
+	## lines and questions to the message log and the question box. The pickers (0x4E3230 /
+	## 0x4E0450) are a plain choice list; their columns are not drawn yet.
+	var battle
+	var w: Pd2World
+	var rng: Pd2Random
+
+	func react(u: int, cands: Array) -> int:
+		var h = battle.hooks
+		var f: int = h.flag
+		h.flag = 10
+		var res: int = h.react(u)
+		h.flag = f
+		return res
+
+	func radio(kind: int, g: int) -> int:
+		return Flight.radio(w, rng, kind, g, battle.flight_hooks)
+
+	func line(msg: int, args: Array = []) -> void:
+		battle.say_msg(msg, battle.radio_args(args))
+
+	func ask(msg: int) -> int:
+		return 1 if battle.ask_box(battle.msg(msg), false) else 0
+
+	func cb_pick(units: Array) -> int:
+		var opts := []
+		for k in units:
+			opts.append([battle.unit_name(k), k])
+		opts.append([battle.ui("UI_CANCEL"), -1])
+		return battle.ask_choice(battle.ui("UI_PICK_SUPPORT"), opts, -1)
+
+	func cb_slot(u: int, g: int) -> int:
+		var opts := []
+		for s in 6:
+			if w.launcher_id(u, s) != -1:
+				opts.append([battle.ui("UI_SLOT_ROUNDS") % [s + 1, w.slot_count(u, s)], s])
+		opts.append([battle.ui("UI_CANCEL"), -2])
+		return battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
+
+	func mine_blast(x: int, y: int) -> void:
+		battle.hooks.mine_blast(x, y)
+
+	func intercept_choice(t: int, best: int) -> int:
+		return battle.hooks.intercept_choice(t, best)
+
+
+func _strikes(side: int) -> int:
+	## strike_executor (0x4E37A0, Strike.executor): the side's fire-support orders
+	var sh := BattleStrikeHooks.new()
+	sh.battle = self
+	sh.w = w
+	sh.rng = rng
+	var before := []
+	for k in w.n_units:
+		before.append(w.ub(k, 0) & 1)
+	var res := Strike.executor(w, rng, side, sh, options & 2 != 0)
+	for k in w.n_units:
+		if w.ub(k, 0) & 1 and not before[k]:
+			say("[color=orange]%s destroyed[/color]" % unit_name(k))
+	return res
 
 
 func radio_args(args: Array) -> Array:

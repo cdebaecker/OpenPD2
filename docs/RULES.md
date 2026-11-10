@@ -829,7 +829,7 @@ runs in this order. `phase` is DS:0x50DDC8: 0 = player, 3 = enemy.
 | Step | Routine |
 |---|---|
 | airdrop approaches | 0x44AEA0 |
-| air units fly their routes | `strike_executor` (0x4E37A0) |
+| the player side's fire‑support strikes (§5.13) | `strike_executor` (0x4E37A0(0)) |
 | reinforcements enter the map ("進入開始!!") | 0x44F2E0 |
 | timed recon points rescan their area, then count down | 0x480910, table DS:0x50AC58 |
 | timed explosives (bombs set with a fuse) go off | 0x480280, table DS:0x50AC1C |
@@ -849,7 +849,8 @@ until the turn ends. After every command the mission's state check runs
 5. the turn recon pass for the player side (`recon_pass`, 0x483490);
 6. phase := 3; upkeep and AP refill for the enemy side;
 7. the recon pass for the enemy side;
-8. enemy air units, then "has reacted" cleared again;
+8. the enemy side's fire‑support strikes (`strike_executor` (0x4E37A0(3)), §5.13), the AI
+   memory aged, then "has reacted" cleared again;
 9. **the computer's units act** (`ai_turn`, 0x42A950, the generic AI in §5.8);
 10. enemy support fire;
 11. phase := 0; upkeep and AP refill for the player side;
@@ -1498,27 +1499,8 @@ react to an AI mover, the game opens a menu of candidates (`reaction_menu_list`,
 `ui_reaction_menu` (0x4730E0)) and a weapon picker (`ui_reaction_weapon_picker`, 0x4E7EE0). That is player input; each choice
 ends in this same shot.
 
-**Fire‑support strikes** (`strike_executor`, 0x4E37A0(side), not ported): the turn loop runs it for
-each side. It carries out the orders `ai_fire_support` leaves, from the
-decompilation:
-- **Type‑5 groups** (off‑map artillery):
-  - *Order 1:* fire the ordered slot at the target unit (+7 = 0xFF) or hex,
-    over its blast area (0x47E130), through a fire‑resolution twin 0x4E1A90
-    with its own hit / damage helpers (0x4DF3D0 / `support_damage` (0x4DF4B0)), then 0x4E2CF0.
-    The round is used and the order becomes 3.
-  - *Order 2:* direct damage 0x4E2300 to the target unit; destroyed if its
-    condition reaches 0.
-- **Type‑3 / 4 groups** (support that flies in):
-  - The unit is placed at the target for the strike (0x4E4A40 / 0x4E4560).
-    A unit displaced from that hex is saved in DS:0x51F3B4 / 0x5243B0, and the
-    striker is then removed (0x47FFA0).
-  - Order 2 becomes order 5. The player side sees messages 0x205–0x20B
-    (call signs at DS:0x50C7E5).
-- **Group update:** each group's +2 bits 6–7 and the members' orders are
-  reset once all of them have struck.
-
-To be ported directly in the Godot engine from the decompiled C, with the
-mission scripts.
+**Fire‑support strikes**: the orders above are carried out by the strike executor
+(`strike_executor`, 0x4E37A0), §5.13.
 
 **Movement steps** (`rules.ai_walk` 0x475AE0, `rules.ai_path` 0x474510): Emulated
 704 / 704 for a computer‑side mover, all result codes occurring. Inside whole
@@ -1870,6 +1852,96 @@ reg_unit.dat) and a Ctrl + Alt debug key.
 
 ---
 
+### 5.13 Fire‑support strikes: Emulated
+
+The strike executor (`strike_executor`, 0x4E37A0(side); `rules.strike_executor`,
+`Strike.executor`) carries out the support orders that `ai_fire_support` and the player's
+support calls leave on group members: +6 the order, +7 / +8 the aim (+7 = 0xFF: unit +8),
++0x35 the slot. mission_loop runs it for the computer (side 3) before the AI memory is aged,
+and for the player (side 0) at the turn start. Emulated whole: 1,500 / 1,500 random states
+for either side (`verify_strike`), with interception, apply‑hit and the game's own unit removal;
+the reaction loop, the radio, the questions and the pickers are scripted. Only members of the
+side (status side .. side + 2) that are not destroyed, in positioned groups (+0x16 ≠ 0xFF),
+act. A group is **held** when its +2 bits 4–5 are 2 and bits 6–7 are 2.
+
+1. **Off‑map artillery (type 5 groups):**
+   - *Order 1:* the slot fires at the aimed unit's hex, or over the aimed hex's strike area
+     (on the map only). The round is used and the other side answers (counter‑battery,
+     below). The order becomes 3.
+   - *Order 2* (a counter‑battery order): the round is used. An aimed unit that is not
+     destroyed, in a held group, takes the order‑2 damage. At 0, a player unit alone in its
+     group gets radio line 8, and it is destroyed. The other side answers too; order 3.
+2. **Support that flies in (type 3 / 4 groups):**
+   - *Order 1 at a unit:* if it is not destroyed and is spotted, the slot fires at its hex
+     ("ターゲットロックオン！", 0x206, on the player side) and a round is used; else "target
+     lost" (0x205). Order 3.
+   - *Order 1 at a hex on the map:* every reaction flag is cleared, and the striker flies in:
+     - **Entry side** (0x47E380): the side the fire point lies on, seen from the group's
+       +0x18 / +0x19.
+     - **Entry hex** (0x4E2A60): random rolls along that edge.
+     - **Flight** (0x4E4B00): it flies the line to the aim (0x480CD0), step by step
+       (0x4E4560, `move_unit`). Each step puts back the unit it displaced on its last hex
+       (DS:0x51F3B4, hex DS:0x5243B0 / 0x5243B4) and saves the new hex's occupant.
+     - **Reaction fire:** it is spotted at every step and draws reaction fire (flag 10).
+     - **End of the flight:** it stops within its slot's range of the aim.
+     - **Shot down:** the same member index runs again.
+     - **Otherwise:** it leaves the map where it is, the displaced unit comes back, a round
+       is used, "爆弾投下" (0x207, warhead 0) or "ロケット発射" (0x208, warhead 2) shows, and
+       the slot fires over the strike area. Order 3, also when the aim is off the map.
+   - *Order 2:* "%s 反撃砲撃実施中" (0x20B, the group's call sign) on the player side, a
+     round, and the order‑2 damage to the aimed unit with no other check. At 0, radio 8 for a
+     player unit alone in its group, then it is destroyed. Order 5.
+3. **Group update**, decided by the last member alive seen (any side):
+   - **Type 5 with bits 6–7 = 1:** a type‑5 group with a member of the side, +2 bits 4–5 = 2
+     and bits 6–7 = 1 has bits 6–7 cleared.
+   - **All struck:** a held group with a member that struck (order 3 or 5) and none still
+     under orders (1 / 2) is reset, and every member alive gets order 0:
+     - for the player side, unless one has order 5, a type‑5 group's +0x18 / +0x1A take
+       +0x16 and +0x19 / +0x1B take +0x17, and the group is retargeted back
+       (`group_retarget(-1, 0)`); the +2 high nibble becomes 6;
+     - for the computer's side, bits 6–7 are cleared.
+   - **Other side under orders:** a group with a member of the other side under orders, bits
+     4–5 = 2 and 6–7 = 0, gets bits 6–7 = 2.
+
+**The strike** (0x4E1A90) differs from the fire routine (§4):
+- **Targets:** no reveal, no height, side or class filter. Whatever stands on a hex is hit,
+  friend or foe, ground or air.
+- **Experience:** the striker's ATTACK grows once before the hexes, and once per hit that
+  does damage.
+- **Hit roll** (0x4DF3D0), mode 9: (accuracy + fire control + skill − cover − defence) × 10
+  / effectiveness, kept within 15–98, with no base, height, aim or range terms.
+- **Damage:** the fire damage in mode 9 (`support_damage` 0x4DF4B0 is the same formula). A
+  kill credits the striker; apply‑hit destroys at once.
+- **Smoke** only lays smoke.
+- **Mines** (DASH only): an empty hex takes a mine of the striker's side (warhead 13).
+  Warheads below 3, or 13, set off a mine on the hex unless one was just laid. Its blast
+  hits the ground unit read there before the shot, even one the shot destroyed.
+- **AI memory** (DASH only too): every warhead but smoke wipes the AI memory entries on the
+  hex. For an active unit not standing there it is a 50 % roll; an inactive unit's x and y
+  are always wiped.
+- **Strike area** (0x47E130): the aimed hex first, then the rest of the spiral of the
+  launcher's radius (no arc test, unlike the fire area), shuffled.
+
+**Order‑2 damage** (0x4E2300): the slot's ground attack (launcher +3 + round +1) × (100 − the
+target machine's ground armour) / 100.
+
+**Counter‑battery** (0x4E2CF0, after each type‑5 strike):
+- **Candidates:** members of the other side's type 3 / 4 / 5 groups, positioned, with +2 bits
+  4–5 = 2 and 6–7 = 0, no unit of the striking side in a group on their hex, and order 0.
+- **Slot:** each offers its slot with the highest ground attack, among slots that:
+  - reach the striker's group: 10 × range ≥ the grid distance;
+  - are not broken, with rounds and a usable pocket;
+  - have a missile launcher (types 3 / 4) or a kind‑1 one (type 5).
+- **The player struck:** one candidate at random is ordered: order 2 on the striker.
+- **The computer struck:** the player is asked (0x203, "敵の砲撃地点を探知しました…"). While the
+  answer is yes:
+  - a unit is picked (0x4E3230) and a slot (0x4E0450), and that unit is ordered;
+  - "さらに、攻撃を加えますか？" (0x204) asks again until the candidate count is used up.
+
+Edge cases kept from the game:
+- an aimed unit already off the map is struck at (−1, −1); the port reads nothing there;
+- an entry row of 72 clears a byte past the occupancy layer, which the port skips.
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |
@@ -1921,7 +1993,7 @@ reg_unit.dat) and a Ctrl + Alt debug key.
    - The tactical rules are ported end to end (§4, §5): the computer's whole
      turn and every piece the player's commands use (fire, reaction shot, steps,
      search, conceal, reload). Left for the Godot engine, written from the
-     decompiled C: the fire‑support strike executor (`strike_executor`, 0x4E37A0), the player's
+     decompiled C: the player's
      dialogs (reaction menu, mine clearing, "enemy discovered"), and the event
      scripts;
    - then port the event scripts mission by mission (226 KB in all; mission 1's

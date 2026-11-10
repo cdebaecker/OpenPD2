@@ -41,7 +41,7 @@ static func _aa(mode: int) -> bool:
 
 ## All the terms of the hit chance (0x415B50). Raises nothing; a weapon range of 0 at a
 ## distance > 0 divides by zero in the game: returns {"error": true} then.
-static func hit_terms(w: Pd2World, s: int, t: int, slot: int, mode: int, aim: int, pc98 := false) -> Dictionary:
+static func hit_terms(w: Pd2World, s: int, t: int, slot: int, mode: int, aim: int, pc98 := false, ranged := true) -> Dictionary:
 	var wh := w.warhead(s, slot)
 	var t_air := w.unit_class(t) >= 2
 	var lid := w.launcher_id(s, slot)
@@ -87,7 +87,7 @@ static func hit_terms(w: Pd2World, s: int, t: int, slot: int, mode: int, aim: in
 	var defense := W.skill_table(W.s8(w.ucrew(t, 13)), 1)
 	var rng_pen := 0
 	var dist := W.hexdist(ps.x, ps.y, pt.x, pt.y)
-	if dist > 0 and w.active(s):
+	if dist > 0 and w.active(s) and ranged:   # (Strike.hit has no range term)
 		var r := w.weapon_range(s, slot)
 		if r == 0:
 			return {"error": true}
