@@ -407,7 +407,7 @@ const CHOICES := {1: {0xAA: 0x50CBC1, 0xA5: 0x517F88}, 2: {0xA3: 0x517F78, 0xA8:
 const NAME_DIALOGS := {1: 0xAA, 3: 0xAA, 6: 0xA6, 8: 0xC2}
 
 ## the missions whose scripts are ported (rules.MISSION_SCRIPTS)
-const PORTED := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+const PORTED := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15]
 
 
 static func has_scripts(script: int) -> bool:
@@ -423,6 +423,9 @@ static func run_load(w: Pd2World) -> void:
 		8: m08_load(w)
 		9: m09_load(w)
 		10: m10_load(w)
+		12: m12_load(w)
+		14: m14_load(w)
+		15: m15_load(w)
 
 
 ## the init (table 0x51ECC8): its result (mission 10 returns its last store, 0x3C3C3C3C)
@@ -440,6 +443,9 @@ static func run_init(w: Pd2World, hooks: Hooks = null) -> int:
 		8: return m08_init(w)
 		9: return m09_init(w)
 		10: return m10_init(w, hooks)
+		12: return m12_init(w)
+		14: return m14_init(w)
+		15: return m15_init(w)
 	return 0
 
 
@@ -455,6 +461,9 @@ static func run_objective(w: Pd2World) -> int:
 		8: return -1
 		9: return -1
 		10: return -1
+		12: return m12_objective(w)
+		14: return -1
+		15: return -1
 	return -1
 
 
@@ -474,6 +483,9 @@ static func run_deploy(w: Pd2World, hooks: Hooks) -> int:
 		8: return 1
 		9: return 1
 		10: return 1
+		12: return 1
+		14: return 1
+		15: return 1
 	return 1
 
 
@@ -490,6 +502,9 @@ static func run_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks, call
 		8: return m08_turn(w, rng, stage, hooks, caller[0] if caller.size() == 1 else null)
 		9: return m09_turn(w, rng, stage, hooks)
 		10: return m10_turn(w, rng, stage, hooks)
+		12: return m12_turn(w, rng, stage, hooks)
+		14: return m14_turn(w, rng, stage, hooks)
+		15: return m15_turn(w, rng, stage, hooks)
 	return 0
 
 
@@ -505,6 +520,9 @@ static func run_speech(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		8: return flight_turn(w, rng, hooks)
 		9: return flight_turn(w, rng, hooks)
 		10: return flight_turn(w, rng, hooks)
+		12: return flight_turn(w, rng, hooks)
+		14: return flight_turn(w, rng, hooks)
+		15: return flight_turn(w, rng, hooks)
 	return 0
 
 
@@ -521,6 +539,8 @@ static func run_menu(w: Pd2World, u: int) -> Array:
 		8: return m08_menu(w, u)
 		9: return [1, 0x51B0F0]
 		10: return [1, 0x51BAC0]
+		12: return [1, 0x51C4E8]
+		15: return m15_menu(w, u)
 	return [0, -1]
 
 
@@ -536,6 +556,8 @@ static func run_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		8: return m08_command(w, rng, u, hooks)
 		9: return m09_command(w, rng, u, hooks)
 		10: return m10_command(w, rng, u, hooks)
+		12: return m12_command(w, rng, u, hooks)
+		15: return m15_command(w, rng, u, hooks)
 	return 0
 
 
@@ -552,6 +574,9 @@ static func run_scenario(w: Pd2World, rng: Pd2Random) -> bool:
 		8: m08_scenario(w, rng)
 		9: m09_scenario(w, rng)
 		10: w.set_ds8(0x50ADF2, 0x82)
+		12: m12_scenario(w, rng)
+		14: m14_scenario(w, rng)
+		15: w.set_ds8(0x50ADF2, m15_code(w))
 		_: return false
 	return true
 
@@ -563,6 +588,7 @@ static func run_bomb_rule(w: Pd2World, u: int, hooks: Hooks) -> int:
 		7: return m07_bomb_rule(w, u, hooks)
 		9: return m09_bomb_rule(w, u, hooks)
 		10: return m10_bomb_rule(w, u, hooks)
+		15: return m15_bomb_rule(w, u, hooks)
 	return -1
 
 
@@ -574,6 +600,8 @@ static func run_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		8: return m08_start(w, rng, hooks)
 		9: return m09_start(w, rng, hooks)
 		10: return m10_start(w, rng, hooks)
+		12: return m12_start(w, rng, hooks)
+		15: return m15_start(w, rng, hooks)
 	return 0
 
 
@@ -583,6 +611,7 @@ static func run_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 		7: return m07_bomb(w, rng, i, hooks)
 		9: return m09_bomb(w, rng, i, hooks)
 		10: return m10_bomb(w, rng, i, hooks)
+		15: return m15_bomb(w, rng, i, hooks)
 	return 0
 
 
@@ -1137,7 +1166,8 @@ static func speech_arrival(w: Pd2World, rng: Pd2Random, hooks: Hooks, grp: int, 
 	for st in steps:
 		var res: int
 		if st[0] == "say":
-			res = hooks.flight.radio_say(st[1], [], st[2])
+			var args: Variant = st[3] if st.size() > 3 else []
+			res = hooks.flight.radio_say(st[1], args.call() if args is Callable else args, st[2])
 		else:
 			res = Flight._radio_face(w, hooks.flight, st[1], st[2], st[3])
 		if res in AI_ABORT:
@@ -1969,11 +1999,11 @@ static func face_of(w: Pd2World, rng: Pd2Random, k: int) -> int:
 
 
 ## a radio scene, every step checked (rules.radio_scene): ["face", a or Callable, code,
-## slot], ["say", msg, code], ["close"], ["wait"] (0x453CD0)
+## slot], ["say", msg, code(, args or Callable)], ["close"(, n)], ["wait"] (0x453CD0)
 static func radio_scene(w: Pd2World, hooks: Hooks, steps: Array) -> int:
 	for st in steps:
 		if st[0] == "close":
-			hooks.flight.radio_close(-1)
+			hooks.flight.radio_close(st[1] if st.size() > 1 else -1)
 			continue
 		if st[0] == "wait":
 			var r := hooks.wait()
@@ -1988,7 +2018,8 @@ static func radio_scene(w: Pd2World, hooks: Hooks, steps: Array) -> int:
 				return 0
 			res = Flight._radio_face(w, hooks.flight, a, st[2], st[3])
 		else:
-			res = hooks.flight.radio_say(st[1], [], st[2])
+			var args: Variant = st[3] if st.size() > 3 else []
+			res = hooks.flight.radio_say(st[1], args.call() if args is Callable else args, st[2])
 		if res in AI_ABORT:
 			hooks.flight.radio_close(-1)
 			return res
@@ -3014,4 +3045,1333 @@ static func m10_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 			var res := m10_break(w, hooks, n)
 			if res:
 				return res
+	return 0
+
+
+# --- DASH mission 2 (script 12, DASH chunk 1: the sappers of groups 21 / 26; rules.m12_*) --
+
+const M12_FIX21 := Vector2i(0x41, 0x3C)
+const M12_FIX26 := Vector2i(0x46, 0x46)
+const M12_PTS := {"a": [[0x26, 0x20], [0x27, 0x20]], "b": [[0x36, 0x28], [0x37, 0x28]],
+		"c": [[0x37, 0x20], [0x38, 0x20]], "d": [[0x42, 0x28], [0x43, 0x28]]}
+const M12_CHARGES := [[0x50AD50, 0x50AD51, 0x15, 0x50AD8A, [[0x37, 0x24], [0x38, 0x24]]],
+		[0x50AD52, 0x50AD53, 0x1A, 0x50AD8C, [[0x26, 0x24], [0x27, 0x24]]],
+		[0x50AD52, 0x50AD53, 0x1A, 0x50AD8C, [[0x36, 0x2C], [0x37, 0x2C]]],
+		[0x50AD50, 0x50AD51, 0x15, 0x50AD8A, [[0x42, 0x2C], [0x43, 0x2C]]]]
+
+
+static func m12_rnd(w: Pd2World, rng: Pd2Random, grp: int, pts: Array, check := -1) -> void:
+	for j in 16:
+		if g(w, check if check != -1 else grp, 6 + j) == 0xFF:
+			continue
+		var a := UNITS_ADDR + 55 * g(w, grp, 6 + j)
+		w.mem_write(a + 7, pts[rng.r16(2)][0])
+		w.mem_write(a + 8, pts[rng.r16(2)][1])
+
+
+static func m12_fix(w: Pd2World, grp: int, p: Vector2i) -> void:
+	for j in 16:
+		var m := g(w, grp, 6 + j)
+		if m != 0xFF:
+			w.mem_write(UNITS_ADDR + 55 * m + 7, p.x)
+			w.mem_write(UNITS_ADDR + 55 * m + 8, p.y)
+
+
+static func m12_step(w: Pd2World, a: int) -> void:
+	var v := w.ds8(a)
+	w.set_ds8(a, v ^ ((v & 0xFE) + 2 ^ v) & 0x3E)
+
+
+static func m12_fuse(w: Pd2World, a: int) -> bool:
+	var v := w.ds8(a)
+	v = (v ^ (((v - 1) ^ v) & 0xF)) & 0xFF
+	w.set_ds8(a, v)
+	return v & 0xF == 0
+
+
+static func m12_load(w: Pd2World) -> void:
+	static_copy(w, 0x51C0A8, 0x51C0E8, 64)
+	static_copy(w, 0x51C128, 0x51C218, 240)
+	static_copy(w, 0x51C308, 0x51C3F8, 240)
+
+
+static func m12_init(w: Pd2World) -> int:
+	for p in [[0x50AD97, 7], [0x50AD9B, 7], [0x50AD99, 0xE], [0x50AD9D, 0xE], [0x50ADA1, 0xE],
+			[0x50AD95, 0xB], [0x50AD9F, 8], [0x50ADA3, 9], [0x50ADA5, 0], [0x50ADA7, 3],
+			[0x50ADA9, 0], [0x50ADAB, 4], [0x50ADAD, 0], [0x50ADAF, 5]]:
+		w.set_ds16(p[0], p[1])
+	for i in 0x20:
+		w.ds[0xB1 + i] = w.mem8(0x51C048 + i)
+		w.ds[0xD1 + i] = w.mem8(0x51C068 + i)
+	w.mem_write(0x5066E0, 0)
+	set_506651(w, 0x36)
+	return 0
+
+
+static func m12_objective(w: Pd2World) -> int:
+	var any := false
+	for grp in [0, 2, 4]:
+		if g(w, grp, 0x21) & 0xF in [2, 3]:
+			any = true
+	if not any:
+		return 0x10A
+	for grp in range(12, 20):
+		if g(w, grp, 0x21) & 0xF == 4:
+			return -1
+	return 0x10B
+
+
+static func m12_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> int:
+	var n := 0
+	for k in 254:
+		var f := w.ub(k, 0)
+		if w.sb(k, 0x36) > 2 and w.ub(k, 0xD) and not f & 1 and f & 8 and f & 4 and w.sb(k, 9) > 0x3D and w.sb(k, 10) > 0x37:
+			n += 1
+	var res := hooks.message(0xAD, [n])
+	return res if res in AI_ABORT else 0
+
+
+static func m12_end_code(w: Pd2World, rng: Pd2Random) -> int:
+	if w.ds8(0x50AD7D) & 0xF == 1 or w.ds8(0x50AD81) & 0xF == 1:
+		return 0x80
+	for k in 254:
+		var f := w.ub(k, 0)
+		if w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and f & 4 and f & 1 and (rng.roll(100) & 0xFFFF) & 3 != 2:
+			mark_crew(w, w.ub(k, 0xB), 2)
+	return 0x82
+
+
+static func m12_scenario(w: Pd2World, rng: Pd2Random) -> void:
+	w.set_ds8(0x50ADF2, m12_end_code(w, rng))
+	if w.ds8(0x50AD76) & 1:
+		w.set_ds8(0x50ADF2, 0x83)
+
+
+static func m12_blast(w: Pd2World, rng: Pd2Random, n: int, live: int, hooks: Hooks) -> int:
+	var base := 0x51C128 + 0x3C * (n - 1)
+	var skip := false
+	if live:
+		var r0 := hooks.blast_open()
+		if r0 in AI_ABORT:
+			return r0
+		var x0 := static_s16(w, base)
+		var y0 := static_s16(w, base + 2)
+		r0 = hooks.scroll(x0, y0)
+		if r0 in AI_ABORT:
+			return r0
+		r0 = hooks.blast_start(x0, y0)
+		if r0 in AI_ABORT:
+			return r0
+		skip = r0 == 0x80000
+	var easy := hooks.options & 2 != 0
+	for j in 15:
+		var x := static_s16(w, base + 4 * j)
+		var y := static_s16(w, base + 4 * j + 2)
+		if live:
+			var bl := blast(w, hooks, x, y, skip)
+			skip = bl[1]
+			if bl[0]:
+				return bl[0]
+			for _i in 2:
+				var o := occupant_raw(w, x, y)
+				if o != -1:
+					var dmg := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+					if dmg and Fire.apply_hit(w, rng, o, dmg, -1, 12, easy) == "destroyed":
+						Action.destroy(w, o)
+		set_height_tile(w, x, y, static_s16(w, 0x51C308 + 0x3C * (n - 1) + 4 * j),
+				static_s16(w, 0x51C30A + 0x3C * (n - 1) + 4 * j))
+		var r1 := hooks.redraw_hex(x, y)
+		if r1 == 0x10000 or r1 == 0x20000:
+			return r1
+	if live:
+		var r2 := hooks.blast_close()
+		if r2 == 0x10000 or r2 == 0x20000:
+			return r2
+	return 0
+
+
+static func m12_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
+	for e in [[0x50AD8A, 4, 1], [0x50AD8C, 3, 2]]:
+		var c := w.ds8(e[0]) >> 1 & 0x1F
+		if c >= 2 and c <= 4:
+			for n in ([e[1], e[2]] if c == 4 else [e[2]]):
+				var res := m12_blast(w, rng, n, 0, hooks)
+				if res in AI_ABORT:
+					return res
+	return 0
+
+
+static func m12_lost(w: Pd2World, hooks: Hooks) -> int:
+	return radio_scene(w, hooks, [["face", 0x14, 10, null], ["say", 0xA1, 10], ["say", 0xA6, 10], ["say", 0xA3, 10],
+			["face", 0x11, 0x2B, 0], ["say", 0xA7, 0x2B], ["say", 0xA8, 10], ["close"]])
+
+
+static func m12_alive(w: Pd2World, k: int) -> bool:
+	var f := w.ub(k, 0)
+	return w.ub(k, 0xD) != 0 and not f & 1 and f & 8 != 0
+
+
+static func m12_lead_face(w: Pd2World) -> int:
+	return 10 if m12_alive(w, 1) else (0xB if m12_alive(w, 16) else 0xD)
+
+
+static func m12_charge(w: Pd2World, pts: Array) -> Array:
+	for p in pts:
+		var o := occupant_raw(w, p[0], p[1])
+		if o == -1:
+			continue
+		var a := UNITS_ADDR + 55 * o
+		if w.mem8(a + 0xD) and not w.mem8(a) & 1:
+			for q in 6:
+				if w.mem8(a + 0x1B + 2 * q) == 0xC:
+					return [a, q]
+	return []
+
+
+static func m12_route(w: Pd2World, rng: Pd2Random, grp: int, other_has: int, mine: int, other: int) -> void:
+	var fix := M12_FIX21 if grp == 0x15 else M12_FIX26
+	var lo := "a" if grp == 0x15 else "c"
+	var hi := "b" if grp == 0x15 else "d"
+	var table: Dictionary
+	if not other_has:
+		table = {0: {0: "F", 1: lo, 2: "F", 3: hi, 4: "F"}, 2: {0: "F", 1: "F", 2: "F", 3: hi, 4: "F"}}
+	else:
+		table = {0: {0: lo, 1: lo, 2: hi, 3: hi, 4: "F"}, 2: {0: hi, 1: hi, 2: hi, 3: hi, 4: "F"}}
+	var act: String = table.get(mine, {}).get(other, "")
+	if act == "F":
+		m12_fix(w, grp, fix)
+	elif act != "":
+		m12_rnd(w, rng, grp, M12_PTS[act])
+
+
+static func m12_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
+	var lead := func() -> int: return m12_lead_face(w)
+	if stage == 0:
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		if w.ds8(0x50AD76) & 1:
+			for grp in range(20, 64):
+				if Flight.group_alive(w, grp):
+					for j in 16:
+						var m := g(w, grp, 6 + j)
+						if m != 0xFF and (Pd2World.s8(table_byte(w, 55 * m + 9)) == 1 or Pd2World.s8(table_byte(w, 55 * m + 10)) == 1):
+							Action.take_off_map(w, m)
+		var n := 0
+		for grp in range(20, 64):
+			if Flight.group_alive(w, grp):
+				for j in 16:
+					var m := g(w, grp, 6 + j)
+					if m != 0xFF and Pd2World.s8(table_byte(w, 55 * m + 9)) > 0x3D and Pd2World.s8(table_byte(w, 55 * m + 10)) > 0x37:
+						n += 1
+		if n > 4:
+			var any := false
+			for j in 16:
+				var m := g(w, 0, 6 + j)
+				if m != 0xFF and m12_alive(w, m):
+					any = true
+			if not any:
+				var r0 := m12_lost(w, hooks)
+				if r0 in AI_ABORT:
+					return r0
+			else:
+				var r1 := radio_scene(w, hooks, [["face", 0x14, 10, null], ["say", 0xA1, 10], ["say", 0xA9, 10],
+						["face", lead, 0x2B, 0], ["say", 0xAA, 0x2B], ["close"]])
+				if r1:
+					return r1
+			w.set_ds8(0x50AD7F, w.ds8(0x50AD7F) & 0xF2 | 2)
+			w.set_ds8(0x50ADF2, m12_end_code(w, rng))
+			return 0
+		var r2 := flight_turn(w, rng, hooks)
+		if r2 in AI_ABORT:
+			return r2
+	elif stage == 1:
+		var players := 0
+		for k in 254:
+			if w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4:
+				players += 1
+		if w.ds8(0x50AD76) & 0x3E > 5 and players:
+			var r3 := radio_scene(w, hooks, [["face", 0x14, 10, null], ["say", 0xA1, 10], ["say", 0xA2, 10],
+					["face", lead, 0x2B, 0], ["say", 0xAC, 0x2B], ["close"]])
+			if r3:
+				return r3
+			w.set_ds8(0x50AD81, w.ds8(0x50AD81) & 0xF1 | 1)
+			w.set_ds8(0x50ADF2, m12_end_code(w, rng))
+			return 0
+		if w.ds8(0x50AD50) & 0x3E == 2 and m12_fuse(w, 0x50AD51):
+			var r4 := m12_blast(w, rng, 1, 1, hooks)
+			if r4 in AI_ABORT:
+				return r4
+			m12_rnd(w, rng, 0x15, [[0x42, 0x2C], [0x43, 0x2C]])
+			w.set_ds8(0x50ADF1, 1)
+			m12_step(w, 0x50AD50)
+			m12_step(w, 0x50AD8A)
+		if w.ds8(0x50AD52) & 0x3E == 2 and m12_fuse(w, 0x50AD53):
+			var r5 := m12_blast(w, rng, 2, 1, hooks)
+			if r5 in AI_ABORT:
+				return r5
+			m12_rnd(w, rng, 0x1A, [[0x36, 0x2C], [0x37, 0x2C]], 0x15)
+			w.set_ds8(0x50ADF1, 1)
+			m12_step(w, 0x50AD52)
+			m12_step(w, 0x50AD8C)
+		if w.ds8(0x50AD52) & 0x3E == 6 and m12_fuse(w, 0x50AD53):
+			var r6 := m12_blast(w, rng, 3, 1, hooks)
+			if r6 in AI_ABORT:
+				return r6
+			m12_fix(w, 0x1A, M12_FIX26)
+			m12_step(w, 0x50AD52)
+			m12_step(w, 0x50AD8C)
+		if w.ds8(0x50AD50) & 0x3E == 6 and m12_fuse(w, 0x50AD51):
+			var r7 := m12_blast(w, rng, 4, 1, hooks)
+			if r7 in AI_ABORT:
+				return r7
+			m12_fix(w, 0x15, M12_FIX21)
+			m12_step(w, 0x50AD50)
+			m12_step(w, 0x50AD8A)
+		if w.ds8(0x50AD76) & 1 and w.ds8(0x50AD76) & 0x3E < 0x3C:
+			m12_step(w, 0x50AD76)
+		var n21 := 0
+		var n26 := 0
+		for j in 16:
+			for grp in [0x15, 0x1A]:
+				var m := g(w, grp, 6 + j)
+				if m != 0xFF:
+					for q in 6:
+						if table_byte(w, 55 * m + 0x1B + 2 * q) == 0xC:
+							if grp == 0x15:
+								n21 += 1
+							else:
+								n26 += 1
+		var sa := w.ds8(0x50AD50) >> 1 & 0x1F
+		var sb := w.ds8(0x50AD52) >> 1 & 0x1F
+		if n21 == 0:
+			m12_route(w, rng, 0x15, n26, sa, sb)
+		if n26 == 0:
+			m12_route(w, rng, 0x1A, n21, sb, sa)
+		for e in M12_CHARGES:
+			var want := 0 if e[4][0][1] == 0x24 else 4
+			if w.ds8(e[0]) & 0x3E != want:
+				continue
+			var hit := m12_charge(w, e[4])
+			if hit.is_empty():
+				continue
+			var ua: int = hit[0]
+			var q: int = hit[1]
+			w.mem_write(ua + 0x1B + 2 * q, 0xFF)
+			w.mem_write(ua + 0x1C + 2 * q, w.mem8(ua + 0x1C + 2 * q) & 0xC0)
+			w.set_ds8(e[1], w.ds8(e[1]) & 0xF2 | 2)
+			for j in 16:
+				var m := g(w, e[2], 6 + j)
+				if m != 0xFF and table_byte(w, 55 * m + 0xD) and not table_byte(w, 55 * m) & 1:
+					w.mem_write(UNITS_ADDR + 55 * m + 8, e[4][0][1] - 4)
+			m12_step(w, e[0])
+			m12_step(w, e[3])
+		if not w.ds8(0x50AD76) & 1:
+			var dead := n21
+			for k in 254:
+				var f := w.ub(k, 0)
+				if w.sb(k, 0x36) > 2 and f & 4 and f & 8 and f & 1:
+					dead += 1
+			if dead > 0x31:
+				for grp in range(20, 64):
+					if Flight.group_alive(w, grp):
+						for j in 16:
+							var m := g(w, grp, 6 + j)
+							if m != 0xFF:
+								var a2 := UNITS_ADDR + 55 * m
+								if Pd2World.s8(w.mem8(a2 + 10)) < Pd2World.s8(w.mem8(a2 + 9)):
+									w.mem_write(a2 + 8, 1)
+								else:
+									w.mem_write(a2 + 7, 1)
+				ds_or(w, 0x50AD76, 1)
+		if not w.ds8(0x50AD64) & 1 and (w.ds8(0x50AD50) & 0x3E < 4 or w.ds8(0x50AD52) & 0x3E < 4):
+			var nin := 0
+			for k in 254:
+				var f := w.ub(k, 0)
+				var y := w.sb(k, 10)
+				if w.ub(k, 0x36) == 0 and f & 8 and w.ub(k, 0xD) and not f & 1 and w.sb(k, 9) > 0x20 and y > 0x25 and y < 0x30:
+					nin += 1
+			if nin > 1:
+				if w.ds8(0x50AD64) & 0x3E > 5:
+					w.set_ds8(0x50AD50, w.ds8(0x50AD50) & 0xC9 | 8)
+					w.set_ds8(0x50AD52, w.ds8(0x50AD52) & 0xC9 | 8)
+					m12_fix(w, 0x15, M12_FIX21)
+					m12_fix(w, 0x1A, M12_FIX26)
+					ds_or(w, 0x50AD64, 1)
+				m12_step(w, 0x50AD64)
+	if w.ds8(0x50AD4E) & 1:
+		var ground := 0
+		for k in 254:
+			if w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4 and w.mem8(0x506734 + 16 * w.sb(k, 0xB) + 3) == 0:
+				ground += 1
+		if not ground:
+			if not w.ds8(0x50AD76) & 1:
+				var r8 := m12_lost(w, hooks)
+				if r8 in AI_ABORT:
+					return r8
+				w.set_ds8(0x50AD7D, w.ds8(0x50AD7D) & 0xF2 | 2)
+			else:
+				var r9 := radio_scene(w, hooks, [["face", 0x14, 10, null], ["say", 0xA1, 10], ["say", 0xA2, 10],
+						["say", 0xA3, 10], ["face", 0x11, 0x2B, 0], ["say", 0xA4, 0x2B], ["say", 0xA5, 10], ["close"]])
+				if r9:
+					return r9
+				w.set_ds8(0x50AD7D, w.ds8(0x50AD7D) & 0xF1 | 1)
+			w.set_ds8(0x50ADF2, m12_end_code(w, rng))
+		return 0
+	group_scan(w)
+	var px := w.ds8(0x50AD95)
+	var py := w.ds8(0x50AD97)
+	for f in [G_X, G_PREV_X, G_TARGET_X]:
+		set_g(w, 0, f, px)
+		set_g(w, 0, f + 1, py)
+	set_g(w, 0, 2, g(w, 0, 2) & 0xF | 0x20)
+	set_g(w, 0, 0x1C, 0)
+	set_g(w, 0, 0x22, 0)
+	var a := 0x51C0A8
+	for i in 16:
+		var m := g(w, 0, 6 + i)
+		if m != 0xFF:
+			w.mem_write(UNITS_ADDR + 55 * m + 9, w.mem8(a))
+			w.mem_write(UNITS_ADDR + 55 * m + 10, w.mem8(a + 2))
+			a += 4
+	ds_or(w, 0x50AD4E, 1)
+	return 0
+
+
+# --- DASH mission 3 (script 14, DASH chunk 3: hold until the reserve arrives; rules.m14_*) -
+
+const M14_FALLBACK := [[8, 0xE], [8, 0xE], [8, 0xE], [0xE, 8], [0xE, 8], [8, 0xE], [8, 0xE], [0xE, 8], [0xE, 8], [0xE, 8]]
+
+
+static func m14_load(w: Pd2World) -> void:
+	static_copy(w, 0x51C840, 0x51C878, 52)
+
+
+static func m14_init(w: Pd2World) -> int:
+	for p in [[0x50AD99, 0xE], [0x50ADA7, 0xE], [0x50ADA9, 0xE], [0x50ADAD, 0xE], [0x50AD95, 0xC],
+			[0x50AD97, 8], [0x50AD9B, 5], [0x50AD9D, 0xC], [0x50AD9F, 5], [0x50ADA1, 10],
+			[0x50ADA3, 5], [0x50ADA5, 8], [0x50ADAB, 8], [0x50ADAF, 10]]:
+		w.set_ds16(p[0], p[1])
+	for i in 0x20:
+		w.ds[0xB1 + i] = w.mem8(0x51C808 + i)
+		w.ds[0xD1 + i] = w.mem8(0x5242A0 + i)
+	set_506651(w, 0x5A)
+	return 0
+
+
+static func m14_fates(w: Pd2World, rng: Pd2Random, code: int) -> void:
+	if not code in [0x80, 0x82, 0x83]:
+		return
+	for grp in 20:
+		if not g(w, grp, 5):
+			continue
+		for j in 16:
+			var m := g(w, grp, 6 + j)
+			if m == 0xFF:
+				continue
+			var a := UNITS_ADDR + 55 * m
+			var dead := w.mem8(a) & 1
+			if code == 0x82:
+				if not dead:
+					if rng.r16(100) & 1 == 0 and rng.r16(100) & 1 == 0:
+						w.mem_write(a, w.mem8(a) | 1)
+						w.mem_write(a + 0xD, 0)
+						if rng.r16(100) & 1 == 0:
+							mark_crew(w, w.mem8(a + 0xB), 2)
+				elif rng.r16(100) & 1 == 0 and rng.r16(100) & 1 == 0:
+					mark_crew(w, w.mem8(a + 0xB), 2)
+			elif dead and rng.r16(100) % 3 == 1:
+				mark_crew(w, w.mem8(a + 0xB), 2)
+
+
+static func m14_scenario(w: Pd2World, rng: Pd2Random) -> void:
+	w.set_ds8(0x50ADF2, 0x82)
+	m14_fates(w, rng, 0x82)
+	for c in 64:
+		var q := c * Pd2World.CREW
+		if w.crew[q + 2] == 0 and w.crew[q + 4] == 2 and not w.ub(c, 0) & 8:
+			w.crew[q + 6] &= 0xFC
+			w.crew[q + 4] = 3
+			w.crew[q + 7] = 0
+
+
+static func m14_lost(w: Pd2World) -> int:
+	var n := 0
+	for k in 254:
+		var f := w.ub(k, 0)
+		if (w.sb(k, 0x36) > 2 or f & 8) and (w.ub(k, 0xD) == 0 or f & 1):
+			n += 1
+	return n
+
+
+static func m14_call_up(w: Pd2World, grp: int, air: int, most: int) -> int:
+	var n := 0
+	for c in 64:
+		if n >= most:
+			break
+		var q := c * Pd2World.CREW
+		if w.crew[q + 4] != 3 or w.crew[q + 2] != 0 or w.crew[q + 3] != air:
+			continue
+		set_g(w, grp, 6 + n, c)
+		w.crew[q + 4] = 2
+		w.crew[q + 6] &= 0xFC
+		w.crew[q + 7] = 0
+		n += 1
+		w.setb(c, 0xD, w.mem8(0x50ADF7 + 31 * w.sb(c, 0xC)))
+		for i in 6:
+			if w.ub(c, 0xF + 2 * i) != 0xFF:
+				w.setb(c, 0x10 + 2 * i, w.ub(c, 0x10 + 2 * i) & 0xCF)
+		for i in 12:
+			if w.ub(c, 0x1B + 2 * i) != 0xFF:
+				w.setb(c, 0x1C + 2 * i, w.mem8(0x50B835 + 12 * w.sb(c, 0x1B + 2 * i)) & 0x3F)
+		w.setb(c, 1, 0)
+		w.setb(c, 2, w.ub(c, 2) & 0xF0)
+	set_g(w, grp, 5, n)
+	return n
+
+
+static func m14_form(w: Pd2World, grp: int, sticky: bool) -> void:
+	if sticky:
+		set_g(w, grp, 3, g(w, grp, 3) | 1)
+	else:
+		set_g(w, grp, 0x16, g(w, grp, 0x18))
+		set_g(w, grp, 0x17, g(w, grp, 0x19))
+	set_g(w, grp, 2, g(w, grp, 2) & 0xDF | 0x11)
+	set_g(w, grp, 0x1C, 0)
+	set_g(w, grp, 0x22, 0)
+
+
+static func m14_send(w: Pd2World) -> void:
+	for grp in [0x14, 0x15]:
+		set_g(w, grp, 2, g(w, grp, 2) & 0xEF | 0x20)
+	ds_or(w, 0x50AD50, 1)
+	w.set_ds8(0x50ADF1, 2)
+
+
+static func m14_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
+	if stage == 0:
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		var r0 := flight_turn(w, rng, hooks)
+		if r0 in AI_ABORT:
+			return r0
+		if w.ds8(0x50AD76) & 1:
+			for k in 254:
+				var f := w.ub(k, 0)
+				var x := w.sb(k, 9)
+				var y := w.sb(k, 10)
+				if w.sb(k, 0x36) > 2 and (f & 8 or w.ub(k, 0xD)) and not f & 1 and (x == 0x45 or x == 0x46 or y == 0x45 or y == 0x46):
+					Action.take_off_map(w, k)
+			if w.ds8(0x50AD76) & 0x3E < 0x3C:
+				m12_step(w, 0x50AD76)
+		if not w.ds8(0x50AD8C) & 1:
+			var lost := 0
+			var alive := 0
+			for k in 254:
+				if w.sb(k, 0x36) < 3 and w.ub(k, 0) & 8:
+					if w.ub(k, 0xD) == 0 or w.ub(k, 0) & 1:
+						lost += 1
+					else:
+						alive += 1
+			var t := w.mission_turn & 0xFFFF
+			if alive and ((not lost and t >= 0xF) or (lost and t >= 0xA)):
+				m14_call_up(w, 2, 0, 3)
+				m14_form(w, 2, true)
+				var n3 := m14_call_up(w, 3, 1, 2)
+				if n3 < (g(w, 2, 5) + 1) / 2:
+					var r1 := hooks.line(0x51C8AC)
+					return 0x20000 if r1 == -3 else (0x40000 if r1 == -2 else 0x10000)
+				m14_form(w, 3, false)
+				m14_call_up(w, 4, 0, 3)
+				m14_form(w, 4, true)
+				var n5 := m14_call_up(w, 5, 1, 2)
+				if n5 < (g(w, 4, 5) + 1) / 2:
+					var r2 := hooks.line(0x51C8BC)
+					return 0x20000 if r2 == -3 else (0x40000 if r2 == -2 else 0x10000)
+				m14_form(w, 5, false)
+				if g(w, 3, 5) + n5:
+					var rr: Variant = hooks.radar_open()
+					var r3: int = int(rr) if rr != null else Flight.grid_init(w, hooks.flight, 0)
+					if r3 in AI_ABORT:
+						return r3
+					for c in 64:
+						var q := c * Pd2World.CREW
+						if w.ub(c, 0x36) == 0 and w.crew[q + 4] == 2 and w.crew[q + 2] == 0:
+							w.crew[q + 4] = w.ds8(0x50AD8E)
+							w.setb(c, 0, w.ub(c, 0) | 4)
+					var sel := func() -> int:
+						if w.crew[16 + 5] == 0 and w.ub(1, 0xD) and not w.ub(1, 0) & 1:
+							return 10
+						return 0xB if w.crew[16 * 16 + 5] == 0 and w.ub(16, 0xD) and not w.ub(16, 0) & 1 else 0xD
+					var when := func() -> Array:
+						return [time_text(w, (w.mission_turn + 4) & 0xFFFF, (w.ds_506651 & 0xFF) | w.mem8(0x506652) << 8)]
+					r3 = radio_scene(w, hooks, [
+							["face", 8, 0x3A, null], ["say", 0xA6, 0x3A], ["face", sel, 0xB, null], ["say", 0xA7, 0xB],
+							["close", 3], ["face", 8, 0x2A, 1], ["face", 1, 0x2A, 0], ["say", 0xA8, 0x2A],
+							["say", 0xA9, 0xB], ["say", 0xAA, 0x2A, when], ["close"]])
+					if r3:
+						return r3
+				ds_or(w, 0x50AD8C, 1)
+	elif stage == 1:
+		var go_on := 1
+		if not w.ds8(0x50AD50) & 1:
+			if not w.ds8(0x50AD76) & 1 and (g(w, 8, 2) & 0xC0 or g(w, 10, 2) & 0xC0) \
+					and not g(w, 0x14, 2) & 0x30 and not g(w, 0x15, 2) & 0x30:
+				m14_send(w)
+			if not w.ds8(0x50AD50) & 1 and not w.ds8(0x50AD76) & 1:
+				if w.ds8(0x50AD8C) & 1 and m14_lost(w) > 0x31:
+					m14_send(w)
+			elif not w.ds8(0x50AD50) & 1:
+				go_on = 2
+		if go_on == 1 and not w.ds8(0x50AD76) & 1:
+			var n := 0
+			for k in 254:
+				var f := w.ub(k, 0)
+				if w.sb(k, 0x36) > 2 and ((w.ub(k, 0xD) and w.ub(k, 9) != 0xFF and f & 8) or (not f & 9 and f & 4)):
+					n += 1
+			if n < 0x19:
+				for k in 254:
+					var f := w.ub(k, 0)
+					if w.sb(k, 0x36) > 2 and f & 8 and w.ub(k, 0xD) and not f & 1:
+						w.setb(k, 3, w.ub(k, 3) & 0xF | 0x50)
+						var x := w.sb(k, 9)
+						var y := w.sb(k, 10)
+						if 0x45 - x < 0x46 - y:
+							w.setb(k, 7, 0x45)
+							w.setb(k, 8, w.ub(k, 10))
+						else:
+							w.setb(k, 8, 0x46)
+							var bx := w.ub(k, 9)
+							w.setb(k, 7, (bx - 1) & 0xFF if bx == 0x2A or bx == 0x2D else bx)
+				ds_or(w, 0x50AD76, 1)
+			go_on = 1 if w.ds8(0x50AD76) & 1 else 0
+		if go_on != 0:
+			for i in 10:
+				var grp := 0x16 + i
+				if g(w, grp, 2) & 0x30 != 0x30 and Flight.group_alive(w, grp):
+					var any := false
+					for j in 16:
+						var m := g(w, grp, 6 + j)
+						if m != 0xFF:
+							var f := table_byte(w, 55 * m)
+							if f & 8 and table_byte(w, 55 * m + 0xD) and not f & 1 and Pd2World.s8(table_byte(w, 55 * m + 9)) >= 0 \
+									and Pd2World.s8(table_byte(w, 55 * m + 10)) >= 0:
+								any = true
+					if not any:
+						set_g(w, grp, 2, g(w, grp, 2) | 0x30)
+						Ai.group_retarget(w, grp, M14_FALLBACK[i][0], M14_FALLBACK[i][1])
+	if w.ds8(0x50AD4E) & 1:
+		var counts := []
+		for grp in [0, 2]:
+			var n := 0
+			for j in 16:
+				var m := g(w, grp, 6 + j)
+				if m != 0xFF:
+					var f := table_byte(w, 55 * m)
+					if table_byte(w, 55 * m + 0x36) == 0 and f & 8 and (table_byte(w, 55 * m + 0xD) or not f & 1):
+						n += 1
+			counts.append(n)
+		if counts[0] + counts[1] == 0:
+			if not w.ds8(0x50AD76) & 1:
+				if w.ds8(0x50AD8C) & 1 and g(w, 3, 2) & 0x30 != 0x30 and g(w, 5, 2) & 0x30 != 0x30:
+					var r4 := radio_scene(w, hooks, [["face", 1, 10, null], ["say", 0xAB, 10], ["face", 0xD, 0x2B, 0],
+							["face", 3, 0x2B, 1], ["say", 0xAC, 0x2B], ["say", 0xAD, 10], ["close"]])
+					if r4:
+						return r4
+				w.set_ds8(0x50ADF2, 0x82)
+				m14_fates(w, rng, 0x82)
+				return 0
+			var sign0 := [["sign", g(w, 0, 1)]]
+			var r5 := radio_scene(w, hooks, [["face", 0x12, 10, null], ["say", 0xB5, 10, sign0], ["say", 0xB6, 10],
+					["say", 0xB7, 10], ["close"]])
+			if r5:
+				return r5
+			w.set_ds8(0x50ADF2, 0x80)
+			m14_fates(w, rng, 0x80)
+			return 0
+		if w.ds8(0x50AD76) & 0x3E > 5:
+			var grp := 0 if counts[0] else 2
+			var sign := [["sign", g(w, grp, 1)]]
+			var face := 0xD
+			if w.crew[16 + 5] == grp and m12_alive(w, 1):
+				face = 10
+			elif w.crew[16 * 16 + 5] == grp and m12_alive(w, 16):
+				face = 0xB
+			var r6 := radio_scene(w, hooks, [["face", 0x12, 10, null], ["say", 0xB5, 10, sign], ["face", face, 0x2B, 0],
+					["say", 0xB8, 0x2B, sign], ["say", 0xB6, 10, sign], ["close"]])
+			if r6:
+				return r6
+			w.set_ds8(0x50ADF2, 0x80)
+			m14_fates(w, rng, 0x80)
+			return 0
+	else:
+		group_scan(w)
+		set_g(w, 0, G_X, w.ds8(0x50AD95))
+		set_g(w, 0, G_X + 1, w.ds8(0x50AD97))
+		set_g(w, 0, 0x1C, 0)
+		set_g(w, 0, 0x22, 0)
+		var a := 0x51C840
+		for i in 16:
+			var m := g(w, 0, 6 + i)
+			if m != 0xFF:
+				var base := UNITS_ADDR + 55 * m
+				w.mem_write(base + 9, w.mem8(a))
+				w.mem_write(base + 10, w.mem8(a + 2))
+				w.mem_write(base, w.mem8(base) | 8)
+				a += 4
+		ds_or(w, 0x50AD4E, 1)
+	return 0
+
+
+# --- DASH mission 4 (script 15, DASH chunk 4: the two bridges and their gates; rules.m15_*) -
+
+## gate b: [its hex, its four hexes, its DS:0x50AD68 bit, its bridge's flag, its blown flag, its shut flag]
+const M15_GATE := {0: [Vector2i(0x34, 0x28), [Vector2i(0x33, 0x1C), Vector2i(0x34, 0x1C), Vector2i(0x32, 0x1D), Vector2i(0x33, 0x1D)], 0x40, 0x50AD50, 0x50AD64, 0x50AD6E],
+		1: [Vector2i(0x13, 0x1C), [Vector2i(0x11, 0x24), Vector2i(0x12, 0x24), Vector2i(0x10, 0x25), Vector2i(0x11, 0x25)], 0x80, 0x50AD52, 0x50AD66, 0x50AD70]}
+const M15_CLOSED := [[199, 0x1E], [200, 0x1E], [0xC9, 0x1E], [0xCA, 0x20]]
+const M15_OPEN := [[0xBF, 0x1E], [0xC0, 0x20], [0xB8, 0x1E], [0xC3, 0x20]]
+const M15_WALLS := [[0x50AD60, 0x40, [[0x33, 0x1B, 0xDD, 0x1E], [0x34, 0x1B, 0xDE, 0x1E]]],
+		[0x50AD60, 0x80, [[0x33, 0x1C, 0xDF, 0x1E], [0x34, 0x1C, 0xE0, 0x1E]]],
+		[0x50AD61, 0xF, [[0x33, 0x1D, 0xE1, 0x1E], [0x34, 0x1D, 0xE2, 0x1E]]],
+		[0x50AD62, 0x40, [[0x11, 0x23, 0xDD, 0x1E], [0x12, 0x23, 0xDE, 0x1E]]],
+		[0x50AD62, 0x80, [[0x11, 0x24, 0xDF, 0x1E], [0x12, 0x24, 0xE0, 0x1E]]],
+		[0x50AD63, 0xF, [[0x11, 0x25, 0xE1, 0x1E], [0x12, 0x25, 0xE2, 0x1E]]],
+		[0x50AD64, 1, [[0x33, 0x27, 0xE4, 0x26], [0x34, 0x27, 0xE5, 0x24], [0x33, 0x28, 0xE6, 0x26], [0x34, 0x28, 0xE7, 0x24],
+				[0x35, 0x28, 0xE8, 0x24], [0x33, 0x29, 0xE9, 0x26], [0x34, 0x29, 0xEA, 0x24]]],
+		[0x50AD66, 1, [[0x12, 0x1B, 0xE4, 0x26], [0x13, 0x1B, 0xE5, 0x24], [0x12, 0x1C, 0xE6, 0x26], [0x13, 0x1C, 0xE7, 0x24],
+				[0x14, 0x1C, 0xE8, 0x24], [0x12, 0x1D, 0xE9, 0x26], [0x13, 0x1D, 0xEA, 0x24]]]]
+
+
+static func m15_load(w: Pd2World) -> void:
+	for c in [[0x51C920, 0x51C930, 16], [0x51C940, 0x51C968, 40], [0x51C990, 0x51C9F0, 96],
+			[0x51CA50, 0x51CA70, 28], [0x51CA90, 0x51CAB0, 28], [0x51CAD0, 0x51CAE0, 12]]:
+		static_copy(w, c[0], c[1], c[2])
+
+
+static func m15_init(w: Pd2World) -> int:
+	for p in [[0x50AD97, 7], [0x50AD9B, 7], [0x50ADAB, 7], [0x50AD95, 9], [0x50AD99, 0], [0x50AD9D, 0],
+			[0x50AD9F, 10], [0x50ADA1, 0], [0x50ADA3, 0xD], [0x50ADA5, 0xE], [0x50ADA7, 5],
+			[0x50ADA9, 0xE], [0x50ADAD, 0xE], [0x50ADAF, 9]]:
+		w.set_ds16(p[0], p[1])
+	for i in 0x20:
+		w.ds[0xB1 + i] = w.mem8(0x51C8E8 + i)
+		w.ds[0xD1 + i] = w.mem8(0x5242C8 + i)
+	set_506651(w, 0x54)
+	var t92 := Flight.s16(w.ds16(0x50AD92))
+	var n := 0
+	for k in 254:
+		if w.ub(k, 0x36) == 0 and w.mem8(0x506734 + 16 * w.sb(k, 0xB) + 4) <= t92:
+			for p in 6:
+				if w.ub(k, 0x1B + 2 * p) == 0xC and w.ub(k, 0x1C + 2 * p) & 0x3F:
+					n += 1
+	var old := w.mem8(0x5066E0)
+	w.mem_write(0x5066E0, old + (0xE - ((n + old) & 0xFF)))
+	return 0
+
+
+static func m15_menu(w: Pd2World, u: int) -> Array:
+	var p := Vector2i(w.ub(u, 9), w.ub(u, 10))
+	if p == Vector2i(0x13, 0x1C) or p == Vector2i(0x34, 0x28):
+		return [1, 0x51CB00]
+	if not w.ds8(0x50AD68) & 1:
+		return [1, 0x51CAF0]
+	return [0, -1]
+
+
+static func m15_tiles(w: Pd2World, hooks: Hooks, hexes: Array, tiles: Array) -> int:
+	for i in hexes.size():
+		set_height_tile(w, hexes[i].x, hexes[i].y, tiles[i][0], tiles[i][1])
+	for h in hexes:
+		var res := hooks.redraw_hex(h.x, h.y)
+		if res == 0x10000 or res == 0x20000:
+			return res
+	return 0
+
+
+static func m15_line_code(res: int) -> int:
+	return {-3: 0x20000, -2: 0x40000, -1: 0x10000}.get(res, 0)
+
+
+static func m15_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> int:
+	var pos := Vector2i(w.ub(u, 9), w.ub(u, 10))
+	var gate := -1
+	for gk in M15_GATE:
+		if M15_GATE[gk][0] == pos:
+			gate = gk
+	if gate == -1:
+		if w.ds8(0x50AD68) & 1:
+			return 0
+		if w.sb(u, 0xE) > 9:
+			w.setb(u, 0xE, (w.ub(u, 0xE) - 10) & 0xFF)
+			var r0 := hooks.box(0xBC, [], 0)
+			if r0 in AI_ABORT:
+				return r0
+			if r0 != 1:
+				w.setb(u, 0xE, (w.ub(u, 0xE) + 10) & 0xFF)
+				return 0
+			ds_or(w, 0x50AD68, 1)
+			for k in range(27, 31):
+				w.setb(k, 0x36, 0)
+			return 0
+		return m15_line_code(hooks.line(0x1E))
+	var gd: Array = M15_GATE[gate]
+	var hexes: Array = gd[1]
+	var bit: int = gd[2]
+	if w.sb(u, 0xE) < 0x14:
+		return m15_line_code(hooks.line(0x1E))
+	var msg := 0xB8
+	if w.ds8(gd[3]) & 1:
+		msg = 0xBA
+	elif w.ds8(gd[4]) & 1:
+		msg = 0xBB
+	elif not w.ds8(0x50AD68) & bit:
+		var r1 := hooks.box(0xB6, [], 0)
+		if r1 in AI_ABORT:
+			return r1
+		if r1 != 1:
+			return 0
+		w.setb(u, 0xE, (w.ub(u, 0xE) - 0x14) & 0xFF)
+		r1 = m15_tiles(w, hooks, hexes, M15_CLOSED)
+		if r1:
+			return r1
+		ds_or(w, 0x50AD68, bit)
+		ds_or(w, gd[5], 0x40)
+	else:
+		var o := occupant_raw(w, hexes[1].x, hexes[1].y)
+		if o != -1:
+			var r2 := hooks.line(0xB9, [["machine", table_byte(w, 55 * o + 0xC)]])
+			return r2 if r2 in AI_ABORT else 0
+		var r3 := hooks.box(0xB7, [], 0)
+		if r3 in AI_ABORT:
+			return r3
+		if r3 != 1:
+			return 0
+		w.setb(u, 0xE, (w.ub(u, 0xE) - 0x14) & 0xFF)
+		r3 = m15_tiles(w, hooks, hexes, M15_OPEN)
+		if r3:
+			return r3
+		w.set_ds8(0x50AD68, w.ds8(0x50AD68) & ~bit & 0xFF)
+	var r4 := hooks.line(msg)
+	return r4 if r4 in AI_ABORT else 0
+
+
+static func m15_find(w: Pd2World, x: int, y: int, table: int, base: int) -> int:
+	for i in 7:
+		if static_s16(w, table + 4 * i) == x and static_s16(w, table + 4 * i + 2) == y:
+			return base + i
+	return -1
+
+
+static func m15_ask(hooks: Hooks, msg: int) -> Variant:
+	var res := hooks.box(msg, [], 0)
+	if res in AI_ABORT:
+		return res
+	return null if res == 1 else -2
+
+
+static func m15_bomb_rule(w: Pd2World, u: int, hooks: Hooks) -> int:
+	var x := w.sb(u, 9)
+	var y := w.sb(u, 10)
+	var p := Vector2i(x, y)
+	var idx := m15_find(w, x, y, 0x51CA50, 0x19)
+	var site := 0
+	if idx == -1 or w.ds8(0x50AD50) & 1:
+		idx = m15_find(w, x, y, 0x51CA90, 0x12)
+		site = 1
+		if idx == -1 or w.ds8(0x50AD52) & 1:
+			if w.ds8(0x50AD50) & 1:
+				if p == Vector2i(0x33, 0x1B):
+					return -1 if w.ds8(0x50AD54) & 0x40 else 3
+				if p == Vector2i(0x34, 0x1C):
+					return -1 if w.ds8(0x50AD54) & 0x80 else 3
+				if p == Vector2i(0x33, 0x1D):
+					return -1 if w.ds8(0x50AD55) & 0xF else 3
+			if w.ds8(0x50AD52) & 1:
+				if p == Vector2i(0x11, 0x23):
+					return -1 if w.ds8(0x50AD56) & 0x40 else 4
+				if p == Vector2i(0x12, 0x24):
+					return -1 if w.ds8(0x50AD56) & 0x80 else 4
+				if p == Vector2i(0x11, 0x25):
+					return -1 if w.ds8(0x50AD57) & 0xF else 4
+			if p == Vector2i(0x34, 0x28):
+				if not w.ds8(0x50AD58) & 0x41:
+					return 5
+			elif p == Vector2i(0x13, 0x1C) and not w.ds8(0x50AD5A) & 0x41:
+				return 6
+			return -1
+	var flag_a := 0x50AD4E + 2 * idx
+	var state := 0x50AD50 + 2 * site
+	var code := 0x15 + site
+	var msg := 0xC3
+	if not w.ds8(state) & 0x40:
+		var r0: Variant = m15_ask(hooks, 0xC0)
+		if r0 != null:
+			return r0
+		ds_or(w, state, 0x40)
+		ds_or(w, flag_a, 1)
+		return code
+	if not w.ds8(state) & 0x80:
+		if not w.ds8(flag_a) & 1:
+			var r1: Variant = m15_ask(hooks, 0xC1)
+			if r1 != null:
+				return r1
+			ds_or(w, state, 0x80)
+			ds_or(w, flag_a, 1)
+			return code
+	elif w.ds8(state + 1) & 0xF:
+		msg = 0xC4
+	elif not w.ds8(flag_a) & 1:
+		var r2: Variant = m15_ask(hooks, 0xC2)
+		if r2 != null:
+			return r2
+		var r3 := hooks.line(0xC5)
+		if r3 in AI_ABORT:
+			return r3
+		w.set_ds8(state + 1, w.ds8(state + 1) & 0xF1 | 1)
+		if site == 1:
+			ds_or(w, flag_a, 1)
+		return code
+	var r4 := hooks.line(msg)
+	return r4 if r4 in AI_ABORT else -2
+
+
+static func m15_walls(w: Pd2World, hooks: Hooks) -> int:
+	for i in M15_WALLS.size():
+		var e: Array = M15_WALLS[i]
+		if not w.ds8(e[0]) & e[1]:
+			continue
+		for h in e[2]:
+			set_height_tile(w, h[0], h[1], h[2], h[3])
+		if i == 5:
+			w.set_ds8(0x50AD63, w.ds8(0x50AD63) & 0xF1 | 1)
+		for h in e[2]:
+			var res := hooks.redraw_hex(h[0], h[1])
+			if res == 0x10000 or res == 0x20000:
+				return res
+	return 0
+
+
+static func m15_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
+	var p := Vector2i(Pd2World.s8(w.mem8(0x50AC1C + 4 * i)), Pd2World.s8(w.mem8(0x50AC1D + 4 * i)))
+	if p == Vector2i(0x33, 0x1B):
+		ds_or(w, 0x50AD60, 0x40)
+	elif p == Vector2i(0x34, 0x1C):
+		ds_or(w, 0x50AD60, 0x80)
+	elif p == Vector2i(0x33, 0x1D) and not w.ds8(0x50AD61) & 0xF:
+		w.set_ds8(0x50AD61, w.ds8(0x50AD61) & 0xF1 | 1)
+	if p == Vector2i(0x11, 0x23):
+		ds_or(w, 0x50AD62, 0x40)
+	elif p == Vector2i(0x12, 0x24):
+		ds_or(w, 0x50AD62, 0x80)
+	elif p == Vector2i(0x11, 0x25) and not w.ds8(0x50AD63) & 0xF:
+		w.set_ds8(0x50AD63, w.ds8(0x50AD63) & 0xF1 | 1)
+	if p == Vector2i(0x34, 0x28):
+		ds_or(w, 0x50AD64, 1)
+	if p == Vector2i(0x13, 0x1C):
+		ds_or(w, 0x50AD66, 1)
+	m15_walls(w, hooks)
+	return 0
+
+
+static func m15_blast(w: Pd2World, rng: Pd2Random, b: int, live: int, hooks: Hooks) -> int:
+	if live:
+		var r0 := hooks.blast_open()
+		if r0 in AI_ABORT:
+			return r0
+		var a := 0x51C940 + 20 * b
+		var x0 := static_s16(w, a)
+		var y0 := static_s16(w, a + 2)
+		r0 = hooks.scroll(x0, y0)
+		if r0 in AI_ABORT:
+			return r0
+		r0 = hooks.blast_start(x0, y0)
+		if r0 in AI_ABORT:
+			return r0
+		var skip := r0 == 0x80000
+		var easy := hooks.options & 2 != 0
+		for j in 5:
+			var x := static_s16(w, a + 4 * j)
+			var y := static_s16(w, a + 4 * j + 2)
+			var bl := blast(w, hooks, x, y, skip)
+			skip = bl[1]
+			if bl[0]:
+				return bl[0]
+			for _i in 2:
+				var o := occupant_raw(w, x, y)
+				if o != -1:
+					var dmg := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+					if dmg and Fire.apply_hit(w, rng, o, dmg, -1, 12, easy) == "destroyed":
+						Action.destroy(w, o)
+		var r1 := hooks.blast_close()
+		if r1 == 0x10000 or r1 == 0x20000:
+			return r1
+	for j in 12:
+		var a2 := 0x51C990 + 0x30 * b + 4 * j
+		var x2 := static_s16(w, a2)
+		var y2 := static_s16(w, a2 + 2)
+		set_height_tile(w, x2, y2, 0xCB + j, w.mem8(0x51CAD0 + j))
+		var r2 := hooks.redraw_hex(x2, y2)
+		if r2 == 0x10000 or r2 == 0x20000:
+			return r2
+	return 0
+
+
+static func m15_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
+	for b in [0, 1]:
+		var gd: Array = M15_GATE[b]
+		if not w.ds8(gd[3]) & 1:
+			if w.ds8(0x50AD68) & gd[2]:
+				var r0 := m15_tiles(w, hooks, gd[1], M15_CLOSED)
+				if r0:
+					return r0
+		else:
+			var r1 := m15_blast(w, rng, b, 0, hooks)
+			if r1 in AI_ABORT:
+				return r1
+	var res := m15_walls(w, hooks)
+	return res if res == 0x10000 or res == 0x20000 else 0
+
+
+static func m15_fates(w: Pd2World, rng: Pd2Random, code: int) -> void:
+	for k in 40:
+		if not (w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4):
+			continue
+		if w.ub(k, 0) & 1:
+			if rng.r16(100) & 1 == 1:
+				mark_crew(w, w.ub(k, 0xB), 2)
+			elif rng.r16(100) < 0x23:
+				mark_crew(w, w.ub(k, 0xB), 1)
+		elif code == 0x82 and Flight._machine_class(w, w.sb(k, 0xC)) == 0 and w.ub(k, 0xD) != 100:
+			if rng.r16(100) < 0x28:
+				mark_crew(w, w.ub(k, 0xB), 1)
+				if rng.r16(100) < 0x3C:
+					w.setb(k, 0, w.ub(k, 0) | 1)
+					w.setb(k, 0xD, 0)
+
+
+static func m15_code(w: Pd2World) -> int:
+	var c := w.ds8(0x50AD68) & 0x3E
+	return 0x80 if c == 8 else (0x83 if c else 0x82)
+
+
+static func m15_end_code(w: Pd2World, rng: Pd2Random) -> int:
+	var code := m15_code(w)
+	m15_fates(w, rng, code)
+	return code
+
+
+static func m15_lead(w: Pd2World) -> int:
+	if not g(w, 0, 5):
+		return 0
+	var least := 0xFF
+	for i in 16:
+		least = mini(least, g(w, 0, 6 + i))
+	return least
+
+
+static func m15_call_out(w: Pd2World, b: int, nib: int) -> void:
+	if w.ds8(nib) & 0xF:
+		return
+	var cx := w.ds8(0x50AD95)
+	var cy := w.ds8(0x50AD97)
+	if b == 0:
+		w.set_ds8(0x50ADF1, 2)
+		for k in 254:
+			if w.sb(k, 0x36) > 2 or w.ub(k, 0) & 8:
+				w.setb(k, 7, 0)
+				w.setb(k, 8, 0)
+		Ai.group_retarget(w, 0x15, cx, cy)
+		set_g(w, 0x15, 0x1C, 10)
+		Ai.group_retarget(w, 0x16, cx, cy)
+		set_g(w, 0x16, 0x1C, 10)
+	else:
+		for grp in range(20, 64):
+			if Flight.group_alive(w, grp) and g(w, grp, 0x21) & 0xF0 == 0xF0:
+				for j in 16:
+					var m := g(w, grp, 6 + j)
+					if m != 0xFF:
+						var a := UNITS_ADDR + 55 * m
+						w.mem_write(a + 8, 0)
+						w.mem_write(a + 7, 0)
+						var v := w.mem8(a + 4)
+						w.mem_write(a + 4, ((v + 4) ^ v) & 0xF ^ v)
+	w.set_ds8(nib, w.ds8(nib) & 0xF1 | 1)
+
+
+static func m15_pos2(w: Pd2World, grp: int, x: int, y: int) -> void:
+	for f in [G_X, G_PREV_X]:
+		set_g(w, grp, f, x)
+		set_g(w, grp, f + 1, y)
+
+
+static func m15_word(w: Pd2World, grp: int, v: int) -> void:
+	set_g(w, grp, 0x1D, v & 0xFF)
+	set_g(w, grp, 0x1E, v >> 8)
+
+
+static func m15_copy23(w: Pd2World) -> void:
+	for grp in [0x18, 0x19, 0x1A]:
+		set_g(w, grp, 0x1D, g(w, 0x17, 0x1D))
+		set_g(w, grp, 0x1E, g(w, 0x17, 0x1E))
+
+
+static func m15_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
+	var cx := w.ds8(0x50AD95)
+	var cy := w.ds8(0x50AD97)
+	var sign := [["sign", g(w, 0, 1)]]
+	if stage == 0:
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		if not w.ds8(0x50AD5C) & 1:
+			var found := -1
+			for grp in range(23, 27):
+				if Pd2World.s8(g(w, grp, 0x16)) == Flight.s16(w.ds16(0x50AD95)) + 4:
+					found = grp
+					break
+			if found != -1:
+				var lead := m15_lead(w)
+				ds_or(w, 0x50AD5C, 1)
+				var rr: Variant = hooks.radar_open()
+				var r0: int = int(rr) if rr != null else Flight.grid_init(w, hooks.flight, 0)
+				if r0 in AI_ABORT:
+					return r0
+				var gx := Pd2World.s8(g(w, found, 0x16))
+				var lf := func() -> int: return face_of(w, rng, lead)
+				r0 = radio_scene(w, hooks, [["face", 9, 10, null], ["say", 0xCC, 10, sign], ["face", lf, 0x1B, 0],
+						["say", 0xCD, 0x1B, sign], ["say", 0xCE, 10, [gx]], ["say", 0xCF, 0x1B, sign], ["close"]])
+				if r0:
+					return r0
+		if w.ds8(0x50AD5C) & 1 and not w.ds8(0x50AD5E) & 1:
+			var all_done := true
+			for grp in range(23, 27):
+				if g(w, grp, 2) & 0x30 != 0x30:
+					all_done = false
+			if all_done:
+				var lead2 := m15_lead(w)
+				ds_or(w, 0x50AD5E, 1)
+				var rr2: Variant = hooks.radar_open()
+				var r1: int = int(rr2) if rr2 != null else Flight.grid_init(w, hooks.flight, 0)
+				if r1 in AI_ABORT:
+					return r1
+				var lf2 := func() -> int: return face_of(w, rng, lead2)
+				r1 = radio_scene(w, hooks, [["face", 9, 10, null], ["say", 0xCC, 10, sign], ["face", lf2, 0x1B, 0],
+						["say", 0xD0, 0x1B, sign], ["say", 0xD1, 10, [9]]])
+				if r1:
+					return r1
+				var least := 0x48
+				for k in range(27, 31):
+					if w.active(k):
+						least = mini(least, w.sb(k, 9))
+				r1 = radio_scene(w, hooks, [["say", 0xD3 if least < 0x15 else 0xD2, 0x1B, sign], ["close"]])
+				if r1:
+					return r1
+		for gate in [0, 1]:
+			var gd: Array = M15_GATE[gate]
+			var pos: Vector2i = gd[0]
+			if w.ds8(gd[5]) & 0x40 and not w.ds8(0x50AD68) & gd[2] and not w.ds8(gd[3]) & 1:
+				var o := occupant_raw(w, pos.x, pos.y)
+				if not w.ds8(gd[4]) & 1 and o != -1 and Pd2World.s8(table_byte(w, 55 * o + 0x36)) > 2:
+					var r2 := m15_tiles(w, hooks, gd[1], M15_CLOSED)
+					if r2:
+						return r2
+					r2 = hooks.scroll(gd[1][1].x, gd[1][1].y)
+					if r2 in AI_ABORT:
+						return r2
+					ds_or(w, 0x50AD68, gd[2])
+				if w.ds8(gd[4]) & 1 or w.ds8(0x50AD68) & gd[2]:
+					var table := 0x51CA50 if gate == 0 else 0x51CA90
+					for k in 254:
+						if w.ub(k, 7) == pos.x and w.ub(k, 8) == pos.y and w.ub(k, 0) & 8:
+							var i := rng.r16(7)
+							w.setb(k, 7, w.mem8(table + 4 * i))
+							w.setb(k, 8, w.mem8(table + 4 * i + 2))
+		for b in [0, 1]:
+			var bit6 := 0x40 if b == 0 else 0x80
+			var limit := 0x27 if b == 0 else 9
+			var other: Vector2i = M15_GATE[1 - b][0]
+			var gd2: Array = M15_GATE[b]
+			if not w.ds8(0x50AD6A) & bit6 and not w.ds8(gd2[3]) & 1 and not w.ds8(0x50AD68) & gd2[2]:
+				var near := false
+				for k in range(27, 31):
+					if w.sb(k, 9) < limit and w.ub(k, 0xD) and not w.ub(k, 0) & 1:
+						near = true
+				if near:
+					var table2 := 0x51CA50 if b == 0 else 0x51CA90
+					var n := 0
+					for k in 254:
+						if w.sb(k, 0x36) > 2 and w.ub(k, 0xD) and not w.ub(k, 0) & 1:
+							for i in 7:
+								if static_s16(w, table2 + 4 * i) == w.sb(k, 9) and static_s16(w, table2 + 4 * i + 2) == w.sb(k, 10):
+									n += 1
+					if n > 1:
+						var r3 := m15_blast(w, rng, b, 1, hooks)
+						if r3 in AI_ABORT:
+							return r3
+						ds_or(w, gd2[3], 1)
+						ds_or(w, 0x50AD6A, bit6)
+						for k in range(40, 254):
+							if w.ub(k, 7) == other.x and w.ub(k, 8) == other.y and w.ub(k, 0) & 8:
+								w.setb(k, 7, 0)
+								w.setb(k, 8, 0)
+		var r4 := flight_turn(w, rng, hooks)
+		if r4 in AI_ABORT:
+			return r4
+		for b in [0, 1]:
+			var bridge: int = 0x50AD50 + 2 * b
+			if not w.ds8(bridge) & 1 and w.ds8(bridge + 1) & 0xF == 1:
+				var r5 := hooks.scroll(0x34, 0x1C) if b == 0 else hooks.scroll(0x12, 0x24)
+				if r5 in AI_ABORT:
+					return r5
+				r5 = hooks.box(0xBD, [], 0)
+				if r5 in AI_ABORT:
+					return r5
+				if r5 == 1:
+					if b == 1:
+						ds_or(w, bridge, 1)
+					r5 = m15_blast(w, rng, b, 1, hooks)
+					if r5 in AI_ABORT:
+						return r5
+					if b == 0:
+						ds_or(w, bridge, 1)
+	elif stage == 1:
+		for e in [[0x40, 0x17, 0x18, [0x27, 0x26, 0x1F], -1], [0x80, 0x19, 0x1A, [0x29, 0x28, 0x20], 1]]:
+			var ga: int = e[1]
+			var gb: int = e[2]
+			if not w.ds8(0x50AD6C) & e[0] and g(w, ga, G_X) == g(w, ga, G_TARGET_X) and g(w, ga, G_Y) == g(w, ga, G_TARGET_Y) \
+					and g(w, gb, G_X) == g(w, gb, G_TARGET_X) and g(w, gb, G_Y) == g(w, gb, G_TARGET_Y):
+				for grp in e[3]:
+					for f in [G_PREV_X, G_X, G_TARGET_X]:
+						set_g(w, grp, f, cx)
+					set_g(w, grp, G_TARGET_Y, cy)
+				var y: int = (cy + e[4]) & 0xFF
+				set_g(w, ga, 2, g(w, ga, 2) | 0x30)
+				set_g(w, e[3][2], 0x1C, 0x18)
+				set_g(w, e[3][1], 0x1C, 0xC)
+				set_g(w, e[3][0], 0x1C, 0x18)
+				for grp in e[3]:
+					set_g(w, grp, G_PREV_Y, y)
+					set_g(w, grp, G_Y, y)
+				Ai.group_retarget(w, ga, -1, 0)
+				set_g(w, gb, 2, g(w, gb, 2) | 0x30)
+				Ai.group_retarget(w, gb, -1, 0)
+				ds_or(w, 0x50AD6C, e[0])
+		for b in [0, 1]:
+			var gd: Array = M15_GATE[b]
+			var flag := 0x50AD6E if b == 0 else 0x50AD70
+			var nib := flag + 1
+			if not w.ds8(flag) & 1:
+				if w.ds8(0x50AD68) & gd[2] or w.ds8(gd[3]) & 1:
+					m15_call_out(w, b, nib)
+					ds_or(w, flag, 1)
+				elif w.ds8(flag) & 0x40 and not w.ds8(0x50AD68) & gd[2]:
+					m15_call_out(w, b, nib)
+					if not w.ds8(gd[4]) & 1:
+						for grp in range(20, 64):
+							if g(w, grp, 0x21) & 0xF0 != 0xF0:
+								continue
+							for j in 16:
+								var m := g(w, grp, 6 + j)
+								if m == 0xFF:
+									continue
+								var a := UNITS_ADDR + 55 * m
+								var f := w.mem8(a)
+								var mx := Pd2World.s8(w.mem8(a + 9))
+								var my := Pd2World.s8(w.mem8(a + 10))
+								if w.mem8(a + 0xD) and not f & 1 and f & 8 and f & 4 and \
+										((b == 0 and mx > 0x36 and my > 0x1B) or (b == 1 and my < 0x19)):
+									w.mem_write(a + 7, gd[0].x)
+									w.mem_write(a + 8, gd[0].y)
+			elif not w.ds8(0x50AD68) & gd[2] and not w.ds8(gd[3]) & 1:
+				w.set_ds8(flag, w.ds8(flag) & 0xFE)
+		for k in range(27, 31):
+			if w.sb(k, 9) == 1:
+				var r6 := hooks.scroll(1, w.sb(k, 10))
+				if r6 in AI_ABORT:
+					return r6
+				r6 = hooks.line(0xCA)
+				if r6 in AI_ABORT:
+					return r6
+				Action.take_off_map(w, k)
+				m12_step(w, 0x50AD68)
+	if w.ds8(0x50AD4E) & 1:
+		var any := false
+		for k in range(27, 31):
+			if w.sb(k, 9) >= 0:
+				any = true
+		if not any:
+			w.set_ds8(0x50ADF2, m15_end_code(w, rng))
+		var n2 := 0
+		for k in 254:
+			if k >= 27 and k <= 30:
+				if w.ub(k, 0x34) != 0xFF:
+					n2 += 1
+			elif w.ub(k, 0xD) and w.ub(k, 9) != 0xFF and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4:
+				n2 += 1
+		if not n2:
+			w.set_ds8(0x50ADF2, m15_end_code(w, rng))
+		return 0
+	var t := g(w, 0, 0x1F)
+	if t == 0 or t == 5:
+		m15_pos2(w, 0x24, 10, 7)
+		m15_pos2(w, 0x23, 10, 7)
+		set_g(w, 0x23, 0x1C, 0x3C)
+		set_g(w, 0x24, 0x1C, 0x46)
+		if t == 5:
+			m15_word(w, 0x17, 10)
+			m15_copy23(w)
+		else:
+			m15_word(w, 0x18, 9)
+			m15_word(w, 0x17, 9)
+			m15_word(w, 0x1A, 10)
+			m15_word(w, 0x19, 10)
+	elif t == 1 or t == 6 or t == 4:
+		set_g(w, 0x21, 0x1C, 0x28 if t == 4 else 0x32)
+		m15_pos2(w, 0x24, 10, 7)
+		m15_pos2(w, 0x23, 10, 7)
+		set_g(w, 0x23, 0x1C, 0x3C)
+		set_g(w, 0x24, 0x1C, 0x50)
+	elif t == 2:
+		m15_pos2(w, 0x22, 0xE, 7)
+		m15_pos2(w, 0x24, 0xC, 7)
+		m15_pos2(w, 0x23, 0xC, 7)
+		m15_word(w, 0x17, 0x10)
+		m15_copy23(w)
+	elif t == 3:
+		m15_pos2(w, 0x22, 0xE, 7)
+		m15_word(w, 0x17, 10)
+		m15_copy23(w)
+	elif t == 7:
+		set_g(w, 0x21, 0x1C, 0x1E)
+		m15_pos2(w, 0x24, 10, 7)
+		m15_pos2(w, 0x23, 10, 7)
+		set_g(w, 0x23, 0x1C, 0x3C)
+		set_g(w, 0x24, 0x1C, 0x46)
+	set_g(w, 4, 2, g(w, 4, 2) & 0x2F | 0xA0)
+	for f in [G_TARGET_X, G_PREV_X, G_X]:
+		set_g(w, 4, f, cx)
+		set_g(w, 4, f + 1, cy)
+	group_scan(w)
+	var lead3 := stage
+	if g(w, 0, 5):
+		lead3 = 0xFF
+		for i in 16:
+			lead3 = mini(lead3, g(w, 0, 6 + i))
+	var rr3: Variant = hooks.radar_open()
+	if rr3 == null:
+		Flight.grid_init(w, hooks.flight, 0)
+	var lf3 := func() -> int: return face_of(w, rng, lead3)
+	var r7 := radio_scene(w, hooks, [
+			["face", 2, 0x3A, null], ["say", 0xAB, 0x3A], ["face", 9, 0xB, null], ["say", 0xAC, 0xB], ["close"],
+			["face", 8, 10, null], ["say", 0xAD, 10], ["face", lf3, 0x1B, 0],
+			["face", 0xC, 0x1B, 1], ["say", 0xAE, 0x1B], ["say", 0xAF, 10], ["face", 9, 0x1B, 0],
+			["say", 0xB0, 0x1B], ["face", 0xD, 0x1B, 1], ["wait"], ["close"],
+			["face", 4, 0x3A, null], ["say", 0xB1, 0x3A], ["close"]])
+	if r7:
+		return r7
+	for j in 4:
+		var k := 27 + j
+		w.setb(k, 9, w.mem8(0x51C920 + 4 * j))
+		w.setb(k, 10, w.mem8(0x51C922 + 4 * j))
+		w.setb(k, 0, w.ub(k, 0) | 0xC)
+	set_g(w, 0, 2, g(w, 0, 2) & 0xF | 0x20)
+	for f in [G_TARGET_X, G_PREV_X, G_X]:
+		set_g(w, 0, f, cx)
+		set_g(w, 0, f + 1, cy)
+	ds_or(w, 0x50AD4E, 0x41)
 	return 0

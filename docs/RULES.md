@@ -1856,6 +1856,96 @@ control room). Emulated 1,300 / 1,300:
   hook byte reads low memory. The start script breaks the blown sites again; the
   withdraw is 0x82.
 
+**DASH mission 2** (script 12, DASH chunk 1: hold the airport's north gate while two
+enemy sapper groups blow its walls). Emulated 1,300 / 1,300:
+- **The sappers:** groups 21 and 26 carry rounds 12 to four sites (group 21: sites 1 then
+  4, its stage in DS:0x50AD50 bits 1–5 and fuse in DS:0x50AD51's nibble; group 26: sites
+  2 then 3, DS:0x50AD52 / 0x50AD53; DS:0x50AD8A / 0x50AD8C count the blasts for the start
+  script). In stage 1 a unit with a round 12 standing on a site's two charge hexes lays it
+  (the pocket cleared, the fuse 2, its group heading 4 rows up); a fuse at 0 blows the
+  site (0x4B0670, live: the explosion window, each of its 15 hexes blasted and its occupant
+  hit twice by a no‑shooter blast, `fire_damage` / `apply_hit` with slot 12 and mode 4,
+  then the broken tiles, each hex redrawn), the alert goes up and the group moves on. A
+  group with no round left takes a destination from a table on both stages (fixed points
+  (0x41, 0x3C) / (0x46, 0x46) or one of two hexes by random(2) for x and y). **Quirk:**
+  after site 2 the destinations are written for group 26's members by group 21's slots
+  (an empty slot of group 26 reaches unit 255, i.e. the group table).
+- **The enemy's retreat:** with more than 49 computer units destroyed (counted on top of
+  group 21's rounds: the routine reuses the counter) every computer group runs for the
+  nearer map edge (DS:0x50AD76 bit 0); stage 0 then takes its units on row or column 1 off
+  the map, and after six turns of it with player units on the map the mission is won
+  (0xAC, DS:0x50AD81 nibble 1, 0x80). Two player units past (0x20, 0x26) inside rows
+  0x26–0x2F for three turns send both sapper groups home (stages 4).
+- **Defeat:** more than four enemy units past (0x3D, 0x37) end it (0xA9 / 0xAA, or the
+  lost scene 0x4B0A10 with group 0 gone; DS:0x50AD7F 2), as does losing every ground unit
+  (0x4B0A10, DS:0x50AD7D 2; during the retreat 0xA1–0xA5 and nibble 1, a win). The end code
+  (0x4B0960) is 0x80 with DS:0x50AD7D or 0x50AD81 at 1, else the fates (a destroyed unit
+  with condition marks its crew bit 1 unless random(100) & 3 is 2) and 0x82; the withdraw
+  gives 0x83 during the retreat.
+- **Command** ("状況確認 0AP", 0x4AE930): the count of enemy units past (0x3D, 0x37)
+  (0xAD). Objective (0x4AE730): 0x10A, 0x10B or −1 by the groups' status nibbles. Init:
+  camera (0xB, 7), drop points (0xE, 7–9), the computer's (0, 3–5), stock byte
+  DS:0x5066E0 = 0, DS:0x506651 = 0x36. The first call lands group 0 on 0x51C0A8's points;
+  the start script blasts the counted sites again (not live).
+
+**DASH mission 3** (script 14, DASH chunk 3: hold Bronax airport until the reserve comes).
+Emulated 1,300 / 1,300:
+- **The reserve** (stage 0, once, DS:0x50AD8C bit 0): with player units on the map and
+  the turn counter at 15 (10 once a unit is lost), the crews waiting (+4 = 3, +2 = 0) are
+  called up: three ground crews (+3 = 0) into group 2, two air crews into group 3, then
+  three and two more into groups 4 and 5; each crew +4 = 2 (+6 bits 0–1, +7 cleared), its
+  unit (the same number) made ready (condition from its machine's +2, launchers' bits
+  4–5 cleared, pockets refilled to the round's +0 & 0x3F, +1 = 0, +2's low nibble). An air
+  group short of half its ground group stops the turn with the debug line "Bad condition"
+  (0x51C8AC / 0x51C8BC; 0x10000 or the window's code). With an air group formed: the radar,
+  the called-up crews on duty take +4 = DS:0x50AD8E and their unit flag bit 2, and the
+  radio (0xA6–0xAA, the arrival time turn + 4 by 0x453900).
+- **Stage 1:** groups 20 / 21 are sent in (DS:0x50AD50 bit 0, the alert 2) when group 8 or
+  10 has taken off, or once the reserve is in and more than 49 units are lost
+  (0x4BAD80); under 25 computer units left, every computer unit retreats (orders 5, to
+  the nearer of column 0x45 / row 0x46, columns 0x2A / 0x2D shifted left; DS:0x50AD76),
+  and stage 0 takes those reaching it off the map. Groups 22–31 with no member left on
+  the map are sent to their fallback points (8, 0xE) / (0xE, 8).
+- **End:** with groups 0 and 2 empty, 0x82 (and a scene when the reserve's air groups
+  still fly), or 0x80 during the retreat (0xB5–0xB7); six retreat turns with them alive:
+  0x80 (0xB5, 0xB8, 0xB6). The fates (0x4BAB60) by the code: 0x82 two even random(100)
+  destroy a member (a third marks its crew), 0x80 / 0x83 random(100) % 3 = 1 marks a
+  destroyed member's crew. The withdraw is 0x82 and sends the called-up crews not on the
+  map back to waiting. Init: camera (0xC, 8), DS:0x506651 = 0x5A. No unit command.
+- `take_off_map` (0x47FEE0) and 0x47FFA0 read the status from the crew table by the unit's
+  signed crew number: a number below 0 reads the stock before the table (found here).
+
+**DASH mission 4** (script 15, DASH chunk 4: get four trailers, units 27–30, out by column 1
+across two bridges with gates). Emulated 1,300 / 1,300:
+- **The gates** (A on (0x34, 0x28), B on (0x13, 0x1C); DS:0x50AD68 bit 6 / 7 open): the unit
+  command on a gate hex (20 AP; "ゲート 20AP", DS:0x51CB00) opens it (0xB6, its four hexes'
+  tiles 199–0xCA, DS:0x50AD6E / 0x50AD70 bit 6) or closes it (0xB7; not with a unit in the
+  way, 0xB9 with its machine's name), then 0xB8; a blown bridge gives 0xBA, a blown gate
+  0xBB. Elsewhere, before the trailers are called (bit 0), "通信 10AP" (DS:0x51CAF0) and
+  0xBC call them (units 27–30 +0x36 = 0; the AP spent first and given back on 中止).
+  Under the AP 0x1E. In stage 0 an enemy on a gate hex opens again a gate opened before, and
+  sends units heading for an open gate to a random one of its bridge's charge points.
+- **The bridges:** three charges on a bridge's points (0x51CA50 / 0x51CA90, flags
+  DS:0x50AD80 / 0x50AD72 + 2 i; 0xC0, 0xC1, 0xC2 and 0xC5, the bomb rule returning 0x15 /
+  0x16 with no fuse) arm it (DS:0x50AD51 / 0x50AD53 nibble 1): stage 0 asks 0xBD and blows
+  it (0x4BEA50: five hexes blasted, occupants hit twice by a no‑shooter blast, the twelve
+  span hexes broken). It also goes by itself when a trailer comes within reach and two
+  enemy units stand on its points. **Quirk:** the third charge on bridge A does not mark
+  its point. The far banks' walls and the gates take charges too (bomb rule 3 / 4 / 5 / 6;
+  the bomb hook breaks them by the entry's hex, 0x4BED30).
+- **Stage 1:** the reinforcements (groups 23–26 arrived at their targets send groups 31,
+  38, 39 / 32, 40, 41 to the camera point), the enemy called out to an open gate or a blown
+  bridge (DS:0x50AD6F / 0x50AD71; for B their units' set mode + 4), and each trailer on
+  column 1 leaves the map (0xCA, DS:0x50AD68 bits 1–5 + 1).
+- **End:** with no trailer on the map, or no player unit or trailer carrying one, the end
+  code (0x4BF2D0): four away 0x80, some 0x83, none 0x82, then the fates (0x4BF310, read in
+  the disassembly: a destroyed unit marks its crew bit 1 on an odd random(100), else bit 0
+  under 35; a damaged ground machine with 0x82 under 40 marks bit 0 and under 60 is
+  destroyed). The withdraw gives the code without the fates. The first call sets the
+  enemy's timetable by group 0's +0x1F, lands the trailers (0x51C920) and plays the
+  launch scene. Init: DS:0x506651 = 0x54, the stock of rounds 12 topped to 14 with those
+  loaded. **Quirk:** 0xCE and 0xD1 format two and four numbers from one argument.
+
 **The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
 clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
 g mod 3 (DS:0x50AD99/9B + 4k), or for type 9 (+0x21 = 9x) the bytes at units[0] +
@@ -2462,8 +2552,8 @@ before it loads the mission. Then it leaves its turn loop:
     the loop breaks and calls the mission's hook from table 0x51F038 (by DS:0x50CE72),
     and the end code is DS:0x50ADF2. Mission 1's hook (0x49A6C0) sets 0x80, so
     withdrawing from mission 1 clears it. Entry 0 (0x4DE070) only shows "bad story
-    level". The other missions' hooks are ported with their scripts (§5.8; all of PD2
-    so far);
+    level". The other missions' hooks are ported with their scripts (§5.8; all of PD2 and
+    DASH's scripts 12, 14 and 15 so far);
   - entry 0xC (WMES 0x1DF) gives 0x81, which quits to the title;
   - 0x99 becomes 0x82, and 0xC0 returns at once.
 
@@ -2685,8 +2775,8 @@ sorted random fill can bring about — the game draws for ever: the port stops t
      search, conceal, reload). Left for the Godot engine, written from the
      decompiled C: the event scripts (the player's dialogs — reaction menu, mine
      clearing, "enemy discovered" — are ported);
-   - the event scripts mission by mission (226 KB in all): all ten PD2 missions are
-     ported and emulated; left: DASH's 12 (scripts 11–22), and the
+   - the event scripts mission by mission (226 KB in all): all ten PD2 missions and
+     DASH's missions 2-4 (scripts 12, 14, 15) are ported and emulated; left: DASH's other 9 (scripts 11–22), and the
      approach loop 0x4403D0 and the operation plan's deployment rules (0x51EAE8..).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.

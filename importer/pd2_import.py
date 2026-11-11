@@ -170,10 +170,11 @@ CREW_VA = 0x506734          # crew table, 64 x 16 B: 37-63 are the computer's pi
 # The mission scripts' own words: the unit menu's entry 11 (the menu hooks of table
 # 0x51EF18 point DS:0x517F1C at it) and the scripts' choice lists (pointer arrays at
 # DS:0x517F78 ..., resolved at import).
-SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0, 0x51AEC8, 0x51BAC0,   # the menu entries
+SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0, 0x51AEC8, 0x51BAC0, 0x51C4E8, 0x51CAF0, 0x51CB00,   # the menu entries
                 0x510444, 0x51044C, 0x510454, 0x51045C,   # ui_message_box's buttons
                 0x51A6C0, 0x51A6D4,                       # lines shown by 0x4521C0
-                0x51AEFC}                                 # questions shown by 0x43BA20
+                0x51AEFC,                                 # questions shown by 0x43BA20
+                0x51C8AC, 0x51C8BC}                       # mission 14's "Bad condition" lines
 SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x51AD78: 3}   # pointers each (MissionScripts.CHOICES)
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to

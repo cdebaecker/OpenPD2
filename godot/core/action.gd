@@ -879,7 +879,7 @@ static func take_off_map(w: Pd2World, k: int) -> void:
 			w.setb(c, 0, w.ub(c, 0) & 0xDF)
 			w.O[p.x + MAP * p.y] = (c + 1) & 0xFF
 			w.setb(k, 0x34, 0xFF)
-		var st := w.ucrew(k, 2)
+		var st := w.mem8(0x506734 + 16 * w.sb(k, 0xB) + 2)   # (a crew number below 0 reads the stock before the table)
 		if st != w.ub(k, 0x36):
 			w.setb(k, 0x36, st)
 	w.setb(k, 9, 0xFF)

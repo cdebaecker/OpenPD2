@@ -2026,6 +2026,9 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		for a in args:
 			if a is Array and a.size() == 2 and str(a[0]) == "sign":
 				out.append(GameData.call_sign(battle.campaign, int(a[1])))
+			elif a is Array and a.size() == 2 and str(a[0]) == "machine":    # a machine's name (DS:0x50C265)
+				var mn: Array = GameData.tables(battle.campaign).get("machine_names", [])
+				out.append(mn[int(a[1])] if int(a[1]) < mn.size() else "")
 			else:
 				out.append(a)
 		return out
