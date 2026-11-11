@@ -976,7 +976,7 @@ static func manipulator_state(w: Pd2World, u: int) -> int:
 static func reload_pockets(w: Pd2World, u: int, s: int) -> Array:
 	var lid := w.launcher_id(u, s)
 	var takes := []
-	for j in 3:
+	for j in (3 if lid != -1 else 0):      # an empty slot takes none
 		takes.append(W.s8(w.launcher(lid, 0xA + j)))
 	var out := []
 	for p in 12:

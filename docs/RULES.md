@@ -3138,6 +3138,79 @@ Undefined:
 - the group drop takes crew +5 as a group number unchecked: 64–254 reach past the group
   table. The port refuses.
 
+### 5.21 Pocket actions: magazine swaps and handing over: Emulated
+
+`rules.slot_menu` / `pocket_menu` / `magazine_rows` / `pick_magazine` / `hand_over`,
+GDScript `Pockets`, checked by `verify_rules.verify_pockets`.
+
+**Where they are offered.**
+- **The weapon picker** (0x4E7EE0) returns 4 + slot when the slot's magazine column is
+  clicked. The fire command (0x425AF0) and the mine dialog (0x4756A0) then:
+  - refuse with 0x1B9 when both arms are broken (+1 bits 6-7 = 2, +2 bits 0-1 = 2);
+  - otherwise open the slot menu with only its swaps;
+  - refuse with 0x1AE (ui_not_enough_ap) when the entry costs more AP than the unit has;
+  - then ask the weapon again.
+- **The machine status window** (0x4279F0) opens the same menu on a slot (both arms broken:
+  0x1B9), or the pocket menu on a pocket (manipulators broken: 0x1B9). The same AP check
+  follows.
+
+**The slot menu** (`ui_slot_picker` 0x427530). Its entries, with their AP (texts at exe
+0x514008 ...):
+- A magazine launcher (+9 bit 3) with manipulators not broken:
+  - with rounds left: **swap** (0), twice the slot's round reload AP (ammo +7, low 5 bits);
+  - always: **reload** (1), the reload AP of the launcher's first round (+0xA).
+- Outside a picker:
+  - a hand slot (2+) with manipulators not broken: **hand over** (2) and **discard** (3,
+    1 AP; not ported);
+  - slots 0-1: **unequip** (4, 1 AP; not ported).
+- The hand-over AP of a slot (0x4507C0) is the launcher's load (+7, signed 5 bits) plus
+  the round's load (ammo +6) scaled by how full the magazine is, + 1:
+  `count * 200 / capacity * load / 100`, unsigned 32-bit, its low byte capped at the load.
+- An empty slot reads the 17 bytes before the launcher table (machine 31's tail).
+
+**The pocket menu** (0x427FF0). With A the pocket's round:
+- **use** (5), A's reload AP: warhead bit 5 and rounds left (the item command, 5.16);
+- **recon** (6), the reload AP: warhead 10 and rounds left (not ported);
+- otherwise **set** (7), the reload AP halved for an engineer: warhead 13, rounds left,
+  pocket not broken (5.15);
+- then always **hand over** (2), A's load + 1, and **discard** (3, 1 AP; not ported).
+
+**The pocket picker** (`ui_pocket_picker` 0x4E95C0):
+- It lists `reload_pockets` (0x480990). An empty slot takes no round there.
+- Each row is 0x1D8: name, count, ground and air attack, recon range:penetration,
+  -load:reload AP, and the state ○ / △ / × (pointed at by DS:0x51F6A0..A8).
+- No row: 0x1D9.
+- After a pick:
+  - **swap** (0x427930): the slot feeds from the picked pocket and the old magazine stays
+    in its pocket;
+  - **reload** (0x427980): the same, then the pocket it fed from is cleared.
+- Either way the menu's AP is paid.
+
+**Handing over** (0x4287A0). It marks (F bit 1) each neighbour holding a unit o where:
+- o's status is 0 (`is_enemy` 0x47CD40 returns the status);
+- the heights differ by less than 2;
+- o has the AP;
+- for a slot: o's slot 2 is empty and the launcher's mount bits (its first word) meet
+  o's machine word +0xF, or o's slot 3 is empty and they meet word +0x11;
+- for a pocket: o holds fewer loose rounds (pockets with a round, not fed by a fitted
+  slot 0-3) than its machine allows (+0x17).
+
+No mark: 0x1E7. Otherwise each click is handled as follows:
+- **Cancel or a hex without the mark:** the marks are cleared and nothing happens.
+- **A marked empty hex:** the game asks for another click.
+- **A marked unit:** the game asks 0x1E8 (the AP):
+  - no: it asks for another click;
+  - yes: the item moves, the marks are cleared, and both units pay the AP.
+
+Any F bit 1 already set counts as a mark.
+
+What moves:
+- **A pocket:** its round, count and state go to o's first empty pocket. If o has none,
+  nothing happens and no AP is paid.
+- **A slot:** the launcher and slot state go to o's slot 2 when empty, else slot 3. The
+  round, count and pocket state go to o's **last** empty pocket (pocket 0 when there is
+  none, overwriting it). The giver's slot and its pocket are emptied.
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |

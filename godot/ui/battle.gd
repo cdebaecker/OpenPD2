@@ -2,7 +2,7 @@ extends Node2D
 ## The tactical battle, sandbox edition: one mission's map and enemy force (INIT), a
 ## stand-in squad (Mission.sandbox_squad), the player's commands and the computer's
 ## whole turn, all through the ported rules in core/. What is not ported yet (briefing,
-## event scripts, magazine swaps) is replaced by the simplest
+## the battle's own windows) is replaced by the simplest
 ## stand-in and listed in engine/README.md.
 
 const TILE_W := 48
@@ -55,6 +55,7 @@ var ai_thread: Thread = null
 var ai_running := false
 var react_sem := Semaphore.new()
 var react_answer: Variant = 1
+var scripted: Array = []      # tests: the answers ask_choice / ask_table / ask_hex give, in turn
 var hex_pick: Array = []         # the hexes a question on the worker thread waits a click on
 var react_panel: PanelContainer = null
 var react_target := -1
@@ -160,16 +161,25 @@ class SandboxHooks extends AiTurnHooks:
 	func mine_shoot(u: int) -> Variant:
 		if not battle.ask_box(battle.msg(0x1A4), false):
 			return null
-		var opts := []
-		for s in Action.weapon_choices(w, u, 3, 0):
-			if s < 4:
-				opts.append([battle.ui("UI_SLOT_ROUNDS_AP") % [s + 1, w.slot_count(u, s),
-					Move.launcher_ap(w, w.launcher_id(u, s))], s])
-		opts.append([battle.ui("UI_CANCEL"), -2])
-		var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
-		if pick != -2:
-			battle.say_msg(0x1A5)
-		return [pick]
+		while true:
+			# the weapon picker (mode 3): a slot shoots the mine; a magazine item (4 + slot)
+			# runs the slot menu (0x427530) and asks again (step_mine_found 0x4756A0)
+			var opts := []
+			for s in Action.weapon_choices(w, u, 3, 0):
+				if s < 4:
+					opts.append([battle.ui("UI_SLOT_ROUNDS_AP") % [s + 1, w.slot_count(u, s),
+						Move.launcher_ap(w, w.launcher_id(u, s))], s])
+				else:
+					opts.append([battle.ui("UI_SLOT_MAGAZINE") % (s - 3), s])
+			opts.append([battle.ui("UI_CANCEL"), -2])
+			var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
+			if pick >= 4:
+				battle.slot_menu_flow(u, pick - 4, true)
+				continue
+			if pick != -2:
+				battle.say_msg(0x1A5)
+			return [pick]
+		return null
 
 
 func _ready() -> void:
@@ -1009,6 +1019,8 @@ func _build_hud() -> void:
 	if entry11[0] == 1:
 		cmds.append([mission_label(entry11[1]) + " [I]", _cmd_mission])
 	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
+	cmds.append([ui("UI_SLOT_MENU") + " [G]", _cmd_slot_menu])
+	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])
 	for b in cmds:
 		var btn := Button.new()
 		btn.text = b[0]
@@ -1096,6 +1108,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_W: _cmd_withdraw()
 			KEY_I: _cmd_mission()
 			KEY_X: _cmd_explosives()
+			KEY_G: _cmd_slot_menu()
+			KEY_P: _cmd_pocket_menu()
 			KEY_TAB: _next_unit()
 			KEY_R:                                    # the last flight window, to look at again
 				if radar_view and not radar_view.snap.is_empty():
@@ -1281,6 +1295,8 @@ func ask_box(text: String, default: bool) -> bool:
 func ask_choice(text: String, options: Array, default: Variant) -> Variant:
 	## Called on a worker thread (the move, the computer's turn): shows the question on the
 	## main thread and waits for the answer. auto_react: the default, without asking.
+	if not scripted.is_empty():
+		return scripted.pop_front()
 	if auto_react:
 		return default
 	if OS.get_thread_caller_id() == OS.get_main_thread_id():
@@ -1449,6 +1465,8 @@ func _kind_char(kind: int) -> String:
 func ask_table(title: String, header: Array, rows: Array, cancel: int) -> int:
 	## a list window on a worker thread: a row's index, or cancel; refused rows keep the
 	## list open (0x4E3230 / 0x4E0450). auto_react / the main thread: cancel.
+	if not scripted.is_empty():
+		return scripted.pop_front()
 	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return cancel
 	call_deferred("_open_table", title, header, rows, cancel)
@@ -1512,6 +1530,8 @@ func list_font() -> Font:
 func ask_hex(text: String, hexes: Array, default: Variant) -> Variant:
 	## a hex clicked on the map (ui_map_click), on a worker thread; hexes are marked ("any":
 	## every hex is taken), the panel's button answers -2. auto_react / the main thread: default.
+	if not scripted.is_empty():
+		return scripted.pop_front()
 	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return default
 	call_deferred("_open_hex", text, hexes)
@@ -2632,6 +2652,206 @@ func _cmd_explosives() -> void:
 	move_thread.start(func():
 		run.call()
 		call_deferred("_mission_cmd_finished"))
+
+
+
+# --- the pocket actions (Pockets: the slot menu 0x427530, the pocket menu 0x427FF0, the
+# pocket picker 0x4E95C0, the swaps 0x427930 / 0x427980, handing over 0x4287A0)
+
+class BattleHandHooks extends Pockets.HandHooks:
+	## 0x4287A0's clicks (the marked neighbours are highlighted; the panel's button cancels)
+	## and its 0x1E8 box, on the command's thread
+	var battle
+	var marks: Array = []
+
+	func click() -> Variant:
+		var r: Variant = battle.ask_hex(battle.ui("UI_PICK_RECIPIENT"), marks, -2)
+		return r if r is Vector2i else null
+
+	func ask(ap: int) -> int:
+		return 1 if battle.ask_box(battle.msg(0x1E8, [ap]), false) else 0
+
+	func line(msg: int) -> int:
+		battle.say_msg(msg)
+		return 0
+
+
+func pocket_action_text(a: int, ap: int) -> String:
+	## the menus' entries (exe 0x514008 ...: "%2dAP")
+	return GameData.exe_text(campaign, Pockets.ACTION_TEXT[a], [ap])
+
+
+func both_arms_broken(u: int) -> bool:
+	## cmd_fire 0x425AF0, step_mine_found 0x4756A0, the machine status window 0x4279F0
+	return (w.ub(u, 1) & 0xC0) == 0x80 and (w.ub(u, 2) & 3) == 2
+
+
+func magazine_table(u: int, s: int) -> int:
+	## ui_pocket_picker (0x4E95C0): the pocket picked for slot s, or -2 (none: 0x1D9)
+	var rows := Pockets.magazine_rows(w, u, s)
+	if w.fault != "":
+		return -2
+	if rows.is_empty():
+		say_msg(0x1D9)
+		return -2
+	var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	var cells := []
+	for r in rows:
+		var args := [0xF0, str(an.get(str(r[1]), "")), r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9],
+				GameData.exe_text(campaign, r[10])]
+		cells.append({"cells": text_cells(msg_raw(0x1D8), args), "refused": false})
+	var i := ask_table(ui("UI_PICK_POCKET"), text_cells(msg_raw(0x1D7), []), cells, -2)
+	return -2 if i < 0 or i >= rows.size() else int(rows[i][0])
+
+
+func _menu_pick(title: String, menu: Array) -> int:
+	var opts := []
+	for i in menu.size():
+		opts.append([pocket_action_text(menu[i][0], menu[i][1]), i])
+	opts.append([ui("UI_CANCEL"), -2])
+	return ask_choice(title, opts, -2)
+
+
+func hand_over_flow(u: int, item: int, ap: int) -> int:
+	## 0x4287A0, then the AP of both (the machine status window's entry 2)
+	var hk := BattleHandHooks.new()
+	hk.battle = self
+	var keep := w.F.duplicate()
+	hk.marks = Pockets.hand_over_marks(w, u, item, ap)
+	w.F = keep                                    # hand_over sets the marks itself
+	var o := Pockets.hand_over(w, u, item, ap, hk)
+	if o in Pockets.ABORT or o == -1:
+		return 0
+	Ai.spend_ap(w, u, ap)
+	Ai.spend_ap(w, o, ap)
+	say(uif("UI_HANDED_OVER", [unit_name(u), unit_name(o)]))
+	return 1
+
+
+func slot_menu_flow(u: int, s: int, picker: bool) -> int:
+	## the slot menu (0x427530) as cmd_fire / the mine dialog (picker: the magazine column)
+	## and the machine status window run it: both arms broken 0x1B9; an entry; its AP
+	## (ui_not_enough_ap 0x1AE); the swaps through the pocket picker, handing over
+	if both_arms_broken(u):
+		say_msg(0x1B9)
+		return 0
+	var menu := Pockets.slot_menu(w, u, s, picker)
+	if w.fault != "" or menu.is_empty():
+		return 0
+	var i := _menu_pick(uif("UI_SLOT", [s + 1]), menu)
+	if i < 0:
+		return 0
+	var act: int = menu[i][0]
+	var ap: int = menu[i][1]
+	if w.sb(u, 0xE) < ap:
+		say_msg(0x1AE, [ap])
+		return 0
+	if act == Pockets.SWAP or act == Pockets.RELOAD:
+		var p := magazine_table(u, s)
+		if Pockets.pick_magazine(w, u, s, p, act == Pockets.RELOAD) == 1:
+			Ai.spend_ap(w, u, ap)
+			say(uif("UI_MAGAZINE_SWAPPED", [s + 1, p + 1]))
+			return 1
+		return 0
+	if act == Pockets.HAND_OVER:
+		return hand_over_flow(u, s, ap)
+	say(ui("UI_ACTION_NOT_PORTED"))
+	return 0
+
+
+func pocket_menu_flow(u: int, p: int) -> int:
+	## the machine status window's pocket (0x4279F0): manipulators broken 0x1B9; the pocket
+	## menu (0x427FF0); its AP (0x1AE); handing over (0x4287A0), setting explosives
+	## (0x428D80); "use" goes to the item command's target click
+	if Ai.manipulator_state(w, u) == 2:
+		say_msg(0x1B9)
+		return 0
+	var menu := Pockets.pocket_menu(w, u, p)
+	if w.fault != "":
+		return 0
+	var i := _menu_pick(uif("UI_POCKET", [p + 1]), menu)
+	if i < 0:
+		return 0
+	var act: int = menu[i][0]
+	var ap: int = menu[i][1]
+	if w.sb(u, 0xE) < ap:
+		say_msg(0x1AE, [ap])
+		return 0
+	match act:
+		Pockets.HAND_OVER:
+			return hand_over_flow(u, 10 + p, ap)
+		Pockets.SET:
+			if MissionScripts.lay_explosive(w, u, p, ap, mission_hooks) == 1:
+				Ai.spend_ap(w, u, ap)
+				return 1
+			return 0
+		Pockets.THROW:
+			call_deferred("_item_pocket_mode", p)
+			return 0
+	say(ui("UI_ACTION_NOT_PORTED"))
+	return 0
+
+
+func _item_pocket_mode(p: int) -> void:
+	item_pocket = p
+	mode = "item"
+	var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	say(uif("UI_ITEM_PICK", [p + 1, str(an.get(str(w.pocket_ammo(selected, p)), "")), Item.use_ap(w, selected, p)]))
+	_update_move_map()
+
+
+func _pocket_run(job: Callable) -> void:
+	## a pocket action on the command thread (its windows wait for the player); auto_react:
+	## on the main thread with the scripted answers
+	busy = true
+	if auto_react:
+		job.call()
+		_mission_cmd_done()
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		job.call()
+		call_deferred("_mission_cmd_finished"))
+
+
+func _cmd_slot_menu() -> void:
+	## the current slot: in a fire mode as cmd_fire's magazine column (offered when the
+	## weapon picker enables it, Action.weapon_choices), else the machine status window's
+	if selected == -1 or busy or mission_over:
+		return
+	var u := selected
+	var s := slot
+	if mode in FIRE_MODES:
+		if not (s + 4) in Action.weapon_choices(w, u, FIRE_MODES[mode], 0):
+			say(ui("UI_NO_MAGAZINE_SWAP"))
+			return
+		_pocket_run(func(): slot_menu_flow(u, s, true))
+		return
+	_pocket_run(func(): slot_menu_flow(u, s, false))
+
+
+func _cmd_pocket_menu() -> void:
+	## the machine status window's pockets: one with a round is picked, then its menu
+	if selected == -1 or busy or mission_over:
+		return
+	var u := selected
+	_pocket_run(func(): _pocket_pick(u))
+
+
+func _pocket_pick(u: int) -> void:
+	var opts := []
+	var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	for p in 12:
+		var a := w.pocket_ammo(u, p)
+		if a != -1:
+			opts.append([uif("UI_POCKET_ROUND", [p + 1, str(an.get(str(a), "#%d" % a)), w.pocket_count(u, p)]), p])
+	if opts.is_empty():
+		say(ui("UI_NO_ITEM"))
+		return
+	opts.append([ui("UI_CANCEL"), -2])
+	var p: int = ask_choice(ui("UI_POCKET_MENU"), opts, -2)
+	if p >= 0:
+		pocket_menu_flow(u, p)
 
 
 func _mission_cmd_finished() -> void:

@@ -222,7 +222,9 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # the counter-battery pickers (0x4E3230's states, 0x4E0450's slot states, kinds
              # and the accuracy of a launcher without one)
              0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
-             0x50CBE1) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS))
+             0x50CBE1,
+             # the slot menu's (0x427530) and the pocket menu's (0x427FF0) entries
+             0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
