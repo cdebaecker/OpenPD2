@@ -167,14 +167,23 @@ def exe_va(exe, va, n):
 
 
 CREW_VA = 0x506734          # crew table, 64 x 16 B: 37-63 are the computer's pilots
+# The mission scripts' own words: the unit menu's entry 11 (the menu hooks of table
+# 0x51EF18 point DS:0x517F1C at it) and the scripts' choice lists (pointer arrays at
+# DS:0x517F78 ..., resolved at import).
+SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0,   # the menu entries
+                0x510444, 0x51044C, 0x510454, 0x51045C,   # ui_message_box's buttons
+                0x51A6C0, 0x51A6D4}                       # lines shown by 0x4521C0
+SCRIPT_CHOICES = (0x517F78, 0x517F80, 0x517F88, 0x50CBC1)   # 2 pointers each (MissionScripts.CHOICES)
+
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
 # DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads
 # sign n from the first, past 38 on into the second, so both are exported as one list.
 CALL_SIGNS_VA = {'pd2': 0x501728, 'dash': 0x502C90}
 CALL_SIGNS = 39 + 34
 # The initialised data around the tables the world models, for code that reads past one
-# (Pd2World.mem8 / rules.ds_byte fall back to it).
-DATA_IMAGE = (0x506600, 0x514000)
+# (Pd2World.mem8 / rules.ds_byte fall back to it), up to the end of the initialised data:
+# it holds the mission scripts' tables too (charge points, layouts, broken tiles ...).
+DATA_IMAGE = (0x506600, 0x523000)
 # Pd2.exe's own texts the screens print (not in MES / WMES): the sortie's bulk menu
 # (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
@@ -189,7 +198,11 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # the counter-battery pickers (0x4E3230's states, 0x4E0450's slot states, kinds
              # and the accuracy of a launcher without one)
              0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
-             0x50CBE1)
+             0x50CBE1) + tuple(sorted(SCRIPT_TEXTS))
+
+
+def _exe_ptr_texts(exe, va, n):
+    return [struct.unpack_from('<I', exe_va(exe, va + 4 * i, 4))[0] for i in range(n)]
 
 
 def _exe_str(exe, va):
@@ -222,7 +235,9 @@ def export_tables(game, out):
             'call_signs': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CALL_SIGNS_VA[camp] + 4 * i, 4))[0])
                            for i in range(CALL_SIGNS)],
             'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0]))],
-            'exe_text': {'%X' % va: _exe_str(exe, va) for va in EXE_TEXTS},
+            'exe_text': {'%X' % va: _exe_str(exe, va) for va in EXE_TEXTS + tuple(
+                p for c in SCRIPT_CHOICES for p in _exe_ptr_texts(exe, c, 2))},
+            'script_choices': {'%X' % c: ['%X' % p for p in _exe_ptr_texts(exe, c, 2)] for c in SCRIPT_CHOICES},
         }
         with open(os.path.join(out, 'tables', camp + '.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)

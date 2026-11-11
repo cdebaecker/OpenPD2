@@ -197,8 +197,10 @@ func _ready() -> void:
 	flight_hooks = BattleFlightHooks.new()
 	flight_hooks.battle = self
 	flight_hooks.easy = options & 2 != 0
+	mission_hooks.flight = flight_hooks
+	mission_hooks.options = options
+	MissionScripts.run_init(w)               # in the game the pre-battle screen runs it (0x4DD2F0)
 	if script_no == 1:
-		MissionScripts.m01_init(w)           # in the game the pre-battle screen runs it (0x4DD2F0)
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
 			w.exits.append(Vector2i(int(p[0]), int(p[1])))
 	w.phase = 0
@@ -237,6 +239,7 @@ func _begin_battle() -> void:
 	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
 	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
 	# upkeep and AP, then the turn start (LAB_00436b39)
+	MissionScripts.run_load(w)           # mission_loop's first call: the load script (0x51F1B8)
 	w.set_ds8(0x50ADF2, 0)               # mission_loop clears the end code first
 	Mission.layers_reset(w)
 	Mission.start_units(w)
@@ -245,6 +248,7 @@ func _begin_battle() -> void:
 		_end_mission(w.ds8(0x50ADF2))
 		return
 	Mission.rebuild_occupancy(w)
+	MissionScripts.run_start(w, rng, mission_hooks)   # the start script (table 0x51F0F8)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
@@ -284,15 +288,12 @@ func _begin_done() -> void:
 class BattleSortieHooks extends Campaign.SortieHooks:
 	## The sortie screen's windows in the battle: its dialogs and refusals go to the panel
 	## (MES.PCK texts). The mission's deploy hook (table 0x51EC68, called only by the sortie
-	## screen, 0x460D60): mission 1's (0x499480) wants group 0 or 2 formed and clear, else
-	## its dialog 0x12B and a refusal; the other missions' are not ported and pass.
+	## screen, 0x460D60; MissionScripts.run_deploy): 1 passes; a refusal shows its dialog
+	## (0x4DD390, answered with its first choice); a mission not ported passes.
 	var battle
 
 	func deploy() -> int:
-		if battle.script_no != 1 or MissionScripts.m01_state(battle.w) == 1:
-			return 1
-		battle.sortie_say(battle.mes(0x12B))
-		return MissionScripts.m01_state_result(0)
+		return MissionScripts.run_deploy(battle.w, battle.mission_hooks)
 
 	func dialog(msg: int, arg: Array) -> int:
 		battle.sortie_say(battle.mes(msg, [battle.sortie_arg(arg), ""]))
@@ -950,8 +951,10 @@ func _build_hud() -> void:
 	var cmds := [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
 			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
 			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn], [ui("UI_WITHDRAW") + " [W]", _cmd_withdraw]]
-	if script_no == 1:
-		cmds.append([ui("UI_INDOOR_SEARCH") + " [I]", _cmd_mission])
+	var entry11 := MissionScripts.run_menu(w, -1)       # table 0x51EF18: the unit menu's entry 11
+	if entry11[0] == 1:
+		cmds.append([GameData.exe_text(campaign, entry11[1]) + " [I]", _cmd_mission])
+	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
 	for b in cmds:
 		var btn := Button.new()
 		btn.text = b[0]
@@ -1038,6 +1041,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_E: _end_turn()
 			KEY_W: _cmd_withdraw()
 			KEY_I: _cmd_mission()
+			KEY_X: _cmd_explosives()
 			KEY_TAB: _next_unit()
 			KEY_R:                                    # the last flight window, to look at again
 				if radar_view and not radar_view.snap.is_empty():
@@ -1925,16 +1929,20 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 	var battle
 
 	func dialog(msg: int, args: Array, choices: int) -> int:
-		## 0x43BA20 with its choice labels: mission 1's escape (0xAA, the pilot's given and
-		## family names) uses 実行 / 中止 (DS:0x50CBC1), its indoor search (0xA5) はい / いいえ
-		## (DS:0x517F88)
-		var a := args
+		## 0x43BA20 with its choice labels (MissionScripts.CHOICES: the label arrays the
+		## mission passes, e.g. 実行 / 中止 DS:0x50CBC1, はい / いいえ DS:0x517F88); the escape
+		## question of missions 1 and 3 (0xAA) names the pilot (given and family names)
+		var a := _args(args)
 		var labels := [battle.ui("UI_YES"), battle.ui("UI_NO")]
-		if msg == 0xAA:
+		var arr: int = MissionScripts.CHOICES.get(battle.script_no, {}).get(msg, 0)
+		var ptrs: Array = GameData.tables(battle.campaign).get("script_choices", {}).get("%X" % arr, [])
+		if ptrs.size() == 2:
+			labels = [GameData.exe_text(battle.campaign, str(ptrs[0]).hex_to_int()),
+					GameData.exe_text(battle.campaign, str(ptrs[1]).hex_to_int())]
+		if MissionScripts.NAME_DIALOGS.get(battle.script_no, -1) == msg:
 			var names: Array = GameData.tables(battle.campaign).crew_names
 			var nm: Array = names[args[0]] if args[0] < names.size() else ["", ""]
 			a = [nm[0], nm[1]]
-			labels = [battle.ui("UI_GO"), battle.ui("UI_CANCEL")]
 		var text: String = battle.msg(msg, a)
 		return 0 if battle.ask_choice(text, [[labels[0], true], [labels[1], false]], true) else 1
 
@@ -1946,11 +1954,69 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return 0
 
 	func speech() -> int:
-		## the mission's speech hook (table 0x51EEB8): mission 1's runs the flight turn and
-		## the arrival scenes (0x499830)
-		if battle.script_no == 1:
-			return MissionScripts.m01_speech(battle.w, battle.rng, battle.flight_hooks)
+		## the mission's speech hook (table 0x51EEB8; mission 1's runs the flight turn and
+		## the arrival scenes, 0x499830)
+		return MissionScripts.run_speech(battle.w, battle.rng, self)
+
+	func end_dialog(msg: int) -> int:
+		## 0x4DD390 in the sortie: the refusal's text (MES.PCK); its first choice
+		battle.sortie_say(battle.mes(msg))
 		return 0
+
+	func box(msg: int, args: Array, kind: int) -> int:
+		## ui_message_box: buttons DS:0x50CBC9[kind] (了解 / 中止, 実行 / 中止): 1 the first
+		var l0: int = 0x510454 if kind == 1 else 0x510444
+		var text: String = battle.msg(msg, _args(args))
+		return battle.ask_choice(text, [[GameData.exe_text(battle.campaign, l0), 1],
+				[GameData.exe_text(battle.campaign, l0 + 8), 0]], 1)
+
+	func line(msg: int, args := []) -> int:
+		## 0x4521C0: a message, or one of Pd2.exe's own strings (an address)
+		if msg >= 0x500000:
+			battle.say(GameData.exe_text(battle.campaign, msg, _args(args)))
+		else:
+			battle.say_msg(msg, _args(args))
+		return 0
+
+	func prompt(msg: int, args := []) -> int:
+		## ui_prompt_at_cursor: the text carries its own two words (設置 / 中止); 0 the first
+		var text: String = battle.msg(msg, _args(args))
+		return 0 if battle.ask_choice(text, [[battle.ui("UI_YES"), true], [battle.ui("UI_NO"), false]], true) else 1
+
+	func fuse(msg: int, low: int) -> int:
+		## 0x429200: the fuse list, "%3d分" from low x 5 in steps of 5 (25 - low entries)
+		var opts := []
+		for i in 25 - low:
+			opts.append([battle.uif("UI_MINUTES", [(low + i) * 5]), i])
+		opts.append([battle.ui("UI_CANCEL"), -2])
+		return battle.ask_choice(battle.msg(msg), opts, 0)
+
+	func blast_start(x: int, y: int) -> int:
+		battle.say(battle.uif("UI_BLAST", [x, y]))
+		return 0
+
+	func blast(x: int, y: int) -> int:
+		battle.say(battle.uif("UI_BLAST", [x, y]))
+		return 0
+
+	func click(mode: int) -> Variant:
+		## ui_map_click: a hex of the map; the marked ones (F bit 1, set_target_mark) shown
+		var marks := []
+		for i in 72 * 72:
+			if battle.w.F[i] & 2:
+				marks.append(Vector2i(i % 72, i / 72))
+		var r: Variant = battle.ask_hex(battle.ui("UI_PICK_HEX"), marks, -2)
+		return r if r is Vector2i else int(r)
+
+	func _args(args: Array) -> Array:
+		## the scripts' format arguments: ["sign", n] is the radio call sign n (DS:0x50C7E5)
+		var out := []
+		for a in args:
+			if a is Array and a.size() == 2 and str(a[0]) == "sign":
+				out.append(GameData.call_sign(battle.campaign, int(a[1])))
+			else:
+				out.append(a)
+		return out
 
 
 class BattleFlightHooks extends Flight.Hooks:
@@ -2092,9 +2158,8 @@ class BattleBombHooks extends Turn.BombHooks:
 		battle.say("mine explodes at %d, %d" % [x, y])
 
 	func bomb_hook(i: int) -> int:
-		if battle.script_no != 1:
-			battle.say("[color=gray](the mission's bomb hook is not ported)[/color]")
-		return 0
+		## the mission's bomb hook (table 0x51F158) for entry i
+		return MissionScripts.run_bomb(battle.w, battle.rng, i, battle.mission_hooks)
 
 
 func _bombs() -> int:
@@ -2214,9 +2279,13 @@ func radio_args(args: Array) -> Array:
 
 func _script_turn(stage: int) -> void:
 	## the turn script (table 0x51EFD8): stage 2 at a new mission, 1 after the player's turn,
-	## 0 in the computer's turn (which runs the speech hook). Only mission 1's is ported.
-	if script_no == 1:
-		MissionScripts.m01_turn(w, rng, stage, mission_hooks)
+	## 0 in the computer's turn (which runs the speech hook). MissionScripts.PORTED lists the
+	## missions whose scripts are in.
+	if MissionScripts.has_scripts(script_no):
+		MissionScripts.run_turn(w, rng, stage, mission_hooks)
+		if w.fault != "":
+			say("[color=red]rules fault: %s[/color]" % w.fault)
+			w.fault = ""
 
 
 func _script_state() -> void:
@@ -2240,7 +2309,7 @@ func _cmd_withdraw() -> void:
 
 
 func _withdraw() -> void:
-	var code := Debrief.scenario_command(w, script_no)
+	var code := Debrief.scenario_command(w, script_no, rng)
 	if code == -1:
 		say(uif("UI_NOT_PORTED_HOOK", ["0x51F038", script_no]))
 		return
@@ -2393,18 +2462,54 @@ func _next_mission(nxt: Array) -> void:
 
 
 func _cmd_mission() -> void:
-	## the mission's own command (unit menu entry 11, table 0x51EF78): mission 1's indoor search
-	if selected == -1 or script_no != 1 or busy or mission_over:
+	## the mission's own command (unit menu entry 11, table 0x51EF78; its label from the
+	## menu hook, table 0x51EF18)
+	if selected == -1 or busy or mission_over or MissionScripts.run_menu(w, selected)[0] != 1:
 		return
 	var u := selected
 	busy = true
 	if auto_react:
-		MissionScripts.m01_command(w, u, mission_hooks)
+		MissionScripts.run_command(w, rng, u, mission_hooks)
 		_mission_cmd_done()
 		return
 	move_thread = Thread.new()
 	move_thread.start(func():
-		MissionScripts.m01_command(w, u, mission_hooks)
+		MissionScripts.run_command(w, rng, u, mission_hooks)
+		call_deferred("_mission_cmd_finished"))
+
+
+func _cmd_explosives() -> void:
+	## the machine status window's "set explosives" (pocket menu entry 7, 0x427FF0): the
+	## first pocket with a warhead-13 round left and not broken; its AP is the round's
+	## (ammo +7, low 5 bits), halved for an engineer (crew skills bit 1). Then 0x428D80
+	## (MissionScripts.lay_explosive, with the mission's bomb rule); laid, the AP is paid.
+	if selected == -1 or busy or mission_over:
+		return
+	var u := selected
+	var p := -1
+	for k in 4:
+		var a := w.pocket_ammo(u, k)
+		if a != -1 and a < 96 and w.ammo(a, 8) & 15 == 13 and w.pocket_count(u, k) and w.pocket_state(u, k) != 2:
+			p = k
+			break
+	if p == -1:
+		say(ui("UI_NO_EXPLOSIVES"))
+		return
+	if Ai.manipulator_state(w, u) == 2:
+		say_msg(0x1B9)
+		return
+	var ap := (w.ammo(w.pocket_ammo(u, p), 7) & 0x1F) / (2 if (w.ucrew(u, 8) >> 1) & 1 == 1 else 1)
+	busy = true
+	var run := func():
+		if MissionScripts.lay_explosive(w, u, p, ap, mission_hooks) == 1:
+			Ai.spend_ap(w, u, ap)
+	if auto_react:
+		run.call()
+		_mission_cmd_done()
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		run.call()
 		call_deferred("_mission_cmd_finished"))
 
 

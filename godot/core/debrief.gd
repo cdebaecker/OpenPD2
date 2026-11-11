@@ -144,14 +144,17 @@ static func mission_exit(w: Pd2World, code: int) -> int:
 
 
 ## The command menu's "withdraw" (entry 0xB, WMES 0x1DE answered yes: 0x82): the mission's
-## hook from table 0x51F038 (mission 1's, 0x49A6C0, sets DS:0x50ADF2 = 0x80; entry 0 only
-## shows "bad story level"), then the end code DS:0x50ADF2. Other missions' hooks are not
-## ported: -1.
-static func scenario_command(w: Pd2World, script: int) -> int:
-	if script == 1:
-		w.set_ds8(0x50ADF2, 0x80)
-	elif script != 0:
-		return -1
+## hook from table 0x51F038 (MissionScripts.run_scenario; mission 1's, 0x49A6C0, sets
+## DS:0x50ADF2 = 0x80; entry 0 only shows "bad story level"), then the end code
+## DS:0x50ADF2. A mission whose hook is not ported: -1.
+static func scenario_command(w: Pd2World, script: int, rng: Pd2Random = null) -> int:
+	if script != 0:
+		var saved := w.script_no
+		w.script_no = script
+		var ok := MissionScripts.run_scenario(w, rng if rng != null else Pd2Random.new(0))
+		w.script_no = saved
+		if not ok:
+			return -1
 	return mission_exit(w, w.ds8(0x50ADF2))
 
 

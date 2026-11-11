@@ -316,7 +316,17 @@ func mem_write(addr: int, v: int) -> void:
 		ds[addr - DS] = v
 	elif addr >= 0x50CCEA and addr < 0x50CCEA + reg_unit.size():
 		reg_unit[addr - 0x50CCEA] = v
+	elif addr >= 0x50AC1C and addr < 0x50AC58 and bombs.size() == 0x3C:
+		bombs[addr - 0x50AC1C] = v
+	elif addr >= 0x50AC58 and addr < 0x50AD00 and sensors.size() == 0xA8:
+		sensors[addr - 0x50AC58] = v
 	else:
+		for base in static_mem:
+			var data: PackedByteArray = static_mem[base]
+			if addr >= base and addr < base + data.size():
+				data[addr - base] = v
+				static_mem[base] = data
+				return
 		fault = "write at DS:0x%X" % addr
 
 
