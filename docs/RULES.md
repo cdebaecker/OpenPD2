@@ -1914,6 +1914,8 @@ Emulated 1,300 / 1,300:
   map back to waiting. Init: camera (0xC, 8), DS:0x506651 = 0x5A. No unit command.
 - `take_off_map` (0x47FEE0) and 0x47FFA0 read the status from the crew table by the unit's
   signed crew number: a number below 0 reads the stock before the table (found here).
+  Every read of a unit's crew record does the same (`World.crew_of`, GDScript `ucrew`):
+  a crew number below 0 or past 63 reads the memory around the table, not a wrapped crew.
 
 **DASH mission 4** (script 15, DASH chunk 4: get four trailers, units 27–30, out by column 1
 across two bridges with gates). Emulated 1,300 / 1,300:
@@ -1945,6 +1947,61 @@ across two bridges with gates). Emulated 1,300 / 1,300:
   enemy's timetable by group 0's +0x1F, lands the trailers (0x51C920) and plays the
   launch scene. Init: DS:0x506651 = 0x54, the stock of rounds 12 topped to 14 with those
   loaded. **Quirk:** 0xCE and 0xD1 format two and four numbers from one argument.
+
+**DASH mission 5** (script 16, DASH chunk 5: recover the research data from two buildings
+and leave by air). Emulated 1,300 / 1,300:
+- **Board** ("回収 0AP", DS:0x51D240, shown with a VTOL or transport, machine 0xC / 7, within
+  two hexes): one in reach is taken, several are marked and clicked (0xAC confirms, 0xAB
+  for a full transport); a transport with room takes the unit aboard (0xAD; +0x33 /
+  +0x34, off the map, result −1), a VTOL or a full transport takes the crew only (0xA1:
+  the machine blown in the explosion window, condition 0).
+- **Survey** ("建物調査 20AP", DS:0x51D250) on (0xE, 7) / (0x1C, 0x24): five steps of 20 %
+  (DS:0x50AD6E / 0x50AD70 bits 1–5, 0xAA / 0xA4, 0xA6 / 0xA5, 0xA7; bit 0 done); blown
+  (DS:0x50AD62 / 0x50AD64) 0xA2, done 0xA3. **Quirk:** an abort of the confirmation box
+  returns the answer of the message before it. From the third step on, each player turn
+  advances the building's self-destruct (DS:0x50AD72 / 0x50AD74 bits 1–5, 0xA8, then 0xAE
+  each computer turn) and at 6 it blows (sites 10 / 11).
+- **Sites:** eleven (16‑B entries x, y, T, H as ints: sites 1–9 on row 0x40, two hexes per
+  column pair); the bomb rule gives the site (fused, hook byte n) unless blown (0xA2) or
+  already charged (0xA9); the bomb hook marks DS:0x50AD4E + 2 n (n unchecked) and blows it
+  (occupants destroyed twice over). Sites 4–6 or the buildings call groups 27–29 in.
+- **Stage 1:** the rescue groups 12–19 (type 6x) ask to take off (0xB2 / 0xB3, as mission
+  7's); the mission ends when no rescue group waits and nobody is left (the exact test
+  in `m16_turn`): 0x80 with both buildings done, 0x83 with only the second after three
+  steps of the first, else 0x82, and the fates (0x4C1FE0, mission 7's for VTOLs and
+  transports). Deploy (0x4C0900): 0x128 for a rescue group with the wrong machines, 0x127
+  with none. Init: camera (3, 4), DS:0x506651 = 0x66.
+
+**DASH mission 6** (script 17, DASH chunk 6: three demolitions on the tidal flats, then away
+by air). Emulated 1,300 / 1,300:
+- **The tide:** the level is (turn ÷ 6) mod 10, mapped 0–5 → 3–8 and 6–9 → 7–4; when it
+  changes (DS:0x50AD7C bits 1–5), rows 0x24–0x46 of the T layer take MAP_CHG.PCK's entry
+  for it (0x4C4B70: 72 × 35 tile bytes read from the file, each hex redrawn; the import
+  exports the entries as `map_chg`), and site 3's tiles are put back if it is blown. A
+  failed or short read gives 0x10000.
+- **Sites:** the bomb rule gives 1 / 2 / 3 on (0x22, 0xD), (0x41, 0xB), (0x27, 0x41) (fused);
+  the bomb hook breaks its twelve hexes (6‑B entries) and sets DS:0x50AD50 / 52 / 54. The
+  end code (0x4C4830) is 0x80 with all three, else 0x82, and the fates (0x4C4870, one pass:
+  VTOLs and transports and their passengers as mission 5's, other units as mission 7's).
+- **Stage 1:** groups 25, 23 (with group 26's flags: a quirk), 26 (tide level 5 or 6) and
+  27 (site 1 blown) are sent to the camera point; the rescue groups and the end test as
+  mission 5's. The unit command only boards (mission 5's). The deploy check wants three
+  rounds 12 in groups 0, 2, 4 (0x12E) and mission 5's rescue groups (0x130 / 0x12F).
+  Init: camera (7, 0xB), DS:0x506651 = 0x30.
+
+**DASH mission 7** (script 18, DASH chunk 7: hold the trenches until the 24th Combat Unit
+lands). Emulated 1,300 / 1,300. Stage 0 takes every computer unit past row 0x45 off the map
+and counts it (DS:0x50AD5A bits 1–5, 0xB9 while under 21). Every stage (after the first
+call): more than 20 through with player units left ends it at 0x82 (the scene 0xB0–0xB8);
+else group 19 landed with player units counts the six trench zones the enemy (status 3)
+still holds (0x4C6E90: six dword counters at DS:0x5242F0, in the exe's zeroed data, which
+the import now carries up to 0x526000): none 0x80, one or two 0x83, more 0x82 (0xA2–0xA6
+or 0xA7–0xAF with the free count); no player unit left 0x82 (0xBA–0xBC). The speaker is
+unit 1 or 16 on the map, else the lead crew of group 4, 0, 2 or 4 (0x4C7240: none, the
+debug line "no members left"). The fates: every unit on duty destroyed or without
+condition, on random(100) & 3 ≠ 2 with 0x82 or an odd one otherwise, marks its crew and
+is flagged or destroyed. The withdraw is 0x82 with the fates. Init: camera (7, 7),
+DS:0x506651 = 0x54. No unit command.
 
 **The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
 clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
@@ -2553,7 +2610,7 @@ before it loads the mission. Then it leaves its turn loop:
     and the end code is DS:0x50ADF2. Mission 1's hook (0x49A6C0) sets 0x80, so
     withdrawing from mission 1 clears it. Entry 0 (0x4DE070) only shows "bad story
     level". The other missions' hooks are ported with their scripts (§5.8; all of PD2 and
-    DASH's scripts 12, 14 and 15 so far);
+    DASH's scripts 12 and 14-18 so far);
   - entry 0xC (WMES 0x1DF) gives 0x81, which quits to the title;
   - 0x99 becomes 0x82, and 0xC0 returns at once.
 
@@ -2776,7 +2833,7 @@ sorted random fill can bring about — the game draws for ever: the port stops t
      decompiled C: the event scripts (the player's dialogs — reaction menu, mine
      clearing, "enemy discovered" — are ported);
    - the event scripts mission by mission (226 KB in all): all ten PD2 missions and
-     DASH's missions 2-4 (scripts 12, 14, 15) are ported and emulated; left: DASH's other 9 (scripts 11–22), and the
+     DASH's missions 2-7 (scripts 12, 14-18) are ported and emulated; left: DASH's other 6 (scripts 11–22), and the
      approach loop 0x4403D0 and the operation plan's deployment rules (0x51EAE8..).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.

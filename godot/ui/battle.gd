@@ -199,6 +199,7 @@ func _ready() -> void:
 	flight_hooks.easy = options & 2 != 0
 	mission_hooks.flight = flight_hooks
 	mission_hooks.options = options
+	w.map_chg = GameData.tables(campaign).get("map_chg", []) if campaign == "dash" else []   # (DASH mission 6's tide)
 	MissionScripts.run_init(w, mission_hooks)   # in the game the pre-battle screen runs it (0x4DD2F0)
 	if script_no == 1:
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
@@ -2275,6 +2276,9 @@ func radio_args(args: Array) -> Array:
 	## 0x453900 ("HH:MM" of (t + d) x 5 minutes, hours past 23 wrapped) or a number (%d)
 	var out := []
 	for a in args:
+		if not a is Array:                           # a plain number (%d)
+			out.append(a)
+			continue
 		match a[0]:
 			"sign":
 				out.append(GameData.call_sign(campaign, a[1]))

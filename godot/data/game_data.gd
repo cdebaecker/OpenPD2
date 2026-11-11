@@ -53,6 +53,8 @@ func tables(campaign: String) -> Dictionary:
 			"crew": Marshalls.base64_to_raw(doc.get("crew", "")),
 			"call_signs": doc.get("call_signs", []),
 			"exe_text": doc.get("exe_text", {}),
+			"script_choices": doc.get("script_choices", {}),
+			"map_chg": doc.get("map_chg", []).map(func(e): return Marshalls.base64_to_raw(e)),
 			"data_image": [int(doc.data_image[0]), Marshalls.base64_to_raw(doc.data_image[1])] if doc.has("data_image") else [],
 		}
 		_tables[campaign] = t

@@ -170,11 +170,12 @@ CREW_VA = 0x506734          # crew table, 64 x 16 B: 37-63 are the computer's pi
 # The mission scripts' own words: the unit menu's entry 11 (the menu hooks of table
 # 0x51EF18 point DS:0x517F1C at it) and the scripts' choice lists (pointer arrays at
 # DS:0x517F78 ..., resolved at import).
-SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0, 0x51AEC8, 0x51BAC0, 0x51C4E8, 0x51CAF0, 0x51CB00,   # the menu entries
+SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0, 0x51AEC8, 0x51BAC0, 0x51C4E8, 0x51CAF0, 0x51CB00, 0x51D240, 0x51D250, 0x51D598,   # the menu entries
                 0x510444, 0x51044C, 0x510454, 0x51045C,   # ui_message_box's buttons
                 0x51A6C0, 0x51A6D4,                       # lines shown by 0x4521C0
                 0x51AEFC,                                 # questions shown by 0x43BA20
-                0x51C8AC, 0x51C8BC}                       # mission 14's "Bad condition" lines
+                0x51C8AC, 0x51C8BC,                       # mission 14's "Bad condition" lines
+                0x51D6B0}                                 # mission 18's "no members left"
 SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x51AD78: 3}   # pointers each (MissionScripts.CHOICES)
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
@@ -186,6 +187,9 @@ CALL_SIGNS = 39 + 34
 # (Pd2World.mem8 / rules.ds_byte fall back to it), up to the end of the initialised data:
 # it holds the mission scripts' tables too (charge points, layouts, broken tiles ...).
 DATA_IMAGE = (0x506600, 0x523000)
+# ... and the zeroed data after it (BSS) up to 0x526000, which the scripts use too (mission 18's
+# zone counters at DS:0x5242F0, the inits' tables at DS:0x5242A0 ...).
+BSS_END = 0x526000
 # Pd2.exe's own texts the screens print (not in MES / WMES): the sortie's bulk menu
 # (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
@@ -219,6 +223,16 @@ def _exe_str(exe, va):
     return exe_va(exe, va, n).decode('cp932', 'replace')
 
 
+def _map_chg(game, camp):
+    """MAP_CHG.PCK (DASH's tidal flats, mission 17's 0x4C4B70): its raw entries, the T bytes
+    of rows 0x24-0x46 for each tide level."""
+    folder = os.path.join(game, camp)
+    fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
+    if 'MAP_CHG.PCK' not in fs:
+        return []
+    return [b64(e) for e in pd2dt.split_pck(open(fs['MAP_CHG.PCK'], 'rb').read())]
+
+
 def export_tables(game, out):
     exe = open(os.path.join(game, 'Pd2.exe'), 'rb').read()
     info = pd2exe.read(game)
@@ -236,10 +250,12 @@ def export_tables(game, out):
             'crew': b64(exe_va(exe, CREW_VA, 64 * 16)),
             'call_signs': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CALL_SIGNS_VA[camp] + 4 * i, 4))[0])
                            for i in range(CALL_SIGNS)],
-            'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0]))],
+            'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0])
+                                              + bytes(BSS_END - DATA_IMAGE[1]))],
             'exe_text': {'%X' % va: _exe_str(exe, va) for va in EXE_TEXTS + tuple(
                 p for c, n in SCRIPT_CHOICES.items() for p in _exe_ptr_texts(exe, c, n))},
             'script_choices': {'%X' % c: ['%X' % p for p in _exe_ptr_texts(exe, c, n)] for c, n in SCRIPT_CHOICES.items()},
+            'map_chg': _map_chg(game, camp),
         }
         with open(os.path.join(out, 'tables', camp + '.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)

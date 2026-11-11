@@ -140,3 +140,82 @@ func check_m15(b) -> String:
 	if w.ds8(0x50AD68) & 0x3E != 8 or w.ds8(0x50ADF2) != 0x80:
 		return "end code 0x%X (escorts %d)" % [w.ds8(0x50ADF2), w.ds8(0x50AD68) >> 1 & 0x1F]
 	return ""
+
+
+func check_m16(b) -> String:
+	## the charges: five times the unit command on (0xE, 7) (20 AP, 了解) completes site 10
+	## (DS:0x50AD6E bit 0), five on (0x1C, 0x24) site 11 (DS:0x50AD70); the withdraw then
+	## gives 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 16 or w.ds_506651 != 0x66:
+		return "script %d / init" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	for a in [0x50AD62, 0x50AD64, 0x50AD6E, 0x50AD70, 0x50AD72, 0x50AD74]:
+		w.set_ds8(a, 0)
+	var u: int = b.squad[0]
+	for pos in [Vector2i(0xE, 7), Vector2i(0x1C, 0x24)]:
+		for k in 254:                                 # no VTOL or transport in reach
+			if k != u and w.on_map(w.sb(k, 9), w.sb(k, 10)) and absi(w.sb(k, 9) - pos.x) < 4 and absi(w.sb(k, 10) - pos.y) < 4:
+				Action.take_off_map(w, k)
+		place(w, u, pos.x, pos.y)
+		for i in 5:
+			w.setb(u, 0xE, 30)
+			b._select(u)
+			b._cmd_mission()
+	if not w.ds8(0x50AD6E) & 1 or not w.ds8(0x50AD70) & 1:
+		return "sites not charged (0x%X / 0x%X)" % [w.ds8(0x50AD6E), w.ds8(0x50AD70)]
+	b._withdraw()
+	if w.ds8(0x50ADF2) != 0x80:
+		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m17(b) -> String:
+	## the tide: turn 17 -> 18 moves it to level 6 (rows 0x24-0x46 from MAP_CHG.PCK entry 6);
+	## the three sites' charges going off set their flags, and the withdraw gives 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 17 or w.ds_506651 != 0x30:
+		return "script %d / init" % b.script_no
+	if w.map_chg.size() < 9:
+		return "no MAP_CHG.PCK in the import"
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	w.mission_turn = 17
+	MissionScripts.run_turn(w, b.rng, 0, b.mission_hooks)
+	if w.ds8(0x50AD7C) >> 1 & 0x1F != 6 or w.T[5 + 72 * 0x24] != w.map_chg[6][5]:
+		return "tide not at level 6 (0x50AD7C 0x%X)" % w.ds8(0x50AD7C)
+	for n in [1, 2, 3]:
+		w.bombs[3] = n
+		MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	if not (w.ds8(0x50AD50) & 1 and w.ds8(0x50AD52) & 1 and w.ds8(0x50AD54) & 1):
+		return "sites not blown"
+	b._withdraw()
+	if w.ds8(0x50ADF2) != 0x80:
+		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m18(b) -> String:
+	## the crossing: the rescue group 19 landed with the squad on the map and no enemy in
+	## the six zones gives 0x80 (the zone counters at DS:0x5242F0 all 0)
+	var w: Pd2World = b.w
+	if b.script_no != 18 or w.ds_506651 != 0x54:
+		return "script %d / init" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	w.set_ds8(0x50AD5A, 0)
+	var u: int = b.squad[0]
+	place(w, u, 30, 30)
+	w.setb(u, 0xD, 100)
+	w.setb(u, 0x36, 0)
+	for z in MissionScripts.m18_zone_hexes():
+		for h in z:
+			var o: int = w.O[h.x + 72 * h.y] - 1
+			if o >= 0 and w.sb(o, 0x36) == 3:
+				Action.take_off_map(w, o)
+	MissionScripts.set_g(w, 0x13, 2, MissionScripts.g(w, 0x13, 2) & 0xCF | 0x20)
+	MissionScripts.run_turn(w, b.rng, 1, b.mission_hooks)
+	if w.ds8(0x50ADF2) != 0x80:
+		return "end code 0x%X" % w.ds8(0x50ADF2)
+	return ""

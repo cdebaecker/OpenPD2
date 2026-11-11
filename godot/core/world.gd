@@ -53,6 +53,7 @@ var exits: Array = []                # DS:0x519FB0: a mission's exit hexes (its 
 var sensors := PackedByteArray()     # DS:0x50AC58: sensor list, 42 x 4 B (x, y, turns, round)
 var grid := PackedByteArray()        # *DS:0x50DD40: the flight engine's 16 x 16 marks (radar display)
 var radar := 0                       # DS:0x50DD44: 1 while the radar map is open
+var map_chg: Array = []              # MAP_CHG.PCK's entries (PackedByteArray): DASH mission 6's tide
 var static_mem := {}                 # exe data the code may read past a table: address -> bytes
 var scenario := PackedByteArray()    # DS:0x50DE41: the mission's SCN_MIS record (0x1C6 B, 0x4DD2F0)
 var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, launchers, rounds)
@@ -129,6 +130,7 @@ func duplicate_world() -> Pd2World:
 	c.sensors = sensors.duplicate()
 	c.grid = grid.duplicate()
 	c.radar = radar
+	c.map_chg = map_chg
 	c.static_mem = static_mem
 	c.scenario = scenario
 	c.stock = stock.duplicate()
@@ -185,16 +187,19 @@ func cb(c: int, f: int) -> int:
 
 ## crew byte of unit u's crew (crew_of(u)[f])
 func ucrew(u: int, f: int) -> int:
+	## (a crew number below 0 or past 63 reads the memory around the table, as the game:
+	## the stock and the save head before it; rules.World.crew_of)
 	var c := sb(u, 0xB)
-	if c < 0:
-		c += 64           # Python negative index into the 64-entry crew list
+	if c < 0 or c * CREW >= crew.size():
+		return mem8(0x506734 + CREW * c + f)
 	return crew[c * CREW + f]
 
 
 func set_ucrew(u: int, f: int, v: int) -> void:
 	var c := sb(u, 0xB)
-	if c < 0:
-		c += 64
+	if c < 0 or c * CREW >= crew.size():
+		mem_write(0x506734 + CREW * c + f, v)
+		return
 	crew[c * CREW + f] = v & 0xFF
 
 
