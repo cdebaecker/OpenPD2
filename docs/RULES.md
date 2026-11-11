@@ -902,10 +902,10 @@ begins gets its AP set to the maximum (§5.1).
 - **Turn recon pass** (`recon_pass`, 0x483490(0)), emulated 300 / 300: see above. The
   side is the current phase's. With the campaign flag, F‑layer bit 5 is first cleared
   on the map. Each unit's search is `search_command` without its prompt, which for
-  movement modes 0–3 is `step_search`. Not ported: the sensor list DS:0x50AC58
-  (42 × 4 B: x, y, turns, ammo id, filled by the item command 0x4ECC60); its on‑map
+  movement modes 0–3 is `step_search`. It ends with the sensor list DS:0x50AC58
+  (42 × 4 B: x, y, turns, ammo id, filled by the item command 0x4ECC60): its on‑map
   entries with turns > 0 search from their hex (0x4806A0: unit −1, mode 13, the
-  ammo's recon range).
+  ammo's recon range; §5.16).
 - **AI memory pruned** (0x480BF0), just before the computer's turn: entry k of the 40
   is cleared to −1 unless unit k is an active player‑side unit whose remembered hex
   is on the map and **not** in the computer's view.
@@ -952,9 +952,9 @@ begins gets its AP set to the maximum (§5.1).
    5's graphics. The occupancy layer is emptied and every F‑layer bit but bit 5 is
    cleared (smoke, views, strikes and mines included);
 2. `start_units` (0x437490): every unit (0–253) carries nobody and gets its maximum AP;
-3. the mission script, stage 2 (not ported);
+3. the mission script, stage 2 (§5.8, for the missions ported);
 4. the occupancy layer is rebuilt from the active units (0x483030, units 0–253 in order);
-5. the mission's start script (table 0x51F0F8, not ported);
+5. the mission's start script (table 0x51F0F8; §5.8, for the missions ported);
 6. phase 0: upkeep and AP refill; phase 3; then the turn start (see the passes above).
 
 **When the mission ends** (`mission_loop` returning anything but 0xC0), emulated:
@@ -1922,7 +1922,7 @@ emulated 786 / 786 from both saves, `verify_new_campaign`):
   on an odd `rand() % 100` until 6 are, those with +3 = 1 take the template at
   0x513948; more are drafted from the free‑pilot list until 6; then the crews take the
   six templates at 0x513750 in order. No group is formed: DASH's sortie comes from the
-  sortie screen (0x45ED60, not ported).
+  sortie screen (0x45ED60, §5.11).
 
 **Joining a group** (0x454690, emulated 2000 / 2000, `verify_group_join`): the unit's
 machine class (machines +0 low nibble) decides where it may go — class 0 into a group
@@ -2402,7 +2402,8 @@ before it loads the mission. Then it leaves its turn loop:
     the loop breaks and calls the mission's hook from table 0x51F038 (by DS:0x50CE72),
     and the end code is DS:0x50ADF2. Mission 1's hook (0x49A6C0) sets 0x80, so
     withdrawing from mission 1 clears it. Entry 0 (0x4DE070) only shows "bad story
-    level". The other missions' hooks are not ported;
+    level". The other missions' hooks are ported with their scripts (§5.8; PD2 1–7 and 9
+    so far);
   - entry 0xC (WMES 0x1DF) gives 0x81, which quits to the title;
   - 0x99 becomes 0x82, and 0xC0 returns at once.
 
@@ -2622,9 +2623,8 @@ sorted random fill can bring about — the game draws for ever: the port stops t
    - The tactical rules are ported end to end (§4, §5): the computer's whole
      turn and every piece the player's commands use (fire, reaction shot, steps,
      search, conceal, reload). Left for the Godot engine, written from the
-     decompiled C: the player's
-     dialogs (reaction menu, mine clearing, "enemy discovered"), and the event
-     scripts;
+     decompiled C: the event scripts (the player's dialogs — reaction menu, mine
+     clearing, "enemy discovered" — are ported);
    - the event scripts mission by mission (226 KB in all): PD2 missions 1–7 and 9 are
      ported and emulated; left: PD2 8 and 10 (mission 10's init and command use base
      and calendar routines not ported yet) and DASH's 12 (scripts 11–22), and the
