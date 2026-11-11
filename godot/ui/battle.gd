@@ -1947,7 +1947,8 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 			labels = []
 			for pt in ptrs:
 				labels.append(GameData.exe_text(battle.campaign, str(pt).hex_to_int()))
-		if MissionScripts.NAME_DIALOGS.get(battle.script_no, -1) == msg:
+		var nd: Variant = MissionScripts.NAME_DIALOGS.get(battle.script_no, -1)
+		if (nd is Array and msg in nd) or (nd is int and nd == msg):
 			var names: Array = GameData.tables(battle.campaign).crew_names
 			var nm: Array = names[args[0]] if args[0] < names.size() else ["", ""]
 			a = [nm[0], nm[1]]
@@ -2018,6 +2019,30 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		battle.say(battle.uif("UI_BLAST", [x, y]))
 		return 0
 
+	## DASH script 13's talk windows (0x48BF90 / 0x48C260 with a portrait and a text): the
+	## message log; the base-screen lines of 0x452200 (MES.PCK), the data window's text
+	func talk(face: int, msg: int, args: Array, x: int, place: int) -> int:
+		battle.say(_text(msg, args))
+		return 0
+
+	func talk_more(h: int, msg: int, args: Array) -> int:
+		battle.say(_text(msg, args))
+		return 0
+
+	func notice(msg: int, args := []) -> int:
+		battle.say(battle.mes(msg))
+		return 0
+
+	func print_text(msg: int, args := []) -> int:
+		if msg < 0x500000:
+			battle.say(battle.msg(msg, _args(args)))
+		return 0
+
+	func _text(msg: int, args: Array) -> String:
+		if msg >= 0x500000:                          # a format of Pd2.exe's (DS:0x51C728 "%s%s@")
+			return GameData.exe_text(battle.campaign, msg, _args(args))
+		return battle.msg(msg, _args(args))
+
 	func click(mode: int) -> Variant:
 		## ui_map_click: a hex of the map; the marked ones (F bit 1, set_target_mark) shown
 		var marks := []
@@ -2033,6 +2058,11 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		for a in args:
 			if a is Array and a.size() == 2 and str(a[0]) == "sign":
 				out.append(GameData.call_sign(battle.campaign, int(a[1])))
+			elif a is Array and a.size() == 2 and (str(a[0]) == "crew" or str(a[0]) == "family"):
+				## a crew's given name (DS:0x50BCB5) or family name (DS:0x50BD4D), by its name id
+				var names: Array = GameData.tables(battle.campaign).crew_names
+				var nm: Array = names[int(a[1])] if int(a[1]) >= 0 and int(a[1]) < names.size() else ["", ""]
+				out.append(nm[0] if str(a[0]) == "crew" else nm[1])
 			elif a is Array and a.size() == 2 and str(a[0]) == "machine":    # a machine's name (DS:0x50C265)
 				var mn: Array = GameData.tables(battle.campaign).get("machine_names", [])
 				out.append(mn[int(a[1])] if int(a[1]) < mn.size() else "")
@@ -2290,6 +2320,9 @@ func radio_args(args: Array) -> Array:
 				out.append(GameData.call_sign(campaign, a[1]))
 			"name":
 				out.append(GameData.call_sign(campaign, 39 + a[1]))   # a group name (DS:0x50C881)
+			"crew":
+				var cn: Array = GameData.tables(campaign).crew_names
+				out.append(cn[a[1]][0] if a[1] >= 0 and a[1] < cn.size() else "")   # a crew's given name (DS:0x50BCB5)
 			"exe":
 				out.append(GameData.exe_text(campaign, a[1]))          # a string of Pd2.exe's (DASH mission 8's squad names)
 			"time":

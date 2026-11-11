@@ -2090,6 +2090,153 @@ Emulated 1,300 / 1,300:
   indexed by the unit's number, a quirk) has +3 clear: three or fewer, 0x132. Init:
   camera (5, 5), DS:0x506651 = 0x101.
 
+**DASH mission 11** (script 11, DASH chunk 0: hold the bridges and the dam while the
+division withdraws). Emulated 1,300 / 1,300:
+- **Bridges:** A at (0x1A–0x1C, 0x24), B at (0x1D–0x1F, 0x3A). The bomb rule fuses a charge
+  on one standing (0xAE: hook byte 1 / 2; already set 0xAD); a charge going off on row 0x24
+  / 0x3A brings A (DS:0x50AD56 bit 7) / B (DS:0x50AD57 low nibble) down: its tile set
+  (0x4AD1F0, 0x51BCF8: rows of 3 and 4 (T, H), sets 0 and 2 destroying the occupants). Both
+  down: group 20's held members (orders 0xF) attack and units 0x9E–0xCD's +4 low nibble
+  random(7) + 1.
+- **Dam:** two charges on (0x14–0x17, 0x15) (0xAF, then another hex 0xB1 / 0xB2; DS:0x50AD54
+  bits 6 / 7), laid with no fuse; stage 1 then asks 0xAC: yes breaches it (0x4AD420: rows
+  0x15 / 0x16 blasted and retiled from 0x51BD68, their occupants destroyed), floods the
+  valley (MAP_CHG.PCK entries 0–2, 0x4ACD00) and destroys every unit on a hex of height
+  0x1E; DS:0x50AD58 counts 14 turns, then the second flood.
+- **Stage 0:** group 19 near the west edge (+0x16 under 2) starts the withdrawal call
+  (0xB6–0xBB; DS:0x50AD60 bit 0) and clears the computer's destinations; until then
+  computer units reaching column 1 leave the map and count (DS:0x50AD62), computer groups
+  at the camera with nothing on the map turn back; 20 of them through with a group past
+  column 4 ends it (0xBC / 0xBD, DS:0x50AD64); groups of type 0xF at column 5–6 bring the
+  call 0xBE–0xC2 (DS:0x50AD76 bit 6).
+- **Stage 1:** group 20's held members released (one or two at random), the player's units
+  on column 1 asked 0xAA (they and what they carry leave), groups 24 / 25 sent to the
+  camera once at most 20 computer units remain or from turn 12.
+- **End:** nobody left on the map (units 0x1B–0x1E aside), the withdraw (DS:0x50AD64 |= 1)
+  or the failed call: 0x80 / 0x83 (more than 40 computer units left) with the withdrawal
+  called and not failed, else 0x82; the fates (0x4AD790: each unit on duty with condition,
+  intact on the map, destroyed unless random(100) & 3 = 2, the destroyed ones' crews marked
+  on the same odds). The start hook redraws the dam and bridges and makes machine 0x1F
+  machine 0x1E's record. Init: camera (7, 7), DS:0x506651 = 0x47. No unit command.
+
+**DASH mission 10** (script 21, DASH chunk 10: the enemy base on Corleo Island). Emulated
+1,300 / 1,300:
+- **Gates:** sixteen hangar exits (0x51E700); gate g's counter is DS:0x50AD4E + 2 g bits
+  1–5 (30 = spent; bit 0 blown). Stage 1, once fewer than 48 computer units (40–253) are
+  active (DS:0x50AD7C bit 0): each free slot 40–199 comes back at a gate (with more than
+  five gates spent or held by a player unit, any in order; else every other one from 1 or
+  2 by the turn's parity), the first not spent and empty: a template record (units 0xE0 /
+  0xE9 / 0xF2 + random(3) by the counter when the hex two to the west is free, ordered
+  towards it; else 0xDD / 0xE6 / 0xEF + random(9), orders 0x88 / 0x11), the counter + 1;
+  no gate left ends the respawns for the turn. The bomb rule fuses a charge on a gate not
+  blown (hook byte g + 1); the bomb hook gives the gate tile 2 and spends it.
+- **Search** (the unit command, 調査 10 AP, DS:0x51E858; 回収 DS:0x51E848 next to a VTOL /
+  transport for a class-0 machine): on a gate 0x102 (the PLDs left) or 0x103; on the three
+  passage points 0xA7 / 0xA8 (the radio: the enemy's chief engineer caught, DS:0x50AD70
+  bit 6) then the hidden switch (after 15 searches, 0xA4: the door's tiles, DS:0x50AD70 bit
+  7); at the door (0x3D, 0x12) with it open, 0x104 sends the pilot in (the envoy:
+  DS:0x50AD82 / 83). Next to a carrier: aboard (0x109), or blown up and aboard a full one
+  or a VTOL (0x106).
+- **The envoy's talks** (stage 0, DS:0x50AD82 bit 6): each turn 0xA3 (調査を続行する / 機に帰還
+  する): no ends them; yes moves the round (DS:0x50AD83 low nibble): 1–4 the passages, 5 an
+  ambush (pilot attack 8 or more fights on, else the envoy returns), 6–8 nothing, 9 the
+  safe, 10 the leader caught: 0x10A (降伏勧告をする / 戦闘を続ける): the surrender is 0x80 at
+  once; else DS:0x50AD82 bit 0 (the deal) and the envoy returns.
+- **The exchange** (DS:0x50AD72–7A, five slots set at the first call from the crews whose
+  +4 is DS:0x50AD8E + 1, their units made from records 253 / 254): a slot's unit on row
+  0x46 is asked 0x106; yes swaps it for a prisoner (record 0xF8 + the clock's pick of five,
+  0x48F7A0, a time-seeded rand()); exchanged ones count down and come on at the points of
+  0x51E7A0, and the submarine Skipjack's calls (0xC9–0xD9, the Cargo Bird launches) follow.
+- **The HQ's calls:** at turns 4 and 12 (group 4 alive), and by the turns since the
+  landing (DS:0x50AD4E bits 1–5): 5, 10, 15, 20, 25 (the last sends group 6 home); the
+  rebels' sabotage offer (DS:0x50AD84 counting to 8 after the landing, 0x110), carried out
+  at its seventh turn by charges on random gates (one per two gates left, at most the free
+  entries); the stage-1 surrender offer 0xA2 when DS:0x50AD70 bit 6 and DS:0x50AD80 bit 6.
+- **End:** every gate spent with no computer unit left, or nobody left (players, holding
+  rescue groups, slots): 0x80 with the deal, 0x83 with the engineer or the base empty, else
+  0x82; the fates (0x4D9370: carriers' passengers, the captured helicopters' crews' +4 =
+  DS:0x50AD8E - 2). The withdraw is 0x82. Speech: groups 0, 2 and 4 announced on arrival
+  (0xB6–0xB8) and placed at 0x51E7D0. Objective (0x4D3340): 0x112 / 0x113 / -1 by the
+  states of groups 0 and 2. Init: camera (5, 5), DS:0x506651 = 0x71, round 12 made up to 15.
+
+**DASH chunk 2** (script 13: an exercise against captured machines that turns into the
+theft of the new X4S; it is not in the DASH step table 0x50CC14). Emulated 1,300 / 1,300
+(ten skips: the cases the game cannot finish or reads from its stack). Unit 0x2F is the
+test pilot's X4S, 0x2E its carrier; the counters are bits 1-5 of the flag bytes.
+- **Load / init:** the drop and placing points (0x51C638 / 0x51C658, 4 x (x, y) each),
+  0x51C678 and the template unit 0x51C680 from their copies. Init: camera (7, 7), the
+  drop points (0xE, 0xD) x 3, DS:0x506651 = 0xA8; a fade to 100 (0x4875D0, its level
+  from 0x487AE0 restored after), 0x12E (no X4S, linear cannon or P9), crew 0 taken out
+  (+4 = step + 1, 0x12D) while in service; every unit not out on foot or in a class-0
+  machine gives back machine 6, launchers 6 / 7 / 0x15 and rounds 0xF / 0x10 / 0x29.
+- **Deploy** (0x4B19C0): groups 0 and 2 each formed (0x12A) with two or three ground
+  crews (0x12C / 0x12B); with unit 0 in service 0x12D. Menu: 時間確認 (DS:0x51C6F0)
+  before the escape; the command says the minutes left (0x12A, (12 - clock) x 5).
+- **Stage 0:** the clock (DS:0x50AD4E) + 1 each turn; at 12 time is up (0x12E: 0x82, the
+  destroyed units' crews hurt unless random(100) & 3 is 2); 0x11D the minutes left,
+  0x11E under three turns (at 11 without DS:0x50AD74: the hurry, DS:0x50AD72). With the
+  rescue crews called (DS:0x50AD7A bit 0, not 7C): the Cargo Bird's launch (0x158..0x163,
+  the route window, the radar's point), group 4 put down around the speaker or 0x2F
+  (0x4B74B0: the template unit, random hexes of a 3-ring spiral, the rescue crews at the
+  points), the two crews' talk (0x168..0x16E), DS:0x50AD7C bit 0.
+- **Stage 1:** a player unit in the corner (x + y < 6) may be evacuated (0x133); the end
+  check (0x4B6F40: nobody of the player's left on the map gives 0x83 / 0x82 / 0x80 by the
+  escape and unit 0x2F, with 0x16F / 0x132 / 0x131 / 0x12F); time up 0x12E; 0x2F hurt
+  0x12D once. Unit 0x2F gone ends the stage. After the escape, 0x2F in the corner leaves
+  (DS:0x50AD7E bit 6), and next turn every unit out on the map is blasted and taken off
+  (0x167, 0x14D / 0x166 / 0x128: 0x82). With 0x2F's bit 4 and fewer than three of the
+  player within 7 hexes the carrier is blasted and destroyed and four of groups 0 / 2 talk
+  (0x11F.., 0x123.., 0x126, 0x15F -- its portrait is the second talk window's slot, a bug
+  of the game kept). **The escape** (the hurry, the carrier boarded on its second turn, or
+  an escort group under seven) re-arms 0x2F, shows its data (0x134..0x142), restores the
+  dead ground units from their copies (units 0x1B-0x20; the loop's counter is the copy
+  search's index too, so after a search it runs on from 0x1B..0x21) at the points, flashes
+  the radar ten times and moves groups 21 / 22 to 17 / 18 (DS:0x50AD6E bit 0). Its second
+  turn brings them back (0x149..0x14C), its fourth sends groups 30-33 from the drop point
+  (0x14D / 0x165, 0x14F, 0x164), then with fewer than four of the player left the rescue
+  crews are picked (0x4B7330: by crew +9, skill bit 0) into group 4 (0x150..0x157, 0x154).
+  Group 21's members get unit 0x2F's y as their x (the game writes dest x twice).
+- **First call** (any stage, DS:0x50AD4E bit 0 clear): the group scan, group 19 = 0x2E /
+  0x2F, the radio 0x11A..0x12C, DS:0x506651 += the turn counter, the radar closed, groups
+  0 / 2 at the points, groups 1 / 3 away, every member of groups 0, 2, 4, 6 copied to units
+  0x1B.. (crew, slots, pockets; +0x36 = 1, off the map).
+- **The end:** after the escape, once 0x2F is gone or DS:0x50AD70 bit 0, the speaker's
+  0x172 (crew 0's 0x171 with the rescue on the map) and the radio 0x173 / 0x177 / 0x178 /
+  0x174, or 0x17A with nobody left: 0x80. The withdraw (0x4B6DC0) says 0x127 / 0x128 /
+  0x129 and takes 0x4B6F00's code (0x83 before the escape counts as 0x82). Speech: the
+  flight turn. Objective: -1. Its RMES slots (0x32 / 0x34) are empty.
+
+**DASH chunk 11** (script 22: rescue the prisoners held in twelve cells, then get away by
+air; it is not in the DASH step table 0x50CC14, which lists scripts 12, 14–21 and 11).
+Emulated 1,300 / 1,300 (three skips: occupant reads and a mine off the layer):
+- **Load / init:** the cells' points (0x51EA48 from 0x51EA78, 12 × (x, y)); camera (4, 4),
+  the player's drop points (0xE, 7–9), DS:0x50ADB1 / 0x50ADD1 from 0x51E9F8 / 0x51EA18,
+  DS:0x506651 = 0x60.
+- **Deploy** (0x4DB6C0): the rescue groups 12–19 as DASH mission 10's (0x128 for a misfit),
+  1 with a transport or VTOL among them, else 0x127.
+- **The first call** (stage 2, DS:0x50AD4E bit 0 clear): the group scan, the speech
+  window, every cell emptied (DS:0x50AD50 + 2 i bits 1–5 = 31); each crew with +6 bit 0
+  (captured), +2 = +3 = 0 and +4 neither 0xFF nor 0xF goes to a random empty cell
+  (random(12) + 1 until one is empty; with none left the game loops forever). The
+  enemy's alert level DS:0x50AD68 bits 1–2 is set by the player's units whose crew is a
+  drop‑troop crew (+3 = 0): under 3, 3–5, 6 or more.
+- **The command** (0x4DBC10; menu 救出 DS:0x51EAB8, or 搭乗 DS:0x51EAA8 by a carrier within
+  two hexes, 0x4DC830): by a carrier with room, 0xAD boards it (-1); a full one or a VTOL
+  0xA1 blows the machine up and boards. Else 25 AP (short: 0x1E): on a cell with a
+  prisoner not yet found 0xA4 (the name) marks it found (bit 0); an empty or searched cell
+  0xA5; off the cells 0xA3.
+- **Stage 1:** the first time the enemy sees a player unit or one is hit, groups 0x16–0x1B
+  are sent by the alert level (2, 4 or 6 groups: +0x1C = 0x1E, +2 state 1, +0x1A/1B = 4);
+  rescue groups due (state 2, type 6x) ask 0xB2 / 0xB3 (yes: away, state 6). It ends when
+  the rescue groups leaving have no one left to wait for, or nobody is left (players on
+  the map, holding groups, groups 0, 2 and 4): 0x80 if a unit of groups 0, 2 or 4 is
+  aboard a rescue group's carrier (+0x33 = +0x34 = it), else 0x82; the fates follow.
+- **The fates** (0x4DCCA0): a prisoner not found (or any with 0x82) is lost (crew +4 =
+  0xF), a found one rescued (+7 = 1); carriers' passengers as DASH mission 10's; then as
+  many free crews as were lost are recruited (+4 = DS:0x50AD92 + 1). The withdraw is 0x82
+  with the fates. Speech: the flight turn. Objective: -1. Its RMES slots (0x68 / 0x6A)
+  are empty.
+
 **The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
 clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
 g mod 3 (DS:0x50AD99/9B + 4k), or for type 9 (+0x21 = 9x) the bytes at units[0] +

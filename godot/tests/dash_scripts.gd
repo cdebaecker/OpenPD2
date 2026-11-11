@@ -285,3 +285,95 @@ func check_m19(b) -> String:
 	if w.ds8(0x50ADF2) != 0x80:
 		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
 	return ""
+
+
+func check_m21(b) -> String:
+	## the base: gate 1's charge going off spends and marks it (tile 2), then with every gate
+	## spent and no computer unit left the next turn ends it, 0x80 with the deal made
+	var w: Pd2World = b.w
+	if b.script_no != 21 or w.ds_506651 != 0x71:
+		return "script %d / init" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	w.bombs[3] = 1
+	MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	var p := MissionScripts.m21_gate(w, 0)
+	if w.ds8(0x50AD50) & 0x3F != 0x3D or w.T[p.x + 72 * p.y] != 2:
+		return "gate 1 not blown (0x%X)" % w.ds8(0x50AD50)
+	for i in 16:
+		w.set_ds8(0x50AD50 + 2 * i, 0x3D)
+	for k in range(40, 216):
+		w.setb(k, 0, w.ub(k, 0) & 0xF3)
+	MissionScripts.ds_or(w, 0x50AD4E, 1)
+	MissionScripts.ds_or(w, 0x50AD82, 1)
+	MissionScripts.run_turn(w, b.rng, 2, b.mission_hooks)
+	if w.ds8(0x50ADF2) != 0x80:
+		return "end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m11(b) -> String:
+	## the bridges: a charge going off on row 0x24 brings bridge A down (DS:0x50AD56 bit 7),
+	## one on row 0x3A bridge B; the withdraw ends it (0x82 without the early breach)
+	var w: Pd2World = b.w
+	if b.script_no != 11 or w.ds_506651 != 0x47:
+		return "script %d / init" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	w.bombs[1] = 0x24
+	MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	w.bombs[1] = 0x3A
+	MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	if not w.ds8(0x50AD56) & 0x80 or not w.ds8(0x50AD57) & 0xF or not w.ds8(0x50AD5C) & 1:
+		return "bridges not down (0x%X 0x%X)" % [w.ds8(0x50AD56), w.ds8(0x50AD57)]
+	w.set_ds8(0x50AD60, 0)
+	b._withdraw()
+	if w.ds8(0x50ADF2) != 0x82:
+		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m22(b) -> String:
+	## the rescue: searching building 1 (25 AP, its cell holding crew 5) finds the prisoner
+	## (DS:0x50AD50 bit 0) and spends the AP; the withdraw then gives 0x82
+	var w: Pd2World = b.w
+	if b.script_no != 22 or w.ds_506651 != 0x60:
+		return "script %d / init" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	w.set_ds8(0x50AD50, 5 << 1)
+	var pos := Vector2i(MissionScripts.static_s16(w, 0x51EA48), MissionScripts.static_s16(w, 0x51EA4A))
+	var u: int = b.squad[0]
+	for k in 254:                                     # no VTOL or transport in reach
+		if k != u and w.on_map(w.sb(k, 9), w.sb(k, 10)) and absi(w.sb(k, 9) - pos.x) < 4 and absi(w.sb(k, 10) - pos.y) < 4:
+			Action.take_off_map(w, k)
+	place(w, u, pos.x, pos.y)
+	w.setb(u, 0xE, 30)
+	MissionScripts.run_command(w, b.rng, u, b.mission_hooks)
+	if w.ds8(0x50AD50) != (5 << 1 | 1) or w.sb(u, 0xE) != 5:
+		return "building 1 not searched (0x%X, %d AP)" % [w.ds8(0x50AD50), w.sb(u, 0xE)]
+	b._withdraw()
+	if w.ds8(0x50ADF2) != 0x82:
+		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m13(b) -> String:
+	## the exercise: the first call puts the infiltrator 0x2F and its carrier 0x2E in group
+	## 19 (DS:0x50AD4E bit 0); the clock's twelfth turn (stage 0) runs out: 0x12E, 0x82
+	var w: Pd2World = b.w
+	if b.script_no != 13:
+		return "script %d" % b.script_no
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	if not w.ds8(0x50AD4E) & 1:
+		MissionScripts.run_turn(w, b.rng, 2, b.mission_hooks)
+	if not w.ds8(0x50AD4E) & 1 or MissionScripts.g(w, 0x13, 6) != 0x2E or MissionScripts.g(w, 0x13, 7) != 0x2F:
+		return "first call (0x%X, group 19 %d / %d)" % [w.ds8(0x50AD4E), MissionScripts.g(w, 0x13, 6), MissionScripts.g(w, 0x13, 7)]
+	w.set_ds8(0x50AD4E, 1 | 11 << 1)
+	for a in [0x50AD6E, 0x50AD72, 0x50AD7A]:
+		w.set_ds8(a, 0)
+	MissionScripts.run_turn(w, b.rng, 0, b.mission_hooks)
+	if w.ds8(0x50ADF2) != 0x82 or w.ds8(0x50AD4E) >> 1 & 0x1F != 12:
+		return "time out: end code 0x%X, clock %d" % [w.ds8(0x50ADF2), w.ds8(0x50AD4E) >> 1 & 0x1F]
+	return ""
