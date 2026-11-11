@@ -39,6 +39,7 @@ import is3       # noqa: E402
 import missions  # noqa: E402
 import pd2dt     # noqa: E402
 import pd2exe    # noqa: E402
+import pac       # noqa: E402
 
 KNOWN = json.load(open(os.path.join(HERE, 'versions.json'), encoding='utf-8'))
 CAMPAIGNS = ('pd2', 'dash')
@@ -174,6 +175,21 @@ CALL_SIGNS = 39 + 34
 # The initialised data around the tables the world models, for code that reads past one
 # (Pd2World.mem8 / rules.ds_byte fall back to it).
 DATA_IMAGE = (0x506600, 0x514000)
+# Pd2.exe's own texts the screens print (not in MES / WMES): the sortie's bulk menu
+# (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
+# menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
+# pickers' words. GameData.exe_text, exe.csv.
+EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
+             0x51571C, 0x51572C, 0x51573C, 0x515B18, 0x515B44, 0x515B64, 0x515B7C, 0x515B90,
+             0x515B9C, 0x515BA8, 0x515BB4, 0x515BC4, 0x515BD0, 0x515BDC, 0x515C0C, 0x515C1C,
+             0x515C40, 0x515C6C, 0x515CAC, 0x515CC8, 0x515CEC,
+             # the flight window's status list (0x43E9D0): the types, the states
+             0x514864, 0x51486C, 0x514874, 0x51487C, 0x514884, 0x514888, 0x514890, 0x514898,
+             0x5148A4, 0x5148AC,
+             # the counter-battery pickers (0x4E3230's states, 0x4E0450's slot states, kinds
+             # and the accuracy of a launcher without one)
+             0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
+             0x50CBE1)
 
 
 def _exe_str(exe, va):
@@ -206,6 +222,7 @@ def export_tables(game, out):
             'call_signs': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CALL_SIGNS_VA[camp] + 4 * i, 4))[0])
                            for i in range(CALL_SIGNS)],
             'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0]))],
+            'exe_text': {'%X' % va: _exe_str(exe, va) for va in EXE_TEXTS},
         }
         with open(os.path.join(out, 'tables', camp + '.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)
@@ -240,7 +257,10 @@ def export_missions(game, out, pal):
         os.makedirs(os.path.join(out, camp, 'maps'), exist_ok=True)
         # the new game's state: a memory image of DS:0x506638.. (0x47BD B after the
         # "PD2DATA" header, 0x4987C0), crew, combat records, units, groups, the DS block
-        json.dump({'base': 0x506638, 'image': b64(save[8:8 + 0x47BD])},
+        # with the armament screen's registers as shipped (REG_UNIT.DAT, 0x186 B read to
+        # DS:0x50CCEA by 0x454E60; the engine keeps the player's in user://<campaign>/)
+        reg = open(fs['REG_UNIT.DAT'], 'rb').read() if 'REG_UNIT.DAT' in fs else b''
+        json.dump({'base': 0x506638, 'image': b64(save[8:8 + 0x47BD]), 'reg_unit': b64(reg)},
                   open(os.path.join(out, camp, 'save.json'), 'w'))
         for m, rec in enumerate(recs):
             # the loader 0x482910 takes the P / C chunk from a table with the DASH flag
@@ -290,6 +310,39 @@ def export_messages(game, out):
             json.dump(doc, f, ensure_ascii=False)
 
 
+# The flight window (0x43E510, the radar screen): its background ido_g.pac, each
+# campaign's mission maps smap.pac (one per chunk, 360 x 360: the 15 x 15 grid of 24 px),
+# the counters KOMA.DAT (26 tiles of 8 x 8, four bit planes, 0x43FB20); the radio's talk
+# windows (0x488DE0): portraits Evkao.pac (128 x 128) and Event.pac (256 x 128).
+SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac')
+CAMPAIGN_IMAGES = ('smap.pac',)
+
+
+def export_images(game, out):
+    """The PAC images above, each entry its own BMP (the game's 8-bit DIBs as they are):
+    images/<pac>/NN.bmp, <campaign>/images/<pac>/NN.bmp; KOMA.DAT as <campaign>/koma.dat."""
+    def write(folder, name):
+        fs = {f.lower(): os.path.join(folder, f) for f in os.listdir(folder)}
+        if name not in fs:
+            return []
+        return pac.split_pac(open(fs[name], 'rb').read())
+
+    def save(dst, entries):
+        os.makedirs(dst, exist_ok=True)
+        for i, b in enumerate(entries):
+            if b:
+                open(os.path.join(dst, '%02d.bmp' % i), 'wb').write(b)
+    for name in SHARED_IMAGES:
+        save(os.path.join(out, 'images', name[:-4]), write(game, name))
+    for camp in CAMPAIGNS:
+        folder = os.path.join(game, camp)
+        for name in CAMPAIGN_IMAGES:
+            save(os.path.join(out, camp, 'images', name[:-4]), write(folder, name))
+        fs = {f.lower(): os.path.join(folder, f) for f in os.listdir(folder)}
+        if 'koma.dat' in fs:
+            open(os.path.join(out, camp, 'koma.dat'), 'wb').write(open(fs['koma.dat'], 'rb').read())
+
+
 def default_out():
     if os.name == 'nt':
         base = os.path.join(os.environ['APPDATA'], 'Godot', 'app_userdata')
@@ -315,6 +368,7 @@ def main():
         pal = export_tables(game, a.out)
         count = export_missions(game, a.out, pal)
         export_messages(game, a.out)
+        export_images(game, a.out)
         manifest = {'format': 1, 'version': version, 'pd2_exe_sha256': h, 'missions': count}
         json.dump(manifest, open(os.path.join(a.out, 'manifest.json'), 'w'), indent=1)
     print('imported %s: %s into %s' % (version, count, a.out))

@@ -52,6 +52,7 @@ func tables(campaign: String) -> Dictionary:
 			"crew_names": doc.get("crew_names", []),
 			"crew": Marshalls.base64_to_raw(doc.get("crew", "")),
 			"call_signs": doc.get("call_signs", []),
+			"exe_text": doc.get("exe_text", {}),
 			"data_image": [int(doc.data_image[0]), Marshalls.base64_to_raw(doc.data_image[1])] if doc.has("data_image") else [],
 		}
 		_tables[campaign] = t
@@ -65,6 +66,21 @@ func save_image(campaign: String) -> Array:
 	if not doc.has("image"):
 		return []
 	return [int(doc.base), Marshalls.base64_to_raw(doc.image)]
+
+
+## The campaign's REG_UNIT.DAT as shipped (the armament screen's ten registers), or [].
+func reg_unit_shipped(campaign: String) -> PackedByteArray:
+	var doc: Dictionary = _json("%s/%s/save.json" % [ROOT, campaign])
+	return Marshalls.base64_to_raw(doc.get("reg_unit", ""))
+
+
+## A text of Pd2.exe's own (the import's exe_text, by address), translated (exe.csv: the
+## address in hex) and formatted.
+func exe_text(campaign: String, va: int, args := []) -> String:
+	var t := _translated("exe", "%X" % va)
+	if t == "":
+		t = str(tables(campaign).get("exe_text", {}).get("%X" % va, ""))
+	return format_text(t, args)
 
 
 ## A mission's data, with the base64 blobs decoded to PackedByteArrays.
@@ -87,6 +103,11 @@ func map_texture(campaign: String, index: int) -> Texture2D:
 ## arguments filled in by format_text (0x435B10). `entry` is the WMES entry (DS:0x50663D - 1,
 ## the mission's chunk); ids 0x1A3 and up hold the same text in every entry of both campaigns.
 func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
+	return format_text(battle_raw(campaign, id, entry), args)
+
+
+## A battle message's text before format_text (its format codes kept), translated.
+func battle_raw(campaign: String, id: int, entry := 0) -> String:
 	if not _messages.has(campaign):
 		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
 	var tables: Array = _messages[campaign].get("wmes", [])
@@ -94,7 +115,7 @@ func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
 	if entry < tables.size() and id < tables[entry].size():
 		ja = tables[entry][id]
 	if ja == "" and not tables.is_empty():
-		return format_text("", args)       # a line the entry leaves empty stays empty
+		return ""                           # a line the entry leaves empty stays empty
 	# a mission's own messages differ between entries: "<campaign>.<entry>.<id>" first,
 	# then "<campaign>.<id>" (the radio lines differ between campaigns), then "<id>"
 	var t := _translated("wmes", "%s.%d.%X" % [campaign, entry, id])
@@ -104,7 +125,7 @@ func battle_text(campaign: String, id: int, args := [], entry := 0) -> String:
 		t = _translated("wmes", "%X" % id)
 	if t == "":
 		t = ja
-	return format_text(t, args)
+	return t
 
 
 ## The radio's call sign n (DS:0x50C7E5, the campaign's set), translated (callsigns.csv,
@@ -243,11 +264,18 @@ static func format_text(t: String, args: Array) -> String:
 				var v := ("%X" % n) if k == "x" and n >= 0 else str(n)
 				out += " ".repeat(maxi(0, width - v.length())) + v
 			"s":
+				# the width counts Shift-JIS bytes (0x435B10): a double-byte character counts
+				# 2 and is copied while the count is below the width
 				ai += 1
 				var v := str(a)
-				if width:
-					v = v.substr(0, width)
-				out += v + " ".repeat(maxi(0, width - v.length()))
+				var n := 0
+				for ch in v:
+					var u := ch.unicode_at(0)
+					if width == 0 or n < width:
+						out += ch
+					n += 1 if _single_byte(u) else 2
+				if n < width:
+					out += " ".repeat(width - n)
 			"c":
 				ai += 1
 				out += char(int(a)) if a is int else str(a)
@@ -256,6 +284,12 @@ static func format_text(t: String, args: Array) -> String:
 			"b":
 				ai += 1
 	return out
+
+
+## A character's width in the game's Shift-JIS text: ASCII and the half-width kana are one
+## byte; the translations' Latin letters with accents (no Shift-JIS form) count one too.
+static func _single_byte(u: int) -> bool:
+	return u < 0x80 or (u >= 0xFF61 and u <= 0xFF9F) or (u >= 0xC0 and u <= 0x24F and u != 0xD7 and u != 0xF7)
 
 
 ## A prompt's text and its choices: the choices start after the full-width space before the

@@ -312,6 +312,177 @@ var sortie_text := ""
 const JOIN_MESSAGES := {1: 0x1D8, 2: 0x1D7, 3: 0x1D6, 4: 0x1D5, 5: 0x1D4, 6: 0x1D3, 7: 0x1DB, 8: 0x1DC}
 
 
+class SortieDriveHooks extends Campaign.SortieHooks:
+	## The roster's and the bulk menu's lists and questions answered from a queue; past its
+	## end the request is recorded and cancelled (lists -2, questions 0): a dry run finds the
+	## next question (as EquipDriveHooks).
+	var answers: Array
+	var request: Variant = null
+	var notes: Array = []
+
+	func _init(a: Array) -> void:
+		answers = a.duplicate()
+
+	func _next(req: Array, d: int) -> int:
+		if not answers.is_empty():
+			return answers.pop_front()
+		if request == null:
+			request = req
+		return d
+
+	func roster(rows: Array) -> int:
+		return _next(["roster", rows.duplicate()], -2)
+
+	func bulk(which: String, n: int) -> int:
+		return _next(["bulk", which, n], -2)
+
+	func ask(msg: int) -> int:
+		return _next(["ask", msg], 0)
+
+	func note(code: int, who: int) -> int:
+		notes.append(code)
+		return 0
+
+
+var sortie_act: Variant = null      # ["roster"] / ["bulk", air] being answered
+var sortie_answers: Array = []
+var sortie_request: Variant = null
+const BULK_SCOPES := [0x510474, 0x51047C, 0x510488]      # DS:0x50D6E1's list (0x462390)
+const BULK_ACTIONS := [0x510494, 0x5104A0, 0x5104B4]     # DS:0x50D6ED
+const BULK_POOL_ACTIONS := [0x5104C8, 0x5104D4]          # DS:0x50D6F9 (its first two)
+
+
+func _sortie_press(act: Array) -> void:
+	sortie_act = act
+	sortie_answers = []
+	sortie_text = ""
+	_sortie_advance()
+
+
+func _sortie_answer(a: int) -> void:
+	sortie_answers.append(a)
+	_sortie_advance()
+
+
+func _sortie_run(world: Pd2World, hk: SortieDriveHooks) -> Variant:
+	if sortie_act[0] == "roster":
+		return Campaign.sortie_roster(world, hk)
+	return Campaign.sortie_bulk(world, hk, sortie_act[1], sortie_sel)
+
+
+func _sortie_advance() -> void:
+	## dry-run the roster / bulk menu with the answers so far; a new question shows, else
+	## it runs on the world (the roster rewrites the pool and the members in its order)
+	var dh := SortieDriveHooks.new(sortie_answers)
+	_sortie_run(w.duplicate_world(), dh)
+	sortie_request = dh.request
+	var lines := []
+	if sortie_request == null:
+		var hk := SortieDriveHooks.new(sortie_answers)
+		var r: Variant = _sortie_run(w, hk)
+		if r is Array and r[1] != 0x40:
+			sortie_sel = r[1]                  # a member picked: its group is selected
+		sortie_act = null
+		for n in hk.notes:
+			lines.append(mes(n))
+	else:
+		for n in dh.notes:
+			lines.append(mes(n))
+	sortie_text = "\n".join(lines)
+	_sortie_draw()
+
+
+func header_words(id: int) -> Array:
+	## a list window's column headers (MES 0x1AF, 0x1B2, 0x1B8, 0x1CD): the words of its
+	## line, or of its two lines read down (the roster's vertical headers)
+	var t := GameData.base_text(campaign, id, [], mission_index).replace("\r", "\n")
+	var lines := []
+	for l in t.split("\n"):
+		var words := []
+		for x in l.split(" ", false):
+			words.append(x)
+		if not words.is_empty():
+			lines.append(words)
+	if lines.size() == 2 and lines[0].size() == lines[1].size():
+		var out := []
+		for i in lines[0].size():
+			out.append(lines[0][i] + lines[1][i])
+		return out
+	return lines[0] if not lines.is_empty() else []
+
+
+func roster_row_text(c: int) -> String:
+	## a roster row (0x46A6D0's columns): the pilot, its state, AP, ground / air attack,
+	## melee, defence, the four skills (crew +8 bits 0-3), its machine
+	var q := func(f: int) -> int: return w.crew[c * 16 + f]
+	var st := "!" if q.call(6) & 1 else ("?" if q.call(6) & 2 else ("*" if q.call(5) != 0xFF else "-"))
+	var skills := ""
+	for b in 4:
+		skills += "o" if q.call(8) & (1 << b) else "."
+	return "%s  %s %2d %2d %2d %2d %2d %s" % [unit_name(c), st, Flight.s8(q.call(9)), Flight.s8(q.call(0xA)),
+		Flight.s8(q.call(0xB)), Flight.s8(q.call(0xC)), Flight.s8(q.call(0xD)), skills]
+
+
+func list_box(parent: Control) -> VBoxContainer:
+	## a scrolling column for a list window's rows
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(0, 200)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	parent.add_child(sc)
+	var v := VBoxContainer.new()
+	sc.add_child(v)
+	return v
+
+
+func _sortie_request_ui(box: VBoxContainer) -> void:
+	## the roster's / bulk menu's open list or question
+	var q := VBoxContainer.new()
+	box.add_child(q)
+	match sortie_request[0]:
+		"ask":
+			var l := Label.new()
+			l.text = mes(sortie_request[1])
+			q.add_child(l)
+			var hb := HBoxContainer.new()
+			q.add_child(hb)
+			for yes in [true, false]:
+				var bt := Button.new()
+				bt.text = ui("UI_YES") if yes else ui("UI_NO")
+				bt.pressed.connect(_sortie_answer.bind(1 if yes else 0))
+				hb.add_child(bt)
+		"roster":
+			var heads := HBoxContainer.new()
+			q.add_child(heads)
+			var words := header_words(0x1CD)
+			for col in 12:
+				var hb := Button.new()
+				hb.text = words[col] if col < words.size() else str(col)
+				hb.tooltip_text = ui("UI_SORT")
+				hb.pressed.connect(_sortie_answer.bind(col))
+				heads.add_child(hb)
+			var rows: Array = sortie_request[1]
+			var lb := list_box(q)
+			for i in rows.size():
+				var bt := Button.new()
+				bt.text = roster_row_text(rows[i])
+				bt.alignment = HORIZONTAL_ALIGNMENT_LEFT
+				bt.pressed.connect(_sortie_answer.bind(12 + i))
+				lb.add_child(bt)
+		"bulk":
+			var which: String = sortie_request[1]
+			var n: int = sortie_request[2]
+			var texts: Array = BULK_SCOPES if which == "scope" else (BULK_ACTIONS if n == 3 else BULK_POOL_ACTIONS)
+			for i in n:
+				var bt := Button.new()
+				bt.text = GameData.exe_text(campaign, texts[i])
+				bt.pressed.connect(_sortie_answer.bind(i))
+				q.add_child(bt)
+	var cb := Button.new()
+	cb.text = ui("UI_CANCEL") if sortie_request[0] != "roster" else ui("UI_CLOSE")
+	cb.pressed.connect(_sortie_answer.bind(-2 if sortie_request[0] != "ask" else 0))
+	q.add_child(cb)
+
+
 func mes(id: int, args := []) -> String:
 	## a base-screen message (MES.PCK), translated and formatted
 	return GameData.base_text(campaign, id, args, mission_index).replace("@", "").replace("
@@ -429,13 +600,25 @@ func _sortie_draw(confirm := false) -> void:
 			_sortie_draw())
 		row.add_child(j)
 		pool.add_child(row)
+	var tools := HBoxContainer.new()             # regions 0x31 (the roster), 0x32 / 0x33 (bulk)
+	box.add_child(tools)
+	for t in [["UI_ROSTER", ["roster"]], ["UI_BULK_GROUND", ["bulk", 0]], ["UI_BULK_AIR", ["bulk", 1]]]:
+		var tb := Button.new()
+		tb.text = ui(t[0])
+		tb.disabled = sortie_request != null
+		tb.pressed.connect(_sortie_press.bind(t[1]))
+		tools.add_child(tb)
+	if sortie_request != null:
+		_sortie_request_ui(box)
 	if sortie_text != "":
 		var msg := Label.new()
 		msg.text = sortie_text
 		box.add_child(msg)
 	var buttons := HBoxContainer.new()
 	box.add_child(buttons)
-	if confirm:
+	if sortie_request != null:
+		pass
+	elif confirm:
 		var q := Label.new()
 		q.text = mes(0x1C)
 		buttons.add_child(q)
@@ -499,10 +682,20 @@ var equip_button: Variant = null     # the button being answered
 var equip_answers: Array = []
 var equip_request: Variant = null
 var equip_text := ""
-const PICK_OFFSET := {"machine": 6, "slot": 0xD, "item": 7, "pocket": 0}
+const PICK_OFFSET := {"machine": 6, "slot": 0xD, "item": 7, "pocket": 0, "menu": 0, "register": 0,
+		"recall": 0, "copy": 0}
+const PICK_HEADERS := {"machine": 0x1AF, "slot": 0x1B2, "item": 0x1B8}   # the pickers' column headers
+const TEMPLATE_LABELS := {"save": 0x51571C, "load": 0x51572C, "copy": 0x51573C, "new": 0x515B90,
+		"all": 0x515B18, "machine+weapons": 0x515B44, "weapons": 0x515B64, "items": 0x515B7C}
+const TEMPLATE_TITLES := {"menu": 0, "register": 0x515BA8, "recall": 0x515C0C, "copy": 0x515CAC}
 
 
 func _equip_begin(k: int) -> void:
+	# reg_unit.dat is read each time the screen opens (0x454E60): the player's, else as shipped
+	var path := "user://%s/reg_unit.dat" % campaign
+	w.reg_unit = Equipment.load_reg_unit(campaign) if FileAccess.file_exists(path) else GameData.reg_unit_shipped(campaign)
+	if w.reg_unit.size() != Equipment.REG_SIZE:
+		w.reg_unit = Equipment.reg_unit_blank()
 	equip_sess = Equipment.open(w, k)
 	equip_button = null
 	equip_text = ""
@@ -532,9 +725,12 @@ func _equip_advance() -> void:
 		var hk := EquipDriveHooks.new(equip_answers)
 		Equipment.step(w, equip_sess, hk, equip_button)
 		equip_button = null
+		if w.has_meta("reg_unit_written"):           # a register: the file is written (0x45CCE0)
+			w.remove_meta("reg_unit_written")
+			Equipment.save_reg_unit(campaign, w.reg_unit)
 		var lines := []
 		for n in hk.notes:
-			lines.append(mes(n))
+			lines.append(equip_msg(n))
 		equip_text = "\n".join(lines)
 		if equip_sess.done:
 			equip_sess = {}
@@ -543,9 +739,14 @@ func _equip_advance() -> void:
 	else:
 		var lines := []
 		for n in dh.notes:
-			lines.append(mes(n))
+			lines.append(equip_msg(n))
 		equip_text = "\n".join(lines)
 	_equip_draw()
+
+
+func equip_msg(id: int) -> String:
+	## the armament screen's texts: MES.PCK's, or Pd2.exe's own (the template menu's)
+	return GameData.exe_text(campaign, id) if id >= 0x500000 else mes(id)
 
 
 func _name_of(table: String, id: int) -> String:
@@ -554,6 +755,18 @@ func _name_of(table: String, id: int) -> String:
 
 
 func _equip_entry_text(kind: String, e: Variant) -> String:
+	if kind in ["menu", "register", "recall", "copy"]:
+		var t: String = e
+		if TEMPLATE_LABELS.has(t):
+			return GameData.exe_text(campaign, TEMPLATE_LABELS[t])
+		if t.begins_with("reg"):
+			return GameData.exe_text(campaign, 0x515B9C, [int(t.substr(3))])
+		if t.begins_with("crew"):
+			var c := int(t.substr(4))
+			var m := Flight.s8(w.ub(c, 0xC))
+			var mn: Array = names.machine
+			return "%s  %s" % [unit_name(c), mn[m] if m >= 0 and m < mn.size() else "-"]
+		return t
 	if e is String:
 		return ui("UI_REMOVE") if e == "remove" else ui("UI_ITEM")
 	match kind:
@@ -624,7 +837,7 @@ func _equip_draw() -> void:
 		box.add_child(q)
 		if equip_request[0] == "ask":
 			var l := Label.new()
-			l.text = mes(equip_request[1])
+			l.text = equip_msg(equip_request[1])
 			q.add_child(l)
 			var hb := HBoxContainer.new()
 			q.add_child(hb)
@@ -636,18 +849,33 @@ func _equip_draw() -> void:
 		else:
 			var kind: String = equip_request[1]
 			var ents: Array = equip_request[2]
+			if TEMPLATE_TITLES.get(kind, 0):
+				var tl := Label.new()
+				tl.text = GameData.exe_text(campaign, TEMPLATE_TITLES[kind])
+				q.add_child(tl)
+			if PICK_HEADERS.has(kind):                # the column headers sort the list
+				var heads := HBoxContainer.new()
+				q.add_child(heads)
+				var words := header_words(PICK_HEADERS[kind])
+				for col in PICK_OFFSET[kind]:
+					var hb := Button.new()
+					hb.text = words[col] if col < words.size() else str(col)
+					hb.tooltip_text = ui("UI_SORT")
+					hb.pressed.connect(_equip_answer.bind(col))
+					heads.add_child(hb)
+			var lb := list_box(q) if ents.size() > 6 else q
 			for j in ents.size():
 				var bt := Button.new()
 				bt.text = _equip_entry_text(kind, ents[j])
 				bt.pressed.connect(_equip_answer.bind(PICK_OFFSET[kind] + j))
-				q.add_child(bt)
+				lb.add_child(bt)
 			var cb := Button.new()
 			cb.text = ui("UI_CANCEL")
 			cb.pressed.connect(_equip_answer.bind(-2))
 			q.add_child(cb)
 	var buttons := HBoxContainer.new()
 	box.add_child(buttons)
-	for pair in [["UI_CLEAR", "clear"], ["UI_UNDO", "undo"], ["UI_CLOSE", "close"]]:
+	for pair in [["UI_CLEAR", "clear"], ["UI_UNDO", "undo"], ["UI_TEMPLATES", "menu"], ["UI_CLOSE", "close"]]:
 		var bt := Button.new()
 		bt.text = ui(pair[0])
 		bt.disabled = equip_request != null
@@ -811,6 +1039,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_W: _cmd_withdraw()
 			KEY_I: _cmd_mission()
 			KEY_TAB: _next_unit()
+			KEY_R:                                    # the last flight window, to look at again
+				if radar_view and not radar_view.snap.is_empty():
+					radar_view.visible = not radar_view.visible
 			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
 
 
@@ -888,6 +1119,11 @@ func _click(h: Vector2i) -> void:
 # --- commands ------------------------------------------------------------------
 
 # --- the game's messages ------------------------------------------------------------
+
+func msg_raw(id: int) -> String:
+	## a battle message's format, its codes kept (for the list windows' coloured columns)
+	return GameData.battle_raw(campaign, id, mission_index)
+
 
 func msg(id: int, args := []) -> String:
 	## a battle message (WMES.PCK, the mission's entry), translated and formatted as format_text does
@@ -995,6 +1231,224 @@ func ask_choice(text: String, options: Array, default: Variant) -> Variant:
 	call_deferred("_open_choice", text, options)
 	react_sem.wait()
 	return react_answer
+
+
+# --- the game's list windows (0x40C090) drawn from their message formats ------------
+
+func pal_color(code: int) -> Color:
+	## a %b colour code (format_text: byte 1 + code): the window printer 0x438FE0 takes its
+	## high nibble into the 16-colour palette (DS:0x554B28, the battle's: the import's
+	## tactical palette), each channel + 10
+	var pal: Array = GameData.palette
+	var i := (code >> 4) & 0xF
+	if i >= pal.size():
+		return Color.WHITE
+	return Color8(mini(int(pal[i][0]) + 10, 255), mini(int(pal[i][1]) + 10, 255), mini(int(pal[i][2]) + 10, 255))
+
+
+func text_cells(fmt: String, args: Array) -> Array:
+	## a message format cut at its %b colour codes: [[text, colour code]], each part
+	## formatted with its own arguments (format_text, which skips %b)
+	var out := []
+	var parts := fmt.split("%b")
+	var ai := 0
+	for pi in parts.size():
+		var part: String = parts[pi]
+		var code := 0xFF
+		if pi > 0:
+			code = int(args[ai]) if ai < args.size() else 0xFF
+			ai += 1
+		var n := 0
+		var i := 0
+		while i < part.length():
+			if part[i] == "%":
+				if i + 1 < part.length() and part[i + 1] == "%":
+					i += 2
+					continue
+				n += 1
+			i += 1
+		var sub := args.slice(ai, ai + n)
+		ai += n
+		if part != "":
+			out.append([GameData.format_text(part, sub), code])
+	return out
+
+
+func cb_unit_rows(units: Array) -> Array:
+	## 0x4E3230's rows (WMES 0x1C4): the group's call sign, the pilot's names, the machine,
+	## the damage (100 - condition; colour by condition: below 35, 35-49, 50 up) and the
+	## group's state (SHIFT / BUSY / SUPPORT / STAND BY); a row not standing by is refused
+	var rows := []
+	for k in units:
+		var g := Ai.unit_group(w, k)
+		var fl := Flight.gb(w, g, 2) & 0xC0
+		var state := 0x51F3D0                  # STAND BY (exe texts: SHIFT, BUSY, SUPPORT, STAND BY)
+		var sc := 0xFF
+		var refused := true
+		if fl == 0:
+			if w.ub(k, 6) == 1 or w.ub(k, 6) == 2:
+				state = 0x51F3C8
+				sc = 0x4F
+			else:
+				refused = false
+		elif fl == 0x40:
+			state = 0x51F3B8
+			sc = 0x4F
+		else:
+			state = 0x51F3C0
+			sc = 0x4F
+		var cond := w.ub(k, 0xD)
+		var cc := 0x7F if cond >= 0x32 else (0xFF if cond >= 0x23 else 0x4F)
+		var c := w.ucrew(k, 0)
+		var cn: Array = names.crew
+		var given: String = cn[c][0] if c < cn.size() else ""
+		var family: String = cn[c][1] if c < cn.size() and cn[c].size() > 1 else ""
+		var mn: Array = names.machine
+		var m := Flight.s8(w.ub(k, 0xC))
+		var args := [0xFF, GameData.call_sign(campaign, Flight.gb(w, g, 1)), given, family,
+				mn[m] if m >= 0 and m < mn.size() else "", cc, 100 - cond, sc, GameData.exe_text(campaign, state)]
+		rows.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": refused})
+	return rows
+
+
+func cb_slot_rows(u: int, g: int, tg: int) -> Array:
+	## 0x4E0450's rows (WMES 0x1C6 + 0x200, an empty slot 0x1D0) for unit u of group g
+	## against group tg's position (-1: the fire point DS:0x50AD95): each column is red
+	## (0x4F) and the row refused when out of range (types 5 or missiles), of the wrong
+	## kind for the group's type, without accuracy or ground attack (unless warhead 8),
+	## without rounds, or broken (state 2)
+	var rows := []
+	var tx := w.fire_point.x
+	var ty := w.fire_point.y
+	if tg >= 0:
+		tx = Flight.s8(Flight.gb(w, tg, 0x16))
+		ty = Flight.s8(Flight.gb(w, tg, 0x17))
+	var gt := Flight.gb(w, g, 0x21) & 0xF0
+	var gx := Flight.s8(Flight.gb(w, g, 0x16))
+	var gy := Flight.s8(Flight.gb(w, g, 0x17))
+	for s in 6:
+		var lid := w.launcher_id(u, s)
+		if lid == -1:
+			rows.append({"cells": text_cells(msg_raw(0x1D0), [0x40]), "refused": true})
+			continue
+		var bad := false
+		var rng_ := w.weapon_range(u, s) & 0xFF
+		var kind := w.mem8(0x50B1D5 + 17 * lid + 8) >> 5
+		var radius := w.mem8(0x50B1D5 + 17 * lid + 9) & 7
+		var rc := 0xFF
+		if gt == 0x50 or kind == 2:
+			if rng_ * 10 < Ai.grid_distance(gx, gy, tx, ty):
+				rc = 0x4F
+				bad = true
+		var kc := 0xFF
+		if tg >= 0 and ((gt == 0x50 and kind != 1) or ((gt == 0x30 or gt == 0x40) and kind != 2)):
+			kc = 0x4F
+			bad = true
+		var acc := w.mem8(0x50B1D5 + 17 * lid + 2)
+		var wh := w.warhead(u, s)
+		var acs := GameData.exe_text(campaign, 0x50CBE1)        # a launcher without accuracy
+		var ac := 0xFF
+		if acc != 0xFF:
+			if acc == 0 and wh != 8:
+				acs = " 0"
+				ac = 0x4F
+				bad = true
+			else:
+				acs = "%d%d" % [(acc / 10) % 10, acc % 10]
+		var atk := Move.final_attack(w, u, s, false) & 0xFF
+		var tc := 0xFF
+		if atk == 0 and wh != 8:
+			tc = 0x4F
+			bad = true
+		var cnt := w.slot_count(u, s)
+		var cs := "x" + ("%d%d" % [(cnt / 10) % 10, cnt % 10] if cnt != 0 else " 0")
+		var nc := 0xFF
+		if cnt == 0:
+			nc = 0x4F
+			bad = true
+		var st := w.slot_state(u, s)
+		var sc := 0xFF
+		var stt: String = GameData.exe_text(campaign, [0x51F6B4, 0x51F6B8, 0x51F6BC][st]) if st >= 0 and st <= 2 else ""
+		if st == 2:
+			sc = 0x4F
+			bad = true
+		var ln: Dictionary = GameData.tables(campaign).get("launcher_names", {})
+		var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+		var a := w.ammo_id(u, s)
+		var cells := text_cells(msg_raw(0x1C6), [0x40 if bad else 0xF0, str(ln.get(str(lid), "")), rc, rng_, ac, acs,
+				tc, atk, kc, _kind_char(kind), 0xFF, radius])
+		cells.append_array(text_cells(msg_raw(0x200), [str(an.get(str(a), "")), nc, cs, sc, stt]))
+		rows.append({"cells": cells, "refused": bad})
+	return rows
+
+
+func _kind_char(kind: int) -> String:
+	## the launcher kind's letter: DS:0x50CBAA[kind]
+	var t := GameData.exe_text(campaign, 0x50CBAA)
+	return t[kind] if kind < t.length() else " "
+
+
+func ask_table(title: String, header: Array, rows: Array, cancel: int) -> int:
+	## a list window on a worker thread: a row's index, or cancel; refused rows keep the
+	## list open (0x4E3230 / 0x4E0450). auto_react / the main thread: cancel.
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return cancel
+	call_deferred("_open_table", title, header, rows, cancel)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_table(title: String, header: Array, rows: Array, cancel: int) -> void:
+	var box := _reaction_panel(title)
+	react_panel.position.x = 16
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.06, 0.07, 0.1, 0.97)
+	bg.set_content_margin_all(8)
+	react_panel.add_theme_stylebox_override("panel", bg)
+	box.add_child(_cells_label(header))
+	for i in rows.size():
+		var r: Dictionary = rows[i]
+		var btn := Button.new()
+		btn.flat = true
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var l := _cells_label(r.cells)
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.custom_minimum_size = Vector2(0, 14)
+		btn.add_child(l)
+		if not r.refused:
+			btn.pressed.connect(_answer_reaction.bind(i))
+		box.add_child(btn)
+	var cb := Button.new()
+	cb.text = ui("UI_CANCEL")
+	cb.pressed.connect(_answer_reaction.bind(cancel))
+	box.add_child(cb)
+
+
+func _cells_label(cells: Array) -> RichTextLabel:
+	var l := RichTextLabel.new()
+	l.bbcode_enabled = true
+	l.fit_content = true
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	l.scroll_active = false
+	l.custom_minimum_size = Vector2(560, 0)
+	l.add_theme_font_override("normal_font", list_font())
+	l.add_theme_font_size_override("normal_font_size", 12)
+	var t := ""
+	for c in cells:
+		t += "[color=#%s]%s[/color]" % [pal_color(c[1]).to_html(false), str(c[0]).replace("[", "[lb]")]
+	l.text = t
+	return l
+
+
+var _list_font: Font = null
+func list_font() -> Font:
+	## the list windows' fixed-width font: the game pads its columns for a Japanese
+	## monospaced font (half-width kana half a cell)
+	if _list_font == null:
+		var f := SystemFont.new()
+		f.font_names = PackedStringArray(["MS Gothic", "ＭＳ ゴシック", "Noto Sans Mono CJK JP", "Noto Sans Mono", "monospace"])
+		_list_font = f
+	return _list_font
 
 
 func ask_hex(text: String, hexes: Array, default: Variant) -> Variant:
@@ -1382,7 +1836,60 @@ func _ai_phase() -> void:
 	call_deferred("_ai_done", r[0], r[1], r[2])
 
 
+# --- the flight window (RadarView) ----------------------------------------------------
+
+var radar_view: RadarView
+
+
+func _radar() -> RadarView:
+	if radar_view == null:
+		radar_view = RadarView.new()
+		radar_view.battle = self
+		radar_view.visible = false
+		hud_layer.add_child(radar_view)
+	var vs := get_viewport().get_visible_rect().size
+	var sc := minf(vs.x / RadarView.W, vs.y / RadarView.H) * 0.96
+	radar_view.scale = Vector2(sc, sc)
+	radar_view.position = (vs - Vector2(RadarView.W, RadarView.H) * sc) / 2
+	return radar_view
+
+
+func radar_show(snap: Dictionary) -> void:
+	var r := _radar()
+	r.snap = snap
+	r.visible = true
+	r.queue_redraw()
+
+
+func radar_update(snap: Dictionary) -> void:
+	var r := _radar()
+	r.snap = snap
+	r.queue_redraw()
+
+
+func radar_face(a: int, code: int, b: int) -> void:
+	var r := _radar()
+	r.visible = true
+	r.radio_face(a, code, b)
+
+
+func radar_say(t: String, code: int) -> void:
+	_radar().radio_say(t, code)
+
+
+func radar_close(n: int) -> void:
+	_radar().radio_close(n)
+
+
+func radar_hide() -> void:
+	## 0x43F060 (from the panels' refresh, ui_refresh_panels 0x4363D0): the window goes
+	if radar_view:
+		radar_view.visible = false
+		radar_view.radio_close(-1)
+
+
 func _ai_done(res: int, undefined: Array, end_code := 0) -> void:
+	radar_hide()
 	ai_thread.wait_to_finish()
 	ai_thread = null
 	ai_running = false
@@ -1447,13 +1954,39 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 
 
 class BattleFlightHooks extends Flight.Hooks:
-	## The flight engine's windows in the battle: the radio's lines go to the message log
-	## (their portraits and the radar map are not drawn yet); the air fight's melee asks
-	## its weapon prompt (0x1A7, as 0x424490). Runs on the computer turn's thread.
+	## The flight engine's windows in the battle: the flight window (the radar map, its
+	## status list, the radio's talk windows with their portraits: RadarView) and the
+	## message log for the radio's lines; the air fight's melee asks its weapon prompt
+	## (0x1A7, as 0x424490). Runs on the computer turn's thread: the world is copied here
+	## and the window drawn on the main thread.
 	var battle
 
+	func radar_window(param: int) -> int:           # 0x43E510: the window opens
+		battle.call_deferred("radar_show", RadarView.take(battle.w))
+		return 0
+
+	func radar_draw() -> int:                        # 0x43F150: the grid redrawn
+		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		return 0
+
+	func air_report() -> int:                        # 0x43E9D0: the status list
+		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		return 0
+
+	func radio_face(a: Variant, code: Variant, b: Variant) -> int:
+		if a is int and code is int:
+			battle.call_deferred("radar_face", a, code, b if b is int else a)
+		return 0
+
 	func radio_say(msg: int, args: Array, code: Variant) -> int:
+		var t: String = battle.msg(msg, battle.radio_args(args))
 		battle.say_msg(msg, battle.radio_args(args))
+		if code is int:
+			battle.call_deferred("radar_say", t, code)
+		return 0
+
+	func radio_close(n: int) -> int:
+		battle.call_deferred("radar_close", n)
 		return 0
 
 	func use_weapon(a: int, p: int) -> bool:
@@ -1464,7 +1997,7 @@ class BattleStrikeHooks extends Strike.Hooks:
 	## The strike executor (0x4E37A0) in the battle: a striker flying in draws the reaction
 	## fire of the live hooks (flag 10), the radio goes through the flight engine's, the
 	## lines and questions to the message log and the question box. The pickers (0x4E3230 /
-	## 0x4E0450) are a plain choice list; their columns are not drawn yet.
+	## 0x4E0450) are drawn as the game's lists (battle.cb_unit_rows / cb_slot_rows).
 	var battle
 	var w: Pd2World
 	var rng: Pd2Random
@@ -1490,19 +2023,16 @@ class BattleStrikeHooks extends Strike.Hooks:
 		return 1 if battle.ask_box(battle.msg(msg), false) else 0
 
 	func cb_pick(units: Array) -> int:
-		var opts := []
-		for k in units:
-			opts.append([battle.unit_name(k), k])
-		opts.append([battle.ui("UI_CANCEL"), -1])
-		return battle.ask_choice(battle.ui("UI_PICK_SUPPORT"), opts, -1)
+		var rows: Array = battle.cb_unit_rows(units)
+		if rows.is_empty():                   # 0x4E3230: none listed, MES 0x1C3
+			battle.say_msg(0x1C3)
+			return -1
+		var i: int = battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], rows, -2)
+		return -1 if i == -2 else units[i]
 
 	func cb_slot(u: int, g: int) -> int:
-		var opts := []
-		for s in 6:
-			if w.launcher_id(u, s) != -1:
-				opts.append([battle.ui("UI_SLOT_ROUNDS") % [s + 1, w.slot_count(u, s)], s])
-		opts.append([battle.ui("UI_CANCEL"), -2])
-		return battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
+		return battle.ask_table(battle.ui("UI_PICK_WEAPON"), battle.text_cells(battle.msg_raw(0x1C5), []),
+				battle.cb_slot_rows(u, g, cb_target), -2)
 
 	func mine_blast(x: int, y: int) -> void:
 		battle.hooks.mine_blast(x, y)

@@ -34,7 +34,7 @@ class CrtRand:
 
 
 ## The pilot choice's windows (rules.CampaignHooks): the list (0x452A10: -2 done, 9 + j
-## entry j; 0-8 sort it, not ported), its questions (0x451E30: 1 yes, 0 no, -1 / -2 / -3)
+## entry j; 0-8 sort it, ListSort.PICK), its questions (0x451E30: 1 yes, 0 no, -1 / -2 / -3)
 ## and notes (0x452170), named by their string's address.
 class Hooks:
 	func pick_list(entries: Array, picked: Array) -> int:
@@ -148,12 +148,16 @@ static func campaign_pick(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 	picked.fill(false)
 	var count := 0
 	var codes := {-1: 0x10000, -2: 0x40000, -3: 0x20000}
+	var last := -1
 	while true:
 		var ch := hooks.pick_list(cands, picked)
 		if ch == -11:
 			return 0x40000
 		if ch == -12:
 			return 0x20000
+		if ch == last and last >= 0 and last <= 8:     # the same sort button again: nothing
+			continue
+		last = ch
 		var a := 0
 		if ch == -2:
 			if count == need:
@@ -174,9 +178,15 @@ static func campaign_pick(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 			if codes.has(a):
 				return codes[a]
 			continue
-		if ch >= 0 and ch <= 8:
-			w.fault = "campaign_pick: the list sort (0x4172B0) is not ported"
-			return 0
+		if ch >= 0 and ch <= 8:                         # a sort: the rows move with their marks
+			var rows := []
+			for i in cands.size():
+				rows.append([cands[i], picked[i]])
+			_sort_pairs(w, rows, ListSort.PICK, ch)
+			for i in rows.size():
+				cands[i] = rows[i][0]
+				picked[i] = rows[i][1]
+			continue
 		var j := ch - 9
 		if not picked[j]:
 			if count == need:
@@ -207,6 +217,17 @@ static func campaign_pick(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 					_set_crew(w, c, 4, (n + 2) / 2 + 1)
 				n += 1
 	return 0
+
+
+## ListSort.sort over [row, mark] pairs, compared by their rows.
+static func _sort_pairs(w: Pd2World, rows: Array, table: String, col: int) -> void:
+	var n := rows.size()
+	for i in n - 1:
+		for j in range(i + 1, n):
+			if ListSort.cmp(w, table, col, rows[i][0], rows[j][0]) > 0:
+				var t: Variant = rows[i]
+				rows[i] = rows[j]
+				rows[j] = t
 
 
 static func _template(w: Pd2World, k: int, addr: int) -> void:
@@ -268,6 +289,14 @@ static func new_campaign(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 		while count < 6:
 			if w.crew_pool_n == 0:
 				w.fault = "new_campaign: an empty free-pilot list (the game divides by it)"
+				return 0
+			var left := {}
+			for i in w.crew_pool_n:
+				var q: int = w.ds[2 + i]
+				if q != 1 and _crew(w, q, 4) == 0 and _crew(w, q, 3) == 0:
+					left[q] = true
+			if left.size() < 6 - count:            # the game draws on for ever
+				w.fault = "new_campaign: too few ground pilots to draw (the game hangs)"
 				return 0
 			var b: int = w.ds[2 + crt.next() % w.crew_pool_n]
 			if b != 1 and _crew(w, b, 4) == 0 and _crew(w, b, 3) == 0:
@@ -347,6 +376,156 @@ class SortieHooks:
 
 	func ask(msg: int) -> int:
 		return 1
+
+	## the pilot roster's list (0x452A10): 0-11 sort, 12 + i row i, -2 close
+	func roster(rows: Array) -> int:
+		return -2
+
+	## the bulk menu's lists: "scope" (3 rows), then "action" (3 or 2 rows); -2 cancel
+	func bulk(which: String, n: int) -> int:
+		return -2
+
+
+## 0x46A6D0: the roster's rows -- crews 0-63 with +4 <= DS:0x50AD92, +2 < 3 and +6 bits
+## 0-1 clear, in crew order.
+static func sortie_roster_rows(w: Pd2World) -> Array:
+	var t92 := w.ds16(0x50AD92)
+	var out := []
+	for c in 64:
+		if _crew(w, c, 4) <= t92 and _crew(w, c, 2) < 3 and not _crew(w, c, 6) & 3:
+			out.append(c)
+	return out
+
+
+## 0x46A240, the sortie screen's pilot roster (region 0x31; rules.sortie_roster): sorted
+## by its headers (the same one twice does nothing); on closing, the free pool and the
+## groups' member lists are rewritten in its order (the counts unchanged). Returns -2,
+## [crew, 0x40] (a free pilot), [crew, group], or 0x20000 / 0x40000 / -1.
+static func sortie_roster(w: Pd2World, hooks: SortieHooks) -> Variant:
+	var rows := sortie_roster_rows(w)
+	if rows.is_empty():
+		var a := hooks.note(0x1CE, 0)
+		return 0x20000 if a == -3 else (0x40000 if a == -2 else -1)
+	var last := -1
+	var pick := -2
+	while true:
+		var c := hooks.roster(rows)
+		if c == -12:
+			return 0x20000
+		if c == -11:
+			return 0x40000
+		if c == -1:
+			return -1
+		if c == last:
+			continue
+		last = c
+		if c == -2:
+			break
+		if c >= 0 and c < 12:
+			ListSort.sort(w, rows, ListSort.ROSTER, c)
+			continue
+		pick = c - 12
+		break
+	var counts := PackedByteArray()
+	counts.resize(64)
+	var n := 0
+	for c in rows:
+		var g := _crew(w, c, 5)
+		if g == 0xFF:
+			w.pool_set(n, c)
+			n += 1
+		elif g >= 64:
+			w.fault = "sortie_roster: a crew in group %d" % g
+			return -2
+		else:
+			Flight.setgb(w, g, 6 + counts[g], c)
+			counts[g] = (counts[g] + 1) & 0xFF
+	if pick == -2:
+		return -2
+	var crew: int = rows[pick]
+	var gg := _crew(w, crew, 5)
+	return [crew, 0x40] if gg == 0xFF else [crew, gg]
+
+
+## 0x462390(air), the sortie screen's bulk menu (regions 0x32 ground / 0x33 air;
+## rules.sortie_bulk): a scope (everyone, the selected group, the free pool), an action
+## (unequip; unequip and leave; everything back and leave -- the pool's: unequip or
+## everything back), then MES 0x1CF; cancelling the action shows the scopes again.
+## Returns 1, 2, 3, 0, -2 or 0x20000 / 0x40000 / -1.
+static func sortie_bulk(w: Pd2World, hooks: SortieHooks, air: int, sel: int) -> int:
+	var ab := {-12: 0x20000, -11: 0x40000, -1: -1}
+	var scope := 0
+	var act := 0
+	while true:
+		scope = hooks.bulk("scope", 3)
+		if ab.has(scope):
+			return ab[scope]
+		if scope == -2:
+			return -2
+		act = hooks.bulk("action", 3 if scope == 0 or scope == 1 else 2)
+		if ab.has(act):
+			return ab[act]
+		if act != -2:
+			break
+	var a := hooks.ask(0x1CF)
+	if a == -3:
+		return 0x20000
+	if a == -2:
+		return 0x40000
+	if a == -1:
+		return -1
+	if a != 1:
+		return 0
+	var t92 := w.ds16(0x50AD92)
+	var res := 0
+	if scope == 0 or scope == 1:
+		for k in 64:
+			var hit := false
+			if scope == 0:
+				hit = _crew(w, k, 4) <= t92 and _crew(w, k, 2) == 0 and _crew(w, k, 3) == air
+			else:
+				hit = _crew(w, k, 3) == air and _crew(w, k, 2) == 0 and _crew(w, k, 5) == sel
+			if not hit:
+				continue
+			if act == 0:
+				res = 1 if scope == 0 else 2
+				_unequip(w, k)
+				continue
+			res = 1
+			if act == 1:
+				_unequip(w, k)
+			else:
+				for _i in (1 if scope == 0 else 6):
+					Equipment.free_all(w, k)
+			var g := _crew(w, k, 5)
+			if g != 0xFF:
+				if Action.group_drop_player(w, g, k):
+					var r := hooks.note(0x1CE, 0)
+					if r == -3:
+						return 0x20000
+					if r == -2:
+						return 0x40000
+					if r == -1:
+						return -1
+				w.setb(k, 0, w.ub(k, 0) & 0xFB)
+	else:
+		res = 3
+		var i := 0
+		while i < w.crew_pool_n:
+			var c: int = w.ds[2 + i]
+			if _crew(w, c, 3) == air and _crew(w, c, 2) == 0:
+				if act == 0:
+					_unequip(w, c)
+				else:
+					Equipment.free_all(w, c)
+			i += 1
+	return res
+
+
+static func _unequip(w: Pd2World, k: int) -> void:
+	for s in 6:
+		Equipment.free_slot(w, k, s)
+		Equipment.free_pocket(w, k, s)
 
 
 static func _record(w: Pd2World, o: int) -> int:
@@ -635,33 +814,99 @@ static func _sortie_refit(w: Pd2World) -> void:
 
 ## The screen's loop as its buttons drive it (rules.sortie_screen): sortie_open, then the
 ## actions ["select", g] (a formable group: the buttons reach 0, 2, .., 10, 12-19),
-## ["join", p] (pool row p, 0-7), ["drop", row], ["start"] (the checks, the question,
-## sortie_start), ["back"]. Returns [result (0 started, 2 back), log].
+## ["join", p] (pool row p, 0-7), ["drop", row], ["roster"], ["bulk", air], ["start"]
+## (the checks, the question, sortie_start), ["back"]. The pool and member lists scroll
+## (sortie_action). Returns [result (0 started, 2 back, or an abort), log].
 static func sortie_screen(w: Pd2World, hooks: SortieHooks, actions: Array) -> Array:
 	var log := []
 	sortie_open(w)
-	var sel := 0
+	var st := sortie_state()
 	for a in actions:
-		match a[0]:
-			"select":
-				var g: int = a[1] & ~1 if a[1] < 12 else a[1]
-				if Flight.gb(w, g, 2) & 1:
-					sel = g
-			"join":
-				if a[1] < w.crew_pool_n:
-					log.append(["join", sel, group_join(w, sel, w.ds[2 + a[1]])])
-			"drop":
-				var n := Flight.gb(w, sel, 5)
-				if a[1] < n and n:
-					log.append(["drop", sel, sortie_drop(w, sel, Flight.gb(w, sel, 6 + a[1]))])
-			"start":
-				var r := sortie_check(w, hooks)
-				log.append(["check"] + r)
-				if r[0] == "start":
-					var yes := hooks.ask(0x1C)
-					sortie_start(w, yes == 1)
-					if yes == 1:
-						return [0, log]
-			_:
-				return [2, log]
+		var r: Variant = sortie_action(w, hooks, st, a, log)
+		if r != null:
+			return [r, log]
 	return [2, log]
+
+
+## The screen's state between buttons: the selected group (DS:0x50D745) and the two
+## scrolls (the pool's, local_630, and the members', local_634; the layout DS:0x50D741
+## stays 1).
+static func sortie_state() -> Dictionary:
+	return {"sel": 0, "scroll": 0, "mscroll": 0}
+
+
+## One button of the screen (see sortie_screen). Returns the screen's result when it
+## ends, else null.
+static func sortie_action(w: Pd2World, hooks: SortieHooks, st: Dictionary, a: Array, log: Array) -> Variant:
+	var sel: int = st.sel
+	match a[0]:
+		"select":
+			var g: int = a[1] & ~1 if a[1] < 12 else a[1]
+			if Flight.gb(w, g, 2) & 1:
+				st.sel = g
+				st.mscroll = 0
+		"join":
+			var i: int = st.scroll + a[1]
+			if i < w.crew_pool_n and w.crew_pool_n:
+				var r := group_join(w, sel, w.ds[2 + i])
+				log.append(["join", sel, r])
+				if r == 0 and w.crew_pool_n <= st.scroll:
+					st.scroll = 0
+		"drop":
+			var n := Flight.gb(w, sel, 5)
+			var i: int = st.mscroll + a[1]
+			if i < n and n:
+				var r := sortie_drop(w, sel, Flight.gb(w, sel, 6 + i))
+				log.append(["drop", sel, r])
+				if r == 0 and Flight.gb(w, sel, 5) <= st.mscroll:
+					st.mscroll = 0
+		"roster":
+			var r: Variant = sortie_roster(w, hooks)
+			log.append(["roster", r])
+			if r is int and r != -2:
+				return r & 0xFFFFFFFF
+			st.mscroll = 0
+			if r is Array:
+				var crew: int = r[0]
+				if r[1] == 0x40:
+					var idx := -1
+					for q in w.crew_pool_n:
+						if w.ds[2 + q] == crew:
+							idx = q
+							break
+					if idx < 0:                       # the game then scrolls by a stale cursor
+						w.fault = "sortie_roster: a free pilot outside the pool"
+						return 2
+					var n := w.crew_pool_n
+					st.scroll = (0 if n < 4 else n - 4) if n < idx + 4 else idx
+				else:
+					var g: int = r[1]
+					st.sel = g
+					var idx := -1
+					for q in Flight.gb(w, g, 5):
+						if Flight.gb(w, g, 6 + q) == crew:
+							idx = q
+							break
+					if idx < 0:
+						w.fault = "sortie_roster: a member outside its group"
+						return 2
+					var n := Flight.gb(w, g, 5)
+					st.mscroll = (0 if n < 4 else n - 4) if n < idx + 4 else idx
+		"bulk":
+			var r := sortie_bulk(w, hooks, a[1], sel)
+			log.append(["bulk", a[1], r])
+			if r == 0x20000 or r == 0x40000 or r == -1:
+				return r & 0xFFFFFFFF
+			if r == 1 or r == 2:
+				st.mscroll = 0
+		"start":
+			var r := sortie_check(w, hooks)
+			log.append(["check"] + r)
+			if r[0] == "start":
+				var yes := hooks.ask(0x1C)
+				sortie_start(w, yes == 1)
+				if yes == 1:
+					return 0
+		_:
+			return 2
+	return null

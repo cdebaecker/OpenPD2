@@ -1786,8 +1786,27 @@ buttons (`verify_sortie`).
   0, 2, …, 10 and 12–19); a free pilot joins the selected group through 0x454690 (§5.10;
   its refusals show MES 0x1D8, 0x1D7, 0x1D6, 0x1D5, 0x1D4, 0x1D3, 0x1DB, 0x1DC for codes
   1–8); a member leaves through group_drop_player (flag bit 2 cleared; not listed: 0x1CE).
-  Its member button 1 opens the armament screen (§5.12); the lists' sort (0x462390) is not
-  ported.
+  Its member button 1 opens the armament screen (§5.12).
+- **Scrolling**: the pool and the member list scroll (the screen's layout DS:0x50D741
+  stays 1, four rows each): a join takes pool row scroll + p, a drop member scroll + p; a
+  join that empties the rows below the scroll resets it, as does a drop; selecting a
+  group resets the member scroll.
+- **The roster** (region 0x31, 0x46A240): every crew with +4 ≤ DS:0x50AD92, +2 < 3 and +6
+  bits 0–1 clear, in crew order; its twelve column headers sort it (§5.19). When it
+  closes, **the free pool and the groups' member lists are rewritten in its order**: each
+  row's crew goes to the next pool entry (+5 = −1) or the next member slot of its group,
+  from slot 0, the counts untouched — so merely opening it orders members by crew number.
+  An empty roster notes 0x1CE and ends the screen (−1). Picking a free pilot scrolls the
+  pool to it (n < i + 4: n − 4, or 0 below 4 rows; else i); picking a member selects its
+  group and scrolls its members the same way; the member scroll is reset either way.
+- **The bulk menu** (regions 0x32 ground, 0x33 air; 0x462390): a scope — 全員 (crews with
+  +4 ≤ DS:0x50AD92), 選択中部隊 (the selected group's), 未編成のみ (the free pool) —, an
+  action — 装備除装 (slots and pockets 0–5 back to stock), 装備除装と編成解除 (and leave
+  the group), 兵器降機と編成解除 (everything back, 0x457130, and leave); the pool's two:
+  装備除装, 兵器降機 —, then MES 0x1CF, for crews with +2 = 0 and +3 = ground / air.
+  Cancelling the action shows the scopes again. Leaving is group_drop_player (a refusal
+  notes 0x1CE) and flag bit 2 is cleared either way. It returns 1 / 2 / 3 (what to redraw;
+  1 and 2 reset the member scroll).
 - **Start** — the checks, in order:
   1. PD2: crew 1 (Yao) must be in a group (else MES 0x21);
   2. each ground group 0, 2, …, 10 with +2 and +3 bit 0: its pilots' transport capacity
@@ -1851,8 +1870,48 @@ gives it back:
   no longer fits (class changed; or an air group with two pilots and a different machine
   unless both are 7 / 12; class 2–3 in a group above 10, class 4–5 below 12; 0x1A4) is
   asked to leave it (group_drop_player, flag bit 2 cleared).
-Not ported: the list sort buttons, the right‑click menu (0x45A700, unit templates with
-reg_unit.dat) and a Ctrl + Alt debug key.
+The pickers' column headers sort their rows (§5.19); a click equal to the last one a
+picker remembers does nothing (the machine list remembers values below 6, the slot list
+below 0xC — so its column 12 sorts again each time —, the item list below 7).
+- **Layout** (local_ac, busou_g<n>.pac): on opening, no machine: 0 for a ground crew, else
+  2; with one: 2 for an air crew (+3 = 1), else 0 when the machine's class (+0 low nibble)
+  is 0, else 1; a machine pick sets 0x4538A0's class of it.
+- **The template menu** (the right button, 0x45A700): offered with no machine unless the
+  layout is 2 (layout 1 becomes 0), or with a machine of 0–6. Three entries:
+  - **登録** (register): "新規登録" (new; absent when all ten registers are used) and the
+    used registers. New writes register *n* (n = the registers in use); a register picked
+    twice in a row asks 上書きします and overwrites it. A register takes flags |= 7, the
+    machine (sign‑extended to 16 bits), **slots 0–3 only** with their magazines (pockets
+    6–9; a slot's state keeps the register's bits 6–7) and pockets 0–5; then reg_unit.dat is
+    written (0x45CCE0, 0x186 bytes) and 登録完了 noted.
+  - **呼出** (recall): the used registers (none: 登録されていません); picking one shows it
+    and, **in the register itself**, launchers of slots 0–5 with +0x10 > DS:0x50AD92 and
+    rounds of pockets 0–11 with +0xB > DS:0x50AD92 become −1. Then the list holds four copies
+    before the registers: 0 machine + weapons + items, 1 machine + weapons, 2 weapons, 3
+    items, applied from the register shown last.
+  - **複写** (copy): the same four copies from another member — crews with +4 ≤
+    DS:0x50AD92, +2 < 3, a machine 0–6, +6 bits 0–1 clear, not the unit's own crew (none:
+    複写可能なメンバーはいません).
+  The copies: 0 / 1 need the source's machine in stock (else a note): everything goes back
+  to stock, the machine is taken, then each source slot whose launcher and loading pocket's
+  round (state low nibble) are in stock is fitted with its magazine — a register's slots
+  0–3 (state's low 6 bits), a unit's 0–5 (whole) —; 0 then each pocket 0–5 whose round is
+  in stock. 2 needs a machine (0x1DE): slots 0–3 are freed, then the source slots that also
+  meet the machine's slot mask are fitted (a unit's slots 4–5 too, over what they hold,
+  which is not returned). 3 needs a machine: pockets 0–5 freed, then pockets 0 .. machine
+  +0x17 − 1 copied where the round is in stock (no −1 test: a −1 round reads the stock byte
+  before the rounds', the last launcher's). Stock indices are signed bytes (a register's
+  machine a signed 16‑bit value).
+- **reg_unit.dat** (0x186 bytes at DS:0x50CCEA, read from the campaign's folder each time
+  the screen opens): ten 0x27‑byte registers — +0 flags (bit 0 machine, 1 slots, 2
+  pockets; in use when any is set), +1 the machine (i16), +3 + 2s slot s (launcher, state),
+  +0xF + 2p pocket p (round, count) for p 0–11. The shipped file is ten empty registers
+  (each register's odd bytes 0xFF, the others 0). The menu treats registers 0 .. used − 1
+  as the used ones.
+Emulated with the stock, reg_unit.dat and other members' loadouts varied: 794 / 794 runs
+(6 skipped: 5 where a −1 machine's stock is the save header's last byte, outside the
+model; 1 where every scripted close was answered no and the screen stayed open).
+Not ported: a Ctrl + Alt debug key (0x4595F0).
 
 ---
 
@@ -1947,6 +2006,13 @@ target machine's ground armour) / 100.
 Edge cases kept from the game:
 - an aimed unit already off the map is struck at (−1, −1); the port reads nothing there;
 - an entry row of 72 clears a byte past the occupancy layer, which the port skips.
+
+The counter-battery pickers (display, read in the decompilation): the unit list
+(0x4E3230) refuses a unit whose group is not standing by (+2 bits 6–7 set, or a support
+order 1 / 2); the weapon list (0x4E0450) refuses a slot that is empty, out of range of
+the struck group (10 × range < grid_distance; type 5 groups and missiles only), of the
+wrong launcher kind for the group's type (5: 1; 3 / 4: 2), without ground accuracy or
+ground attack (unless warhead 8), without rounds, or broken (state 2).
 
 ### 5.14 Reinforcements: Emulated
 
@@ -2310,6 +2376,29 @@ the flag (§5.10, then the sortie §5.11). Otherwise the game goes back to the t
 `rules.debrief` / `Debrief.debrief` (with `results_screen`, `mission_exit`,
 `scenario_command`, `new_game`, `next_mission`; fixtures 400 / 400 with the scenario and
 new-game cases).
+
+### 5.19 The lists' sort buttons: Emulated
+
+A list window (0x452A10) returns its column headers as 0, 1, … before its rows; the
+screen sorts its rows with **0x4172B0**, an exchange sort (for i, for j > i: rows i and j
+swap when cmp(row i, row j) > 0, row i then compared on) — not stable. The comparators
+(read in the disassembly; "largest first" is a swap when the first row's key is smaller):
+
+| Table | List | Columns (largest first unless noted) |
+|---|---|---|
+| 0x5170F0 | the sortie's roster (crews) | 0 crew number, smallest first; 1 state (4 +6 bit 0, 3 bit 1, 2 in a group, 1 free), smallest first; 2–6 crew +9..+0xD (signed); 7–10 crew +8 bits 0–3; 11 the unit's machine (signed), smallest first, **equal rows swapped** |
+| 0x513980 | the new campaign's pilots (crews) | 0–4 crew +9..+0xD (signed); 5–8 crew +8 bits 0–3 |
+| 0x5152E8 | the armament machines | 0–4 machine +4, +5, +6, +7, +0x18; 5 its stock |
+| 0x515300 | the armament slot pairs (launcher, round) | 0 range (launcher +4 + round +3, a byte); 1 launcher +2; 2 ground attack (round +1 + launcher +3); 3 launcher +5; 4 air attack (launcher +6 + round +2); 5 round +4; 6 sign‑extended launcher +7 low 5 bits + round +6 low 5 bits; 7 launcher +8 low 5 bits (as a signed byte shifted up 3); 8 launcher +9 low 3 bits, smallest first; 9 launcher stock; 10 launcher +9 bit 3; 11 round +0 (signed; 0xFF rows last, two 0xFF rows swapped); 12 rounds whose +0 is negative last, else round stock |
+| 0x515338 | the armament items (rounds) | 0 round +0 as column 11 above; 1 +1; 2 +2; 3 +4; 4 +6 low 5 bits; 5 +7 low 5 bits; 6 stock |
+
+The new campaign's pilot choice ignores its last sort header clicked again; its marks move
+with their rows, so the random fill (rand() % 14 over the list) picks list positions in
+the sorted order. The slot list sorts only its pairs ("remove" stays first). Emulated in
+verify_new_campaign (779 / 779 with sorts), verify_sortie (800 / 800 with the roster and
+the bulk menu) and verify_equipment. A DASH new campaign then draws random pool pilots
+until six ground pilots are set (0x421B90); with too few eligible ones left — which the
+sorted random fill can bring about — the game draws for ever: the port stops there.
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

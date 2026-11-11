@@ -39,6 +39,9 @@ class Hooks extends RefCounted:
 	func cb_slot(u: int, g: int) -> int:
 		return -2
 
+	## the group struck (counter_battery's g): the weapon picker measures its range to it
+	var cb_target := -1
+
 	## The unit panel shown for a striker (0x466790).
 	func panel(u: int) -> void:
 		pass
@@ -395,6 +398,7 @@ static func counter_battery(w: Pd2World, rng: Pd2Random, side: int, striker: int
 	var units := []
 	for c in cands:
 		units.append(c[0])
+	hooks.cb_target = g
 	while res == 1:
 		var k := hooks.cb_pick(units)
 		if k in ABORT:

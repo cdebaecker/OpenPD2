@@ -57,6 +57,7 @@ var static_mem := {}                 # exe data the code may read past a table: 
 var scenario := PackedByteArray()    # DS:0x50DE41: the mission's SCN_MIS record (0x1C6 B, 0x4DD2F0)
 var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, launchers, rounds)
 var head := PackedByteArray()        # DS:0x506638-0x506653: the save's head (campaign mode, chunk ..; Debrief)
+var reg_unit := PackedByteArray()    # DS:0x50CCEA: reg_unit.dat, the armament screen's ten registers (Equipment)
 var exp0 := PackedByteArray()        # DS:0x506B34-0x506B38: record 0's experience counters
 var script_no := 0                   # DS:0x50CE72: the mission number (the scripts' tables; the debrief sets it)
 var stash: Array = []                # DS:0x50CE73 / 0x50D023: PD2's 27 crews and units while DASH plays
@@ -132,6 +133,7 @@ func duplicate_world() -> Pd2World:
 	c.scenario = scenario
 	c.stock = stock.duplicate()
 	c.head = head.duplicate()
+	c.reg_unit = reg_unit.duplicate()
 	c.exp0 = exp0.duplicate()
 	c.script_no = script_no
 	c.stash = stash.duplicate()
@@ -283,6 +285,8 @@ func mem8(addr: int) -> int:
 		return records[addr - 0x50ADF5]
 	if addr >= 0x50DE41 and addr < 0x50DE41 + scenario.size():
 		return scenario[addr - 0x50DE41]
+	if addr >= 0x50CCEA and addr < 0x50CCEA + reg_unit.size():
+		return reg_unit[addr - 0x50CCEA]
 	for base in static_mem:
 		var data: PackedByteArray = static_mem[base]
 		if addr >= base and addr < base + data.size():
@@ -310,6 +314,8 @@ func mem_write(addr: int, v: int) -> void:
 		groups[addr - 0x50A35C] = v
 	elif addr >= DS and addr < DS + 0xF5:
 		ds[addr - DS] = v
+	elif addr >= 0x50CCEA and addr < 0x50CCEA + reg_unit.size():
+		reg_unit[addr - 0x50CCEA] = v
 	else:
 		fault = "write at DS:0x%X" % addr
 
