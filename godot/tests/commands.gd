@@ -20,6 +20,14 @@ func _init() -> void:
 	var w: Pd2World = b.w
 	var a: int = b.squad[0]
 	var ok := true
+	# the mission's scripts place the squad apart: set the second member down beside the first
+	var ap := w.pos(a)
+	for d in 6:
+		var n: Vector2i = ap + Move.NEIGHBOURS[ap.y & 1][d]
+		if w.on_map(n.x, n.y) and w.O[n.x + 72 * n.y] == 0 \
+				and absi(w.H[ap.x + 72 * ap.y] - w.H[n.x + 72 * n.y]) < 2:
+			Action.move_unit(w, b.squad[1], n.x, n.y)
+			break
 	b._select(a)
 	b._cmd_carry_mode()
 	ok = ok and b.mode == "carry" and not b.carry_hexes.is_empty()
