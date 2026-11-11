@@ -3161,8 +3161,8 @@ GDScript `Pockets`, checked by `verify_rules.verify_pockets`.
   - always: **reload** (1), the reload AP of the launcher's first round (+0xA).
 - Outside a picker:
   - a hand slot (2+) with manipulators not broken: **hand over** (2) and **discard** (3,
-    1 AP; not ported);
-  - slots 0-1: **unequip** (4, 1 AP; not ported).
+    1 AP);
+  - slots 0-1: **unequip** (4, 1 AP).
 - The hand-over AP of a slot (0x4507C0) is the launcher's load (+7, signed 5 bits) plus
   the round's load (ammo +6) scaled by how full the magazine is, + 1:
   `count * 200 / capacity * load / 100`, unsigned 32-bit, its low byte capped at the load.
@@ -3170,10 +3170,10 @@ GDScript `Pockets`, checked by `verify_rules.verify_pockets`.
 
 **The pocket menu** (0x427FF0). With A the pocket's round:
 - **use** (5), A's reload AP: warhead bit 5 and rounds left (the item command, 5.16);
-- **recon** (6), the reload AP: warhead 10 and rounds left (not ported);
+- **recon** (6), the reload AP: warhead 10 and rounds left;
 - otherwise **set** (7), the reload AP halved for an engineer: warhead 13, rounds left,
   pocket not broken (5.15);
-- then always **hand over** (2), A's load + 1, and **discard** (3, 1 AP; not ported).
+- then always **hand over** (2), A's load + 1, and **discard** (3, 1 AP).
 
 **The pocket picker** (`ui_pocket_picker` 0x4E95C0):
 - It lists `reload_pockets` (0x480990). An empty slot takes no round there.
@@ -3203,6 +3203,28 @@ No mark: 0x1E7. Otherwise each click is handled as follows:
   - yes: the item moves, the marks are cleared, and both units pay the AP.
 
 Any F bit 1 already set counts as a mark.
+
+**Discard and unequip** (0x428400 / 0x4284F0, `rules.drop_item`). The two are the same
+routine with different questions:
+- It asks 0x1B6 (discard) or 0x1B7 (unequip), with the item's name: the launcher's for a
+  slot, the round's for a pocket.
+- Yes:
+  - a slot loses its launcher (0xFF) and the pocket it fed from (ammo 0xFF);
+  - a pocket is cleared;
+  - the unit pays the menu's 1 AP.
+
+**Recon** (0x4285E0, `rules.recon_round` / `recon_spend`). It runs `step_search`
+(0x47F950) in mode 0xC:
+- The search map is drawn from the unit's hex at its own height, with the round's recon
+  range (+4) and penetration (+5); an empty pocket gives 0 / 0. No map: nothing happens.
+- Then it asks 0x1C8:
+  - **search:** the map's hexes go into the side's view, and the units there are spotted
+    as by the search command (spot_in_map, mode 8). Each one of status 3+ is announced
+    (0x47E790).
+  - **check the area:** a click on the map, then the question again.
+  - **cancel**, or a closed window: nothing. An abort is not passed on.
+- After a search, the machine status window charges the AP. The pocket loses a round
+  (low 6 bits) and is cleared at 0.
 
 What moves:
 - **A pocket:** its round, count and state go to o's first empty pocket. If o has none,

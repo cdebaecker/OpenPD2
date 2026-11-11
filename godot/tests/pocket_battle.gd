@@ -4,7 +4,9 @@ extends SceneTree
 ## 0x427530 with the picker's entries, the pocket picker 0x4E95C0, 0x427980), swaps a
 ## half-used one from the machine status window's slot menu (0x427930), then hands a
 ## pocket's round to the squad member beside it (the pocket menu 0x427FF0, 0x4287A0 with
-## its 0x1E8 question). The windows' answers are scripted (battle.scripted).
+## its 0x1E8 question); a multi-sensor round searches (0x4285E0, the 0x1C8 prompt), a
+## pocket is discarded (0x428400) and the slot unequipped (0x4284F0). The windows'
+## answers are scripted (battle.scripted).
 
 func _mag_launcher(w: Pd2World) -> int:
 	## a magazine launcher (+9 bit 3) taking two round types
@@ -130,6 +132,44 @@ func _init() -> void:
 	ok = ok and spot.x != -1 and got == 0 and w.pocket_ammo(u, 3) == -1 and w.sb(u, 0xE) == uap - hap \
 		and w.sb(v, 0xE) == vap - hap and MissionScripts.target_mark_at(w, spot.x, spot.y) == 0
 	ok = ok and b.scripted.is_empty() and w.fault == ""
+	# 4. a multi-sensor round (warhead 10) searches from u's hex: the 0x1C8 prompt answered
+	# "search", the pocket loses a round, the AP is paid
+	var sensor := -1
+	for a in 96:
+		if w.ammo(a, 8) & 15 == 10 and w.ammo(a, 4) > 0:
+			sensor = a
+			break
+	w.setb(u, 0x1B + 8, sensor)
+	w.setb(u, 0x1C + 8, 2)
+	pm = Pockets.pocket_menu(w, u, 4)
+	var si := -1
+	for i in pm.size():
+		if pm[i][0] == Pockets.SEARCH:
+			si = i
+	uap = w.sb(u, 0xE)
+	b.scripted = [4, si, 0]                    # the pocket, "recon", the prompt's "search"
+	b._cmd_pocket_menu()
+	print("recon with round %d: menu %s, rounds left %d, AP %d -> %d" % [sensor, str(pm), w.pocket_count(u, 4),
+		uap, w.sb(u, 0xE)])
+	ok = ok and sensor != -1 and si != -1 and w.pocket_count(u, 4) == 1 and w.sb(u, 0xE) == uap - pm[si][1] \
+		and b.scripted.is_empty()
+	# 5. discard pocket 2's round (0x1B6), 6. unequip slot 0 (0x1B7)
+	pm = Pockets.pocket_menu(w, u, 2)
+	uap = w.sb(u, 0xE)
+	b.scripted = [2, pm.size() - 1, true]      # the pocket, "discard", yes
+	b._cmd_pocket_menu()
+	print("discard: pocket 2 ammo %d, AP %d -> %d" % [w.pocket_ammo(u, 2), uap, w.sb(u, 0xE)])
+	ok = ok and pm[pm.size() - 1][0] == Pockets.DISCARD and w.pocket_ammo(u, 2) == -1 and w.sb(u, 0xE) == uap - 1
+	menu = Pockets.slot_menu(w, u, 0, false)
+	var ui_ := menu.size() - 1
+	var fed := w.ub(u, 0x10) & 15
+	uap = w.sb(u, 0xE)
+	b.scripted = [ui_, true]                   # "unequip", yes
+	b._cmd_slot_menu()
+	print("unequip: menu %s, slot 0 launcher %d, pocket %d ammo %d, AP %d -> %d" % [str(menu), w.launcher_id(u, 0),
+		fed, w.pocket_ammo(u, fed), uap, w.sb(u, 0xE)])
+	ok = ok and menu[ui_][0] == Pockets.UNEQUIP and w.launcher_id(u, 0) == -1 and w.pocket_ammo(u, fed) == -1 \
+		and w.sb(u, 0xE) == uap - 1 and b.scripted.is_empty() and w.fault == ""
 	b._end_turn()
 	print("a whole turn after: fault '%s'" % w.fault)
 	ok = ok and w.fault == ""

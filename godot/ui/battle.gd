@@ -2676,6 +2676,41 @@ class BattleHandHooks extends Pockets.HandHooks:
 		return 0
 
 
+class BattleDiscardHooks extends Pockets.DiscardHooks:
+	## 0x428400 / 0x4284F0's question (0x1B6 / 0x1B7) with the item's name
+	var battle
+
+	func box(msg: int, kind: String, idx: int) -> int:
+		var t: Dictionary = GameData.tables(battle.campaign).get("launcher_names" if kind == "launcher" else "ammo_names", {})
+		return 1 if battle.ask_box(battle.msg(msg, [str(t.get(str(idx), ""))]), false) else 0
+
+
+class BattleReconHooks extends Pockets.ReconHooks:
+	## 0x4285E0's 0x1C8 prompt (its two choices, Cancel for the right click) and the
+	## 0x47E790 window for each enemy found; the map stays in view, so "check the area"
+	## asks again at once
+	var battle
+
+	func prompt() -> int:
+		var parts := GameData.prompt_parts(battle.msg(0x1C8))
+		var labels: Array = parts[1] if parts[1].size() >= 2 else [battle.ui("UI_YES"), battle.ui("UI_NO")]
+		return battle.ask_choice(parts[0], [[labels[0], 0], [labels[1], 1], [battle.ui("UI_CANCEL"), -2]], 0)
+
+	func discovered(o: int) -> int:
+		battle.say_msg(0x1C7)
+		return 0
+
+
+func drop_flow(u: int, item: int, act: int, ap: int) -> int:
+	## discard (0x428400, 0x1B6) / unequip (0x4284F0, 0x1B7); done, the AP is paid
+	var hk := BattleDiscardHooks.new()
+	hk.battle = self
+	if Pockets.drop_item(w, u, item, 0x1B6 if act == Pockets.DISCARD else 0x1B7, hk) == 1:
+		Ai.spend_ap(w, u, ap)
+		return 1
+	return 0
+
+
 func pocket_action_text(a: int, ap: int) -> String:
 	## the menus' entries (exe 0x514008 ...: "%2dAP")
 	return GameData.exe_text(campaign, Pockets.ACTION_TEXT[a], [ap])
@@ -2755,14 +2790,14 @@ func slot_menu_flow(u: int, s: int, picker: bool) -> int:
 		return 0
 	if act == Pockets.HAND_OVER:
 		return hand_over_flow(u, s, ap)
-	say(ui("UI_ACTION_NOT_PORTED"))
-	return 0
+	return drop_flow(u, s, act, ap)
 
 
 func pocket_menu_flow(u: int, p: int) -> int:
 	## the machine status window's pocket (0x4279F0): manipulators broken 0x1B9; the pocket
 	## menu (0x427FF0); its AP (0x1AE); handing over (0x4287A0), setting explosives
-	## (0x428D80); "use" goes to the item command's target click
+	## (0x428D80), recon (0x4285E0), discard (0x428400); "use" goes to the item command's
+	## target click
 	if Ai.manipulator_state(w, u) == 2:
 		say_msg(0x1B9)
 		return 0
@@ -2788,8 +2823,15 @@ func pocket_menu_flow(u: int, p: int) -> int:
 		Pockets.THROW:
 			call_deferred("_item_pocket_mode", p)
 			return 0
-	say(ui("UI_ACTION_NOT_PORTED"))
-	return 0
+		Pockets.SEARCH:
+			var hk := BattleReconHooks.new()
+			hk.battle = self
+			var res := Pockets.recon_round(w, u, p, hk)
+			if res != 0 and not res in Pockets.ABORT:
+				Pockets.recon_spend(w, u, p, ap)
+				return 1
+			return 0
+	return drop_flow(u, 10 + p, act, ap)
 
 
 func _item_pocket_mode(p: int) -> void:

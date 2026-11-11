@@ -240,3 +240,83 @@ static func hand_over(w: Pd2World, u: int, item: int, ap: int, hooks: HandHooks)
 			MissionScripts.clear_target_marks(w)
 			return got
 	return -1
+
+
+## What 0x428400 / 0x4284F0 ask: the question msg (0x1B6 discard, 0x1B7 unequip) naming
+## the item: kind "launcher" or "ammo", idx its id (1 = yes).
+class DiscardHooks extends RefCounted:
+	func box(msg: int, kind: String, idx: int) -> int:
+		return 0
+
+
+## 0x428400 (discard) / 0x4284F0 (unequip), one routine (rules.drop_item): yes takes a
+## slot's launcher and the pocket it fed from, or clears a pocket. 1 (1 AP), 0, an abort.
+static func drop_item(w: Pd2World, u: int, item: int, msg: int, hooks: DiscardHooks) -> int:
+	var res: int
+	if item < 10:
+		res = hooks.box(msg, "launcher", w.launcher_id(u, item))
+	else:
+		res = hooks.box(msg, "ammo", w.pocket_ammo(u, item - 10))
+	if res in ABORT:
+		return res
+	if res != 1:
+		return 0
+	if item < 10:
+		w.setb(u, 0x1B + 2 * (w.ub(u, 0x10 + 2 * item) & 15), 0xFF)
+		if u < 0xFE and item < 6:
+			w.setb(u, 0xF + 2 * item, 0xFF)
+	else:
+		w.setb(u, 0x1B + 2 * (item - 10), 0xFF)
+	return 1
+
+
+## What 0x4285E0 asks: the 0x1C8 prompt (0 search, -2 cancel, other: a look at the map,
+## click(), then asked again) and the 0x47E790 window for each computer unit found.
+class ReconHooks extends RefCounted:
+	func prompt() -> int:
+		return 0
+
+	func click() -> int:
+		return 0
+
+	func discovered(o: int) -> int:
+		return 0
+
+
+## 0x4285E0, the pocket menu's "recon" (rules.recon_round): step_search in mode 0xC with
+## the round's recon range and penetration. 1 when searched, 0, or an abort from a window.
+static func recon_round(w: Pd2World, u: int, p: int, hooks: ReconHooks) -> int:
+	var a := w.pocket_ammo(u, p)
+	var rng_ := 0 if a == -1 else ammo_rec(w, a, 4)
+	var pen := 0 if a == -1 else ammo_rec(w, a, 5)
+	var up := w.pos(u)
+	var smap := Sight.search_map(w, up.x, up.y, rng_, pen)
+	if smap == null:
+		return 0
+	while true:
+		var res := hooks.prompt()
+		if res in ABORT or res == -2:
+			return 0
+		if res == 0:
+			var side := 3 if w.is_enemy(u) else 0
+			for ly in smap.h:
+				for lx in smap.w:
+					if smap.at(lx, ly) != 0xFF:
+						Ai.set_view(w, smap.x0 + lx, smap.y0 + ly, side)
+			for o in Sight.spot_in_map(w, u, smap, 8):
+				if w.sb(o, 0x36) > 2:
+					var r := hooks.discovered(o)
+					if r in ABORT:
+						return r
+			return 1
+		if hooks.click() in ABORT:
+			return 0
+	return 0
+
+
+## After a recon: u pays ap, the pocket loses a round (low 6 bits), cleared at 0.
+static func recon_spend(w: Pd2World, u: int, p: int, ap: int) -> void:
+	Ai.spend_ap(w, u, ap)
+	w.setb(u, 0x1C + 2 * p, (w.ub(u, 0x1C + 2 * p) & 0xC0) | ((w.pocket_count(u, p) - 1) & 0x3F))
+	if w.pocket_count(u, p) == 0:
+		w.setb(u, 0x1B + 2 * p, 0xFF)
