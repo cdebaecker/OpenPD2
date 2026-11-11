@@ -79,10 +79,15 @@ func reg_unit_shipped(campaign: String) -> PackedByteArray:
 ## A text of Pd2.exe's own (the import's exe_text, by address), translated (exe.csv: the
 ## address in hex) and formatted.
 func exe_text(campaign: String, va: int, args := []) -> String:
+	return format_text(exe_raw(campaign, va), args)
+
+
+## The same text unformatted (for the texts the game formats with wsprintfA).
+func exe_raw(campaign: String, va: int) -> String:
 	var t := _translated("exe", "%X" % va)
 	if t == "":
 		t = str(tables(campaign).get("exe_text", {}).get("%X" % va, ""))
-	return format_text(t, args)
+	return t
 
 
 ## A mission's data, with the base64 blobs decoded to PackedByteArrays.
@@ -155,6 +160,18 @@ func debrief_text(campaign: String, id: int) -> String:
 	# the game's page breaks (0x0C), line breaks (CR) and waits for a click (@)
 	var out := format_text(t if t != "" else ja, [])
 	return out.replace(char(12), "").replace(char(13), char(10)).replace("@", char(10)).strip_edges()
+
+
+## A title note (MES0.SLD, which 0x471990 loads for the title; message_text there reads
+## it), translated (mes.csv: "mes0.<id>") or the game's own.
+func title_note(id: int) -> String:
+	if not _messages.has("dash"):
+		_messages["dash"] = _json("%s/%s/messages.json" % [ROOT, "dash"])
+	var lines: Array = _messages["dash"].get("mes0", [])
+	var t := _translated("mes", "mes0.%X" % id)
+	if t == "":
+		t = lines[id] if id >= 0 and id < lines.size() else ""
+	return format_text(t, [])
 
 
 ## A base-screen message (MES.PCK, which message_text reads while DS:0x50663A = 0: the

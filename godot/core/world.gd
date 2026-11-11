@@ -62,6 +62,7 @@ var reg_unit := PackedByteArray()    # DS:0x50CCEA: reg_unit.dat, the armament s
 var exp0 := PackedByteArray()        # DS:0x506B34-0x506B38: record 0's experience counters
 var script_no := 0                   # DS:0x50CE72: the mission number (the scripts' tables; the debrief sets it)
 var stash: Array = []                # DS:0x50CE73 / 0x50D023: PD2's 27 crews and units while DASH plays
+var title_list := PackedByteArray()  # DS:0x523EE0: the title's scenario list (24 B, kept between visits; Title)
 var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
 var drop_saved := [-1, 0, 0]      # DS:0x514D18 / 0x523E34 / 0x523E38: the unit a transport displaced, its hex
 var reinf_saved := [-1, 0, 0]     # DS:0x514E04 / 0x523E48 / 0x523E4C: the unit an arriving member displaced, its hex

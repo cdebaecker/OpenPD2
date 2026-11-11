@@ -41,7 +41,7 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: A
 		if pick != null and crt != null:
 			Campaign.new_campaign(w, crt, pick)
 		Campaign.mission_load(w, int(doc.get("mission", 0)) + 1, doc.init, doc.npc)
-		w.mode_663a = 1                # the battle (game_mode_loop, 0x487D70)
+		w.mode_663a = 0                # 0x416CF0 leaves DS:0x50663A = 0 for the briefing and the sortie
 	else:
 		var init: PackedByteArray = doc.init
 		for i in mini(init.size(), INIT_UNITS * 55):

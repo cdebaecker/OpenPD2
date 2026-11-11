@@ -2871,7 +2871,8 @@ otherwise shows MES 0x12B and refuses.
 - then the save and PD2's record set. game_mode_loop runs the new campaign (§5.10) next,
   then the mission start.
 
-The title's other entries (continue, the mission list, DASH's own start) are not ported.
+The title's other entries (the continue, the scenario select, the rescue mission) are in
+§5.20.
 
 **The debrief** (0x48FA40; game_mode_loop calls it with DS:0x50663A = 2 for any result
 from 0x80 up but 0x81). It clears DS:0x50663D, loads RMES.SLD (0x4719D0: its texts) and
@@ -3012,6 +3013,130 @@ verify_new_campaign (779 / 779 with sorts), verify_sortie (800 / 800 with the ro
 the bulk menu) and verify_equipment. A DASH new campaign then draws random pool pilots
 until six ground pilots are set (0x421B90); with too few eligible ones left — which the
 sorted random fill can bring about — the game draws for ever: the port stops there.
+
+### 5.20 The title's starts and the saves: Emulated
+
+**The title** (game_mode_loop 0x487D70). Its button 0 opens a list (DS:0x50D86C):
+キャンペーンを始める (start the campaign, after the question 0x518A08), シナリオ選択 (the
+scenario select), 救出ミッション (the rescue mission); its button 1 is the continue. Each
+calls 0x46D780 with "0", "2", "3" or "1". There is no separate DASH start: the campaign
+runs PD2 steps 1–7, DASH, then PD2 steps 8–10 (§5.18), and DASH is entered by the
+campaign's hand-over, a continued save, the scenario select or the rescue mission.
+
+**0x46D780** first sets the chunk DS:0x50663D = 0 and DS:0x50663A = −1, and loads MES0.SLD
+(0x471990: message_text reads it at the title).
+- **"0"** is the new game (§5.18). It returns 1.
+- **"1", the continue.** The load list 0x4985A0 shows the 41 slots (0x498290). A slot is
+  confirmed with its header line (0x498070: the mode — Campaign, One Shot or Rescue — the
+  save's name and the date, then "ロードします"). Then PD2RECnn.BIN is read (0x4987C0):
+  - 1–3 (no file, no header, not "PD2DATA\0"): note MES0 6, the result is 0;
+  - 4 (not 0x47C5 B): note MES0 0xC, 0;
+  - else the image is loaded and its CRC is left at DS:0x50ADF3; not 0 is code 5: note
+    MES0 9, −1.
+  Then MEMBERnn.DAT is read (0x40D7A0 with 1, below), the messages are loaded, and
+  DS:0x50AD94 = slot + 1. The title reads MEMBERnn.DAT a second time. Its result is
+  DS:0x50CE72. Below 11 (PD2), crews and units 0–26 come back from the kept ones, the
+  chunk is the mission, the step loses 10 past 17, and the flag is 1. Otherwise the
+  result loses 10 and becomes the chunk, and the flag is 0. DS:0x50AD92 = the step. The
+  result gets bit 0x80 when the save's DS:0x50663A is set (a save made in a battle).
+  game_mode_loop then goes straight to the battle (0x436530); that resume is not ported.
+- **"2", the scenario select.** The list holds the missions of steps 1–22 (DS:0x50CC0D)
+  whose byte at DS:0x5173C0 is set: PD2's 3, 2, 5, 7, 8, 6, 4, 9 and DASH's 12, 15, 16,
+  18, 19, 11, 13. It is kept at DS:0x523EE0 and stays there after the title. With no
+  save file (0x4988B0 counts PD2RECnn.BIN with the header), the mission's own
+  SAVEDATA.ORG is loaded. Otherwise the game asks デフォルトデータ / セーブ済みデータ
+  (0x5173A0). Saved data comes through the load list. Its mission must belong to the same
+  campaign as the one picked (else note 0x517490 / 0x517474), and the save must not come
+  from a battle (else note 0x5174AC / 0x517458). Either way the setup follows:
+  - PD2: the flag 1, the step DS:0x5173D8[m] less 10 past 17, the chunk m;
+  - DASH: the flag 0, the step DS:0x5173D8[m] − 7, the chunk m − 10.
+  A mission with DS:0x5173A8[m] > 0 needs that many crews with +2 = 0, +3 set and +4 up
+  to DS:0x50AD92. Otherwise it shows two notes (0x517508, 0x517534) and the list again.
+  At the end:
+  - the mode word is 2;
+  - the step becomes the first step whose mission is m (DASH: less 7);
+  - every crew 0–63 with +4 up to the step and +2 below 3 leaves its group
+    (group_drop_player; refused: 0x517560), and its unit leaves the map (+9 = −1, +0
+    bit 2 cleared);
+  - DS:0x50AD94 = 0.
+  The result is m | 0x40: game_mode_loop plays that one mission and its debrief goes
+  back to the title (§5.18: mode 2).
+- **"3", the rescue mission.** The load list 0x4983A0 is the same but reads no
+  MEMBERnn.DAT; the title reads it after. The save must be a campaign save (mode 1) made
+  outside a battle (else 0x517574), in DASH (else 0x51759C). Then:
+  - the step and DS:0x50AD92 each lose 1;
+  - the flag is 0, the mission 22, the chunk 12;
+  - it counts the missing crews: +4 up to the step, +2 below 3, +7 not 0xFF, +6 bit 0
+    set and +3 = 0. With none it shows 0x5175C8 and the list again;
+  - the crews leave their groups as in "2" (0x517644);
+  - DS:0x50AD94 = 0 and the mode word is 3.
+  The result is the step. Mode 3's debrief then sets mode 1, and the campaign goes on
+  (§5.18).
+
+**The end of 0x46D780.** In DASH (flag 0):
+- the result −1 returns 0 at once;
+- for "2" and "3" the chunk is set again (mission − 10, but not in mode 3), and
+  DS:0x50AD92 = the step;
+- unless the result has bit 0x80, USERDISK.ID must open. Without it the game shows a
+  fade, then 0x517664, and returns 1, writing no savedata.tmp;
+- but for the continue, the stock of machine 6 and of launchers 6, 7 and 0x15 is brought
+  to 13 in all. The count is the stock plus what units 0–63 carry whose crew has +2
+  below 3 and +4 up to DS:0x50AD92 (0x4DDBA0 / 0x4DDC10; above 13 the stock falls, to 0
+  at least). The stock of rounds 0xF, 0x10 and 0x29 becomes 99 less what those units
+  carry (0x4DDC80, the stock counted as 0).
+
+In PD2 (flag 1):
+- the result −1 loads the record set and returns −1;
+- in mode 2 the result is DS:0x523EE0[result] | 0x40;
+- the step loses 10 past 17, the chunk is DS:0x50CE72, and DS:0x50AD92 = the step.
+
+Then savedata.tmp is written (0x4981F0) and the record set loaded (load_campaign_set).
+
+game_mode_loop runs the new campaign (§5.10) when the result is 1 for a button-0 entry
+other than the scenario select: "0", and also "3" when the rescue's step is 1. A result
+over 20 goes back to the title; anything else starts the mission (§5.18).
+
+**The save files.**
+- **PD2RECnn.BIN** (nn = 00–40) is "PD2DATA\0" followed by the image DS:0x506638..0x50ADF4.
+  0x4981F0 first zeroes DS:0x50ADF3 and puts the CRC there (0x436130). The CRC uses the
+  polynomial 0x1021: its register starts as the image's first two bytes (high byte
+  first), every later bit is shifted in from the right, and it is stored high byte first.
+  Run over a good image, it gives 0.
+- **MEMBERnn.DAT** is 0x77E B from DS:0x50CE72: the mission number, then PD2's kept 27
+  crews and 27 units. 0x40D7A0 with 0 writes it; in PD2 it first copies crews and units
+  0–26 into the kept ones. With 1 it reads the file: a short file is read as far as it
+  goes, then the error box 0x408B70 and −1. Then the flag is 0, or 1 (with crews and
+  units 0–26 restored) when the mission is below 11.
+- **The sortie's save** is entry ＳＡＶＥ of the sortie's system menu (region 0x45,
+  DS:0x50D70D), 0x497F60:
+  - the slot list 0x497A10, then the slot confirmed (0x498070, "上書きします");
+  - the mission's name copied to DS:0x50663E (lstrcpyA, by the chunk: DASH's table
+    0x50CB76, PD2's 0x50CB4E);
+  - PD2RECnn.BIN written, with the note セーブ完了;
+  - then KEMURInn.DAT (the image's first 0xD20 B) and MEMBERnn.DAT.
+
+The sortie runs with DS:0x50663A = 0 (the mission start 0x416CF0 leaves it there), so its
+saves continue as saves made outside a battle.
+
+`rules.title_start` / `Title.title_start` (with `load_pick`, `member_read` /
+`member_write`, `read_save` / `write_save`, `save_crc`, `save_game`, `sortie_save`).
+Emulation: `verify_title` 299 / 299 over the four entries, with the pickers, the file
+readers and the DASH stock rule run as the game's (1 case skipped, below);
+`verify_save_crc` 300 / 300; `verify_save_game` 150 / 150 with 0x40D7A0 both ways. The
+fixtures (suite `title`) pass 300 / 300.
+
+Undefined:
+- the continue reads its local result (esp+0x14) before setting it, and only −1 there
+  would change the path. The port takes any other value;
+- the rescue's pilot check runs when the scenario list's 13th entry (DS:0x523EEC, left
+  from an earlier visit of the scenario select) needs aircraft pilots. It then reads that
+  same local, which the rescue never sets. The port refuses;
+- a One Shot save (mode 2) continued in PD2: the end reads DS:0x523EE0 at the result as if
+  it were the list's index, though it is the mission number (with 0x80 for a battle
+  save). Within the list the port reads it as the game does; past it, the game reads other
+  memory and the port refuses;
+- the group drop takes crew +5 as a group number unchecked: 64–254 reach past the group
+  table. The port refuses.
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

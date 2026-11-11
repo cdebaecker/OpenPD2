@@ -184,6 +184,17 @@ SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51
                 0x51E948, 0x51E964,                       # DASH 10's menu entries and labels
                 0x51EAA8, 0x51EAB8}                       # script 22's menu entries
 SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x50CBB9: 2, 0x51AD78: 3, 0x51E840: 2}   # pointers each (MissionScripts.CHOICES)
+# The title (0x487D70 / 0x46D780, core/title.gd): its list (DS:0x50D86C: start the campaign,
+# scenario select, rescue mission), the data question (0x5173A0), the missions' names by
+# number (0x50CB4E, 23 pointers: the scenario list, the save's name), the sortie's system
+# menu (0x50D70D: abort the operation, save, load).
+SCRIPT_CHOICES.update({0x50D86C: 3, 0x5173A0: 2, 0x50CB4E: 23, 0x50D70D: 3})
+# ... and its notes (0x46D780, the pickers 0x4985A0 / 0x4983A0, the save 0x497F60 and the
+# slot's header line 0x498070).
+TITLE_TEXTS = {0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517474, 0x517458,
+               0x517508, 0x517534, 0x517560, 0x51759C, 0x517574, 0x5175C8, 0x517644, 0x517664,
+               0x519EB0, 0x519F24, 0x519F44, 0x519ED8, 0x519EE8, 0x519EF0, 0x519F0C,
+               0x50CBF2, 0x50CBFB, 0x50CC04}
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
 # DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads
@@ -211,7 +222,7 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # the counter-battery pickers (0x4E3230's states, 0x4E0450's slot states, kinds
              # and the accuracy of a launcher without one)
              0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
-             0x50CBE1) + tuple(sorted(SCRIPT_TEXTS))
+             0x50CBE1) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -331,7 +342,8 @@ def export_messages(game, out):
     """The game's message tables, as message_text (0x471A00) reads them: WMES.PCK (the
     battle's, read when DS:0x50663A is set) and MES.PCK (the others), one LZSS entry per
     index (DS:0x50663D - 1), each a list of strings numbered from 0 (Shift-JIS, decoded);
-    and RMES.SLD (one LZSS block: the debrief's texts, which 0x4719D0 loads for 0x48FA40)."""
+    and RMES.SLD (one LZSS block: the debrief's texts, which 0x4719D0 loads for 0x48FA40);
+    MES0.SLD (one block: the title's notes)."""
     for camp in CAMPAIGNS:
         folder = os.path.join(game, camp)
         fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
@@ -345,6 +357,9 @@ def export_messages(game, out):
         if 'RMES.SLD' in fs:
             dc = pd2dt.decode_chunk(open(fs['RMES.SLD'], 'rb').read())
             doc['rmes'] = [t.decode('cp932', 'replace') for t in dc.split(b'\0')] if dc else []
+        if 'MES0.SLD' in fs:          # the title's notes (0x471990 loads it; message_text reads it there)
+            dc = pd2dt.decode_chunk(open(fs['MES0.SLD'], 'rb').read())
+            doc['mes0'] = [t.decode('cp932', 'replace') for t in dc.split(b'\0')] if dc else []
         os.makedirs(os.path.join(out, camp), exist_ok=True)
         with open(os.path.join(out, camp, 'messages.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)

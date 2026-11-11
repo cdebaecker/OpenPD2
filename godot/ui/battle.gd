@@ -15,6 +15,9 @@ var mission_index := 0
 ## save, savedata.tmp, read back by the next mission start 0x416CF0): the save image, the
 ## mission number DS:0x50CE72 and PD2's kept crews and units (DS:0x50CE73, not saved).
 static var carry := {}
+## The title's start (0x46D780, ui/boot.gd) hands its savedata.tmp the same way, with
+## new_campaign: game_mode_loop runs 0x421B90 first (button 0's entries returning 1).
+var title_carry := {}
 var debrief_panel: PanelContainer = null
 var debrief_result := -1        # the debrief's code (0x80 next mission, 0x81 the title), -1 none yet
 
@@ -177,13 +180,13 @@ func _ready() -> void:
 	var save := GameData.save_image(campaign)
 	var pick: Campaign.Hooks = Campaign.Hooks.new() if mission_index == 0 else null
 	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
-	var carried := carry
+	var carried := carry if title_carry.is_empty() else title_carry
 	carry = {}
 	if not carried.is_empty():
-		save = [Debrief.SAVE_BASE, carried.image]     # the debrief's save: no new campaign
-		pick = null
-	# PD2's first mission starts as the title's new game does (0x46D780 "0"); DASH's start
-	# (the title's other entries) is not ported: its SAVEDATA.ORG as it is
+		save = [Debrief.SAVE_BASE, carried.image]     # the debrief's (or the title's) save
+		pick = Campaign.Hooks.new() if carried.get("new_campaign", false) else null
+	# the sandbox's PD2 chunk 0 starts as the title's new game does (0x46D780 "0"); its
+	# other chunks from their SAVEDATA.ORG as it is (the title, ui/boot.gd, starts the rest)
 	w = Mission.build(tables, doc, campaign, save, pick, crt, carried.is_empty() and pick != null and campaign == "pd2")
 	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22;
 	# after a debrief, the number it set
@@ -230,6 +233,7 @@ func _ready() -> void:
 
 
 func _begin_battle() -> void:
+	w.mode_663a = 1                      # game_mode_loop: DS:0x50663A = 1, then the battle (0x436530)
 	# the sortie's squad: the player's groups as the sortie screen left them; with none
 	# formed (the sortie refused, or left) the stand-in squad
 	squad = Mission.player_units(w)
@@ -637,6 +641,8 @@ func _sortie_draw(confirm := false) -> void:
 				else:
 					_sortie_draw())
 			buttons.add_child(b)
+	elif sortie_saving >= 0:
+		_sortie_save_ui(box)
 	else:
 		var st := Button.new()
 		st.text = ui("UI_START")
@@ -645,7 +651,54 @@ func _sortie_draw(confirm := false) -> void:
 			var r := Campaign.sortie_check(w, sortie_hooks)
 			_sortie_draw(r[0] == "start"))
 		buttons.add_child(st)
+		var sv := Button.new()                   # region 0x45's list (DS:0x50D70D), entry 1
+		var sys := SaveFiles.choice_texts(0x50D70D)
+		sv.text = sys[1] if sys.size() > 1 else "SAVE"
+		sv.pressed.connect(func():
+			sortie_saving = 0x29
+			sortie_text = ""
+			_sortie_draw())
+		buttons.add_child(sv)
 	hud_layer.add_child(sortie_panel)
+
+
+var sortie_saving := -1          # the sortie's save: 0x29 the slot list open, else the slot asked
+
+
+func _sortie_save_ui(box: VBoxContainer) -> void:
+	## The sortie's save (0x497F60): the slot list (0x497A10), then the slot's line and the
+	## overwrite question (0x498070 with 0); Title.sortie_save writes PD2RECnn.BIN,
+	## KEMURInn.DAT and MEMBERnn.DAT to user://saves.
+	if sortie_saving == 0x29:
+		var v := list_box(box)
+		for sl in Title.SLOTS:
+			var b := Button.new()
+			b.text = SaveFiles.slot_line(sl, 0x519ED8)
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.pressed.connect(func(): sortie_saving = sl; _sortie_draw())
+			v.add_child(b)
+		var c := Button.new()
+		c.text = ui("UI_CANCEL")
+		c.pressed.connect(func(): sortie_saving = -1; _sortie_draw())
+		box.add_child(c)
+		return
+	var q := Label.new()
+	q.text = SaveFiles.slot_line(sortie_saving, 0x519ED8)
+	box.add_child(q)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	for yes in [1, 0]:
+		var b := Button.new()
+		b.text = ui("UI_YES") if yes else ui("UI_NO")
+		b.pressed.connect(func():
+			var wr := SaveFiles.Writer.new()
+			wr.pick = sortie_saving
+			wr.answer = yes
+			Title.sortie_save(w, wr)
+			sortie_text = SaveFiles.exe(wr.notes[0]) if not wr.notes.is_empty() else ""
+			sortie_saving = -1
+			_sortie_draw())
+		row.add_child(b)
 
 
 # --- the armament screen (0x454E60) ---------------------------------------------------
