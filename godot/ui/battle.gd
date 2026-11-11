@@ -1935,8 +1935,14 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		## question of missions 1 and 3 (0xAA) names the pilot (given and family names)
 		var a := _args(args)
 		var labels := [battle.ui("UI_YES"), battle.ui("UI_NO")]
-		var arr: int = MissionScripts.CHOICES.get(battle.script_no, {}).get(msg, 0)
-		var ptrs: Array = GameData.tables(battle.campaign).get("script_choices", {}).get("%X" % arr, [])
+		## (or the labels' own addresses, which mission 9 of DASH pushes one by one)
+		var arr: Variant = MissionScripts.CHOICES.get(battle.script_no, {}).get(msg, 0)
+		var ptrs: Array = []
+		if arr is Array:
+			for pt in arr:
+				ptrs.append("%X" % pt)
+		else:
+			ptrs = GameData.tables(battle.campaign).get("script_choices", {}).get("%X" % arr, [])
 		if ptrs.size() >= 2:
 			labels = []
 			for pt in ptrs:
@@ -2284,6 +2290,8 @@ func radio_args(args: Array) -> Array:
 				out.append(GameData.call_sign(campaign, a[1]))
 			"name":
 				out.append(GameData.call_sign(campaign, 39 + a[1]))   # a group name (DS:0x50C881)
+			"exe":
+				out.append(GameData.exe_text(campaign, a[1]))          # a string of Pd2.exe's (DASH mission 8's squad names)
 			"time":
 				var m: int = (a[1] + a[2]) * 5
 				var h := m / 60
@@ -2328,7 +2336,7 @@ func _cmd_withdraw() -> void:
 
 
 func _withdraw() -> void:
-	var code := Debrief.scenario_command(w, script_no, rng)
+	var code := Debrief.scenario_command(w, script_no, rng, mission_hooks)
 	if code == -1:
 		say(uif("UI_NOT_PORTED_HOOK", ["0x51F038", script_no]))
 		return

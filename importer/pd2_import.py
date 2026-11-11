@@ -175,8 +175,11 @@ SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51
                 0x51A6C0, 0x51A6D4,                       # lines shown by 0x4521C0
                 0x51AEFC,                                 # questions shown by 0x43BA20
                 0x51C8AC, 0x51C8BC,                       # mission 14's "Bad condition" lines
-                0x51D6B0}                                 # mission 18's "no members left"
-SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x51AD78: 3}   # pointers each (MissionScripts.CHOICES)
+                0x51D6B0,                                 # mission 18's "no members left"
+                0x51E1E8, 0x51E200, 0x51E210, 0x51E220, 0x51E230,   # DASH 9's menu entry, its questions' labels
+                0x51D838, 0x51D848, 0x51D864, 0x51D87C, 0x51D894, 0x51D8AC,   # DASH 8's menu entries, the survey's choices
+                0x51F224, 0x51F230}                       # DASH 8's squad names (DS:0x51F218)
+SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x50CBB9: 2, 0x51AD78: 3}   # pointers each (MissionScripts.CHOICES)
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
 # DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads

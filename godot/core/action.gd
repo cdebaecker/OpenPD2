@@ -886,8 +886,12 @@ static func take_off_map(w: Pd2World, k: int) -> void:
 	w.setb(k, 10, 0xFF)
 
 
+## crew c (signed, as the game indexes: outside 0-63 another table's byte) gets +5 = 0xFF
 static func _crew_pool_add(w: Pd2World, c: int) -> void:
-	w.crew[c * Pd2World.CREW + 5] = 0xFF
+	if c < 0 or c * Pd2World.CREW >= w.crew.size():
+		w.mem_write(0x506734 + Pd2World.CREW * c + 5, 0xFF)
+	else:
+		w.crew[c * Pd2World.CREW + 5] = 0xFF
 	w.pool_set(w.crew_pool_n, c)
 	w.crew_pool_n += 1
 

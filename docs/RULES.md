@@ -2003,6 +2003,93 @@ condition, on random(100) & 3 ≠ 2 with 0x82 or an odd one otherwise, marks its
 is flagged or destroyed. The withdraw is 0x82 with the fates. Init: camera (7, 7),
 DS:0x506651 = 0x54. No unit command.
 
+**DASH mission 8** (script 19, DASH chunk 8: survey the empty town, then take a helicopter).
+Emulated 1,300 / 1,300:
+- **Survey** (the unit command, 調査, label DS:0x51D838): 0xC9 asks how thoroughly (中断する /
+  軽く 5 AP / 普通に 10 AP / 詳しく 15 AP); on one of sixteen points (0x51D7B8; points 0 and 1
+  are building 1) building i's progress (DS:0x50AD4E + 2 i bits 1–5, full at 0x14) gains the
+  choice (twice with the pilot's skill, crew +8 bit 0); a full one gives the AP back. Its
+  line by building and progress (0xCD–0xE6; buildings 1, 4 and 6 with building 1 blown give
+  the AP back and 0xE7, after the progress was added); a building's find when it reaches full
+  (bit 6; buildings 1–6) moves the story step (DS:0x50AD6E bits 1–5) on; then 0xCC with the
+  percentage. Off the points 0xE7 (the AP given back).
+- **Capture** (once DS:0x50AD6E bit 6 is set, 奪取 10 AP, label DS:0x51D848; none on the
+  captured helicopter, machine 0x1D): a computer helicopter (machine 0x1F) on or next to the
+  unit, after ui_message_box 0xCB (0xC8 none, 0xCA while carrying): the two records swap
+  (each keeps its crew), the unit becomes machine 0x1D (status 0, its AP), the other is blown
+  up and destroyed; 10 AP. The start hook makes machine 0x1F machine 0x1D's record (+0 0x27,
+  +4 / +5 8, +6 3, +0x1A 0x18, and its names) and redraws the blown buildings.
+- **Charges:** the bomb rule gives 1 on (0xE, 0x35) / (0xE, 0x39) while building 1 stands
+  (past half its survey after ui_message_box 0xA1), else the point's building 2–15 unless it
+  is blown (4 and 6 also need building 1). The bomb hook sets the building's bit 0 and breaks
+  it (0x4CB450: building 1 from MAP_CHG.PCK entry 9, its hexes' mines cleared and their
+  occupants losing random(20) + 1; the others' fixed tiles); building 1 also blasts five hexes,
+  waits a second (ui_wait) and destroys every unit on duty west of x 0x20, south of y 0x22.
+- **Stage 0:** the flight turn; until the sequence ends (DS:0x50AD6E bit 0) a radio call by
+  story step (the HQ "Beachside Café" and the squad's name, DS:0x51F218 by its group): step
+  0 with three of buildings 7–14 found (0xA3–0xA5) or computer loaders seen (0xA6–0xAB);
+  steps 1–5 the finds' calls (0xAC–0xBC); step 6 the end of the survey: two of group 20 in
+  sight open the capture (0xBD), else 0xBE; then groups 6 and 8 leave. At steps 4–5 a
+  counter (DS:0x50AD8D) calls the return (0xBF–0xC5) after three turns; the losses of groups
+  21 / 22 (0xC6 / 0xC7). Groups 6 / 8 and 21 / 22 fight off the map (random(16) picks a
+  target, random(10) + 1 damage).
+- **Stage 1:** a player unit on column 1 or row 0x46 is asked 0xAA (了解 / 中止): yes takes it
+  (and what it carries) off the map (the captured helicopter's pilot's +4 = DS:0x50AD92 + 2);
+  none left: the end code. Groups 30 / 31 / 32 fly in at turns 10 / 7 / 4; groups 21 / 22 head
+  for the camera when groups 6 / 8 are gone. The first call lays MAP_CHG.PCK entry 10's mines
+  (the computer's side if unit 0x28's status is 3 or more), places groups 0 and 2 (0x51D6D8 /
+  0x51D748) and plays the arrival (0xF2–0xF4).
+- **End** (0x4CB350): the fates (each unit on duty intact on the map destroyed on random(100)
+  & 3 = 2, a destroyed one's crew marked on another), then 0x80 at story step 6, 0x83 past
+  step 3 or with building 3 or 5 fully surveyed, else 0x82. The deploy check always passes.
+  Init: camera (4, 0xB), DS:0x506651 = 0xF0.
+
+**DASH mission 9** (script 20, DASH chunk 9: bring the dome down on the tunnels). Emulated
+1,300 / 1,300:
+- **Bulkheads:** four, east (0x3A, 0x21), south (0x20, 0x3D), west (0x0A, 0x21), north
+  (0x20, 0x0B); each one's state is DS:0x50AD72 / 74 / 76 / 78 bits 1–5 (0 open, 2 shut,
+  4 blown while shut, 6 wrecked while open). The unit command (entry 11, 操作 10 AP, label
+  DS:0x51E1E8; under 10 AP 0x1E, off the four hexes 0xA7, wrecked 0xA8) opens a shut one
+  (tiles 12 + s, 0xAC) or shuts an open one when its 4–5 hexes are clear (else 0xA6):
+  tiles 8 + s, then any charges laid in it (the bomb rule set its DS:0x50AD68 + 2 s bit 6,
+  hook byte 0xD + s) go off, each blasted (until skipped) and freed, and the bulkhead is
+  blown (tiles 4 + s, DS:0x50AD60 + 2 s |= 1, 0xAA); else 0xAB. Both cost 10 AP.
+- **Pillars:** eight charge points (0x51DC28), two per section; the bomb rule (0x4D01B0)
+  says 0xA1 / 0xA2 (neither / one of the pair set), 0xA5 and -2 when that point has its
+  charge, else asks 0xA3 (設置 / 中止): yes sets DS:0x50AD4E + 2 n's state to 2, 0xA4,
+  and fuses the charge with hook byte n (1–8). The bulkheads' charge hexes (6 each) give
+  9–12. The bomb hook (0x4D0790): 9–12 blow a shut bulkhead; 1–8 bring their section
+  down while it stands: its bulkhead open becomes 6, shut is blown; DS:0x50AD50 + 4 w and
+  + 2 |= 1, the ruin, the section's counter (DS:0x50AD7C + 2 w bits 1–5) + 1.
+- **Tiles** (0x4D0E70): sets 0–3 are a section's ruin, MAP_CHG.PCK's entry 0xC / 0xE /
+  0xD / 0xB read as 4‑byte records (x, y, T, H), each hex's occupant destroyed with what
+  it carries (0x4D1BB0); then the section's quarter is cleared to T 0, H 0x3E (section 0
+  also (0x46, 0x1C) and (0x26, 0x1F) / (0x27, 0x1F) with T 0x8C / 0xA7). Sets 4–15 are
+  6‑byte tables (x, y, T, H; 4–7 destroy the occupants). A missing entry gives 0x10000.
+  The start hook puts back each bulkhead's tiles (shut 8 + s, blown 4 + s) and the fallen
+  sections' ruins.
+- **Stage 0:** the turn count and the flight turn; the alarm DS:0x50AD7A (bit 0 set when
+  a computer unit is damaged or destroyed or a player unit is seen (flag 0x10); then its
+  count goes up each turn, and at 5 groups 20–31 get +0x1D = the turn + 1); each shut
+  bulkhead with a computer unit on its three outer hexes counts a turn in the low nibble
+  of the byte after its state, and past 6 it is blown (scrolled to, blasted, tiles 4 + s).
+- **Stage 1:** a player unit on an exit hex ((0x26, 0x27), (0x1F, 0x27), (0x1F, 0x1F),
+  (0x26, 0x1F)) is asked 0xA9 with its pilot's name (脱出 / 中止): yes takes it (and what
+  it carries) off the map. All four sections down: 0x80 and the fates. Then each
+  bulkhead's guard groups (20/21, 22/23, 24/25, 26/27): shut with their members inside its
+  box (0x4D1AE0), they head for its hex (+7 / +8); else their +4 low bits take the
+  bulkhead's number and +7 / +8 are cleared.
+- **End:** no player unit on the map, or the withdraw: the end code (0x4D0C10) first sets
+  off each standing section's first charge (scrolled to, blasted, the ruin, the counter);
+  four sections down 0x80, three 0x83, fewer 0x82; the fates (0x4D0DE0, the same for every
+  code) mark the crew of every unit on duty except those intact, with condition and off
+  the map. A window's abort code from it is lost: the turn and the withdraw store its low
+  byte (0) as the end code. The first call places groups 0, 2, 4 at the camera with their
+  members on the points of 0x51DAA8 / 0x51DB28 / 0x51DBA8 (one per member present).
+  The deploy check counts rounds 12 of groups 0, 2 and 4's members whose "crew" (the table
+  indexed by the unit's number, a quirk) has +3 clear: three or fewer, 0x132. Init:
+  camera (5, 5), DS:0x506651 = 0x101.
+
 **The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
 clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
 g mod 3 (DS:0x50AD99/9B + 4k), or for type 9 (+0x21 = 9x) the bytes at units[0] +

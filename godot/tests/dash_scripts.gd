@@ -219,3 +219,69 @@ func check_m18(b) -> String:
 	if w.ds8(0x50ADF2) != 0x80:
 		return "end code 0x%X" % w.ds8(0x50ADF2)
 	return ""
+
+
+func check_m20(b) -> String:
+	## the dome: the east bulkhead shut from its hex (10 AP), the four sections' charges going
+	## off (section 1's ruin from MAP_CHG.PCK entry 0xC, the shut bulkhead blown with it), then
+	## the next turn's stage 1 gives 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 20 or w.ds_506651 != 0x01:
+		return "script %d / init" % b.script_no
+	if w.map_chg.size() < 0xF:
+		return "no MAP_CHG.PCK in the import"
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	var u: int = b.squad[0]
+	for j in 5:
+		var x := MissionScripts.static_s16(w, 0x51DD28 + 4 * j)
+		var y := MissionScripts.static_s16(w, 0x51DD2A + 4 * j)
+		var o: int = w.O[x + 72 * y] - 1
+		if o >= 0:
+			Action.take_off_map(w, o)
+	place(w, u, 0x3A, 0x21)
+	w.setb(u, 0xE, 20)
+	w.set_ds8(0x50AD72, 0)
+	MissionScripts.run_command(w, b.rng, u, b.mission_hooks)
+	if w.ds8(0x50AD72) & 0x3E != 2 or w.ub(u, 0xE) != 10:
+		return "bulkhead not shut (0x%X, %d AP)" % [w.ds8(0x50AD72), w.ub(u, 0xE)]
+	for s in 4:
+		w.set_ds8(0x50AD7C + 2 * s, 0)
+		w.bombs[0] = 10
+		w.bombs[1] = 10
+		w.bombs[3] = 2 * s + 1
+		MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+		if not w.ds8(0x50AD7C + 2 * s) & 0x3E:
+			return "section %d not down" % (s + 1)
+	var rec: PackedByteArray = w.map_chg[0xC]
+	if w.T[rec[0] + 72 * rec[1]] != rec[2] or w.ds8(0x50AD72) & 0x3E != 4:
+		return "section 1 ruin / the east bulkhead"
+	MissionScripts.run_turn(w, b.rng, 1, b.mission_hooks)
+	if w.ds8(0x50ADF2) != 0x80:
+		return "end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
+
+
+func check_m19(b) -> String:
+	## the survey: the start hook makes machine 0x1F the captured helicopter (machine 0x1D's
+	## record), building 2's charge going off breaks it (its tiles) and the withdraw at story
+	## step 6 gives 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 19 or w.ds_506651 != 0xF0:
+		return "script %d / init" % b.script_no
+	if w.map_chg.size() < 11:
+		return "no MAP_CHG.PCK in the import"
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	MissionScripts.run_start(w, b.rng, b.mission_hooks)
+	if w.machine(0x1F, 0) != 0x27 or w.machine(0x1F, 0x1A) != 0x18 or w.machine(0x1F, 1) != w.machine(0x1D, 1):
+		return "machine 0x1F not the captured helicopter"
+	w.bombs[3] = 2
+	MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	if not w.ds8(0x50AD52) & 1 or w.T[0x2E + 72] != 0xE9:
+		return "building 2 not blown"
+	w.set_ds8(0x50AD6E, 0xC)
+	b._withdraw()
+	if w.ds8(0x50ADF2) != 0x80:
+		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
+	return ""
