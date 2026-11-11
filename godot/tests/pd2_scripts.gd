@@ -262,3 +262,75 @@ func check_m09(b) -> String:
 	if w.ds8(0x50ADF2) != 0x83:
 		return "withdraw end code 0x%X" % w.ds8(0x50ADF2)
 	return ""
+
+
+func check_m08(b) -> String:
+	## the pickup: the call (8 AP, はい, the west quay) sets DS:0x50AD6E bit 0 and the point;
+	## the computer's turn surfaces the submarine (DS:0x50AD72 bit 0, the quay's tiles);
+	## with units 40-45 destroyed and the squad on the quay, はい to each takes it off the
+	## map and the end code is 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 8 or w.ds_506651 != 0xD3:
+		return "script %d / init" % b.script_no
+	if not w.ds8(0x50AD4E) & 1:
+		return "first call not run"
+	if MissionScripts.run_menu(w, 0)[1] != 0x51AEC8:
+		return "menu label"
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	var u: int = b.squad[0]
+	w.setb(u, 0xE, 30)
+	b._select(u)
+	b._cmd_mission()
+	if not w.ds8(0x50AD6E) & 1 or w.ds8(0x50AD6F) & 0xF != 1:
+		return "pickup not asked (0x50AD6E 0x%X, 0x50AD6F 0x%X)" % [w.ds8(0x50AD6E), w.ds8(0x50AD6F)]
+	if MissionScripts.run_menu(w, 0)[0] != 0:
+		return "menu entry after the call"
+	MissionScripts.run_turn(w, b.rng, 0, b.mission_hooks)
+	if not w.ds8(0x50AD72) & 1:
+		return "submarine not up"
+	var a := 0x51ADE8
+	if w.H[MissionScripts.static_s16(w, a) + 72 * MissionScripts.static_s16(w, a + 2)] != 0x1E:
+		return "quay tiles"
+	for k in range(40, 46):
+		w.setb(k, 0, w.ub(k, 0) | 1)
+	var i := 0
+	for k in mini(w.units.size() / 55, 254):
+		if w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4 and w.ub(k, 9) != 0xFF:
+			place(w, k, 1 + i % 10, 0x1C + i / 10)
+			i += 1
+	MissionScripts.run_turn(w, b.rng, 1, b.mission_hooks)
+	if w.ds8(0x50ADF2) != 0x80:
+		return "end code 0x%X (%d moved)" % [w.ds8(0x50ADF2), i]
+	return ""
+
+
+func check_m10(b) -> String:
+	## the last mission: a charge on site 3's first point gives hook byte 3; its bomb hook
+	## sets DS:0x50AD54 bit 0 and breaks the site's hexes; the command on the control room
+	## hex (0x24, 0x29) with 30 AP ends the mission with 0x80
+	var w: Pd2World = b.w
+	if b.script_no != 10 or w.ds_506651 != 1:
+		return "script %d / init (0x%X)" % [b.script_no, w.ds_506651]
+	if MissionScripts.run_menu(w, 0)[1] != 0x51BAC0:
+		return "menu label"
+	var u: int = b.squad[0]
+	var px := MissionScripts.static_s16(w, 0x51B200 + 0x60)
+	var py := MissionScripts.static_s16(w, 0x51B202 + 0x60)
+	place(w, u, px, py)
+	if MissionScripts.run_bomb_rule(w, u, b.mission_hooks) != 3:
+		return "bomb rule at (%d, %d)" % [px, py]
+	w.bombs[3] = 3
+	MissionScripts.run_bomb(w, b.rng, 0, b.mission_hooks)
+	var a := 0x51B3E0 + 0xB0 * 2
+	if not w.ds8(0x50AD54) & 1 or w.T[MissionScripts.static_s16(w, a) + 72 * MissionScripts.static_s16(w, a + 2)] != w.mem8(a + 4):
+		return "site 3 not broken"
+	b.mission_over = false
+	w.set_ds8(0x50ADF2, 0)
+	place(w, u, 0x24, 0x29)
+	w.setb(u, 0xE, 30)
+	b._select(u)
+	b._cmd_mission()
+	if w.ds8(0x50ADF2) != 0x80:
+		return "end code 0x%X (AP %d, pos %s)" % [w.ds8(0x50ADF2), w.sb(u, 0xE), w.pos(u)]
+	return ""

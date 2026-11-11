@@ -170,10 +170,11 @@ CREW_VA = 0x506734          # crew table, 64 x 16 B: 37-63 are the computer's pi
 # The mission scripts' own words: the unit menu's entry 11 (the menu hooks of table
 # 0x51EF18 point DS:0x517F1C at it) and the scripts' choice lists (pointer arrays at
 # DS:0x517F78 ..., resolved at import).
-SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0,   # the menu entries
+SCRIPT_TEXTS = {0x51A020, 0x51A368, 0x51A4E8, 0x51A6B0, 0x51A770, 0x51A7B8, 0x51AB38, 0x51AB48, 0x51B0F0, 0x51AEC8, 0x51BAC0,   # the menu entries
                 0x510444, 0x51044C, 0x510454, 0x51045C,   # ui_message_box's buttons
-                0x51A6C0, 0x51A6D4}                       # lines shown by 0x4521C0
-SCRIPT_CHOICES = (0x517F78, 0x517F80, 0x517F88, 0x50CBC1)   # 2 pointers each (MissionScripts.CHOICES)
+                0x51A6C0, 0x51A6D4,                       # lines shown by 0x4521C0
+                0x51AEFC}                                 # questions shown by 0x43BA20
+SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x51AD78: 3}   # pointers each (MissionScripts.CHOICES)
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
 # DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads
@@ -236,8 +237,8 @@ def export_tables(game, out):
                            for i in range(CALL_SIGNS)],
             'data_image': [DATA_IMAGE[0], b64(exe_va(exe, DATA_IMAGE[0], DATA_IMAGE[1] - DATA_IMAGE[0]))],
             'exe_text': {'%X' % va: _exe_str(exe, va) for va in EXE_TEXTS + tuple(
-                p for c in SCRIPT_CHOICES for p in _exe_ptr_texts(exe, c, 2))},
-            'script_choices': {'%X' % c: ['%X' % p for p in _exe_ptr_texts(exe, c, 2)] for c in SCRIPT_CHOICES},
+                p for c, n in SCRIPT_CHOICES.items() for p in _exe_ptr_texts(exe, c, n))},
+            'script_choices': {'%X' % c: ['%X' % p for p in _exe_ptr_texts(exe, c, n)] for c, n in SCRIPT_CHOICES.items()},
         }
         with open(os.path.join(out, 'tables', camp + '.json'), 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False)

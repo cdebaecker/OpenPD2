@@ -199,7 +199,7 @@ func _ready() -> void:
 	flight_hooks.easy = options & 2 != 0
 	mission_hooks.flight = flight_hooks
 	mission_hooks.options = options
-	MissionScripts.run_init(w)               # in the game the pre-battle screen runs it (0x4DD2F0)
+	MissionScripts.run_init(w, mission_hooks)   # in the game the pre-battle screen runs it (0x4DD2F0)
 	if script_no == 1:
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
 			w.exits.append(Vector2i(int(p[0]), int(p[1])))
@@ -951,9 +951,9 @@ func _build_hud() -> void:
 	var cmds := [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
 			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
 			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn], [ui("UI_WITHDRAW") + " [W]", _cmd_withdraw]]
-	var entry11 := MissionScripts.run_menu(w, -1)       # table 0x51EF18: the unit menu's entry 11
+	var entry11 := MissionScripts.run_menu(w, squad[0] if not squad.is_empty() else 0)   # table 0x51EF18: the unit menu's entry 11
 	if entry11[0] == 1:
-		cmds.append([GameData.exe_text(campaign, entry11[1]) + " [I]", _cmd_mission])
+		cmds.append([mission_label(entry11[1]) + " [I]", _cmd_mission])
 	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
 	for b in cmds:
 		var btn := Button.new()
@@ -1936,18 +1936,30 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		var labels := [battle.ui("UI_YES"), battle.ui("UI_NO")]
 		var arr: int = MissionScripts.CHOICES.get(battle.script_no, {}).get(msg, 0)
 		var ptrs: Array = GameData.tables(battle.campaign).get("script_choices", {}).get("%X" % arr, [])
-		if ptrs.size() == 2:
-			labels = [GameData.exe_text(battle.campaign, str(ptrs[0]).hex_to_int()),
-					GameData.exe_text(battle.campaign, str(ptrs[1]).hex_to_int())]
+		if ptrs.size() >= 2:
+			labels = []
+			for pt in ptrs:
+				labels.append(GameData.exe_text(battle.campaign, str(pt).hex_to_int()))
 		if MissionScripts.NAME_DIALOGS.get(battle.script_no, -1) == msg:
 			var names: Array = GameData.tables(battle.campaign).crew_names
 			var nm: Array = names[args[0]] if args[0] < names.size() else ["", ""]
 			a = [nm[0], nm[1]]
-		var text: String = battle.msg(msg, a)
+		## (a question of Pd2.exe's own, e.g. mission 8's pickup point 0x51AEFC)
+		var text: String = GameData.exe_text(battle.campaign, msg, a) if msg >= 0x500000 else battle.msg(msg, a)
+		if choices > 2 and labels.size() >= choices:
+			var opts := []
+			for i in choices:
+				opts.append([labels[i], i])
+			return int(battle.ask_choice(text, opts, 0))
 		return 0 if battle.ask_choice(text, [[labels[0], true], [labels[1], false]], true) else 1
 
 	func message(msg: int, args := []) -> int:
 		battle.say_msg(msg, args)
+		return 0
+
+	func note(msg: int) -> int:
+		## 0x452170 from an init (the pre-battle screen: MES.PCK), e.g. mission 10's 0x1CE
+		battle.say(battle.mes(msg))
 		return 0
 
 	func scroll(x: int, y: int) -> int:
@@ -2459,6 +2471,14 @@ func _next_mission(nxt: Array) -> void:
 	get_tree().root.add_child(b)
 	get_tree().current_scene = b
 	queue_free()
+
+
+func mission_label(addr: int) -> String:
+	## entry 11's label; mission 8's menu hook writes the AP digit into its string (0x51AED2)
+	var t := GameData.exe_text(campaign, addr)
+	if addr == 0x51AEC8:
+		t = t.replace("0", char(w.mem8(0x51AED2)))
+	return t
 
 
 func _cmd_mission() -> void:

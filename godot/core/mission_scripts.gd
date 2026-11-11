@@ -98,6 +98,30 @@ class Hooks:
 	func wait() -> int:
 		return 0
 
+	## 0x4F2150, a hex redrawn (an abort code stops a start script)
+	func redraw_hex(x: int, y: int) -> int:
+		return 0
+
+	## 0x43F060: the radar map's windows closed (the script then clears DS:0x50DD44)
+	func radar_close() -> int:
+		return 0
+
+	## 0x466790(0, -1): the unit panel redrawn
+	func unit_panel() -> int:
+		return 0
+
+	## 0x4830E0: the map window redrawn
+	func map_redraw() -> int:
+		return 0
+
+	## 0x4361C0, ui_date_window
+	func date_window() -> int:
+		return 0
+
+	## 0x452170, a note (a negative answer: the window failed)
+	func note(msg: int) -> int:
+		return 0
+
 
 static func g(w: Pd2World, grp: int, f: int) -> int:
 	return w.groups[35 * grp + f]
@@ -376,13 +400,14 @@ const DEPLOY_RESULT := {-102: 0x20000, -101: 0x40000, -100: 0x10000}
 ## import resolves them: tables script_choices), by mission and message
 const CHOICES := {1: {0xAA: 0x50CBC1, 0xA5: 0x517F88}, 2: {0xA3: 0x517F78, 0xA8: 0x517F80},
 		3: {0xAA: 0x50CBC1, 0xA5: 0x517F88}, 6: {0xA3: 0x50CBC1, 0xA6: 0x50CBC1},
-		7: {0xA6: 0x50CBC1, 0xB2: 0x517F88, 0xB3: 0x517F88}, 9: {0xA2: 0x50CBC1}}
+		7: {0xA6: 0x50CBC1, 0xB2: 0x517F88, 0xB3: 0x517F88}, 8: {0xA2: 0x50CBC1, 0xC2: 0x50CBC1, 0x51AEFC: 0x51AD78},
+		9: {0xA2: 0x50CBC1}}
 
 ## the questions that name a pilot (the crew's name id: given and family names), by mission
-const NAME_DIALOGS := {1: 0xAA, 3: 0xAA, 6: 0xA6}
+const NAME_DIALOGS := {1: 0xAA, 3: 0xAA, 6: 0xA6, 8: 0xC2}
 
 ## the missions whose scripts are ported (rules.MISSION_SCRIPTS)
-const PORTED := [1, 2, 3, 4, 5, 6, 7, 9]
+const PORTED := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 static func has_scripts(script: int) -> bool:
@@ -395,19 +420,27 @@ static func run_load(w: Pd2World) -> void:
 		3: m03_load(w)
 		4: m04_load(w)
 		7: m07_load(w)
+		8: m08_load(w)
 		9: m09_load(w)
+		10: m10_load(w)
 
 
-static func run_init(w: Pd2World) -> void:
+## the init (table 0x51ECC8): its result (mission 10 returns its last store, 0x3C3C3C3C)
+static func run_init(w: Pd2World, hooks: Hooks = null) -> int:
 	match w.script_no:
-		1: m01_init(w)
-		2: m02_init(w)
-		3: m03_init(w)
-		4: m04_init(w)
-		5: m05_init(w)
-		6: m06_init(w)
-		7: m07_init(w)
-		9: m09_init(w)
+		1:
+			m01_init(w)
+			return 0
+		2: return m02_init(w)
+		3: return m03_init(w)
+		4: return m04_init(w)
+		5: return m05_init(w)
+		6: return m06_init(w)
+		7: return m07_init(w)
+		8: return m08_init(w)
+		9: return m09_init(w)
+		10: return m10_init(w, hooks)
+	return 0
 
 
 static func run_objective(w: Pd2World) -> int:
@@ -419,7 +452,9 @@ static func run_objective(w: Pd2World) -> int:
 		5: return -1
 		6: return -1
 		7: return m07_objective(w)
+		8: return -1
 		9: return -1
+		10: return -1
 	return -1
 
 
@@ -436,7 +471,9 @@ static func run_deploy(w: Pd2World, hooks: Hooks) -> int:
 		5: return 1
 		6: return 1
 		7: return m07_deploy(w, hooks)
+		8: return 1
 		9: return 1
+		10: return 1
 	return 1
 
 
@@ -450,7 +487,9 @@ static func run_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks, call
 		5: return m05_turn(w, rng, stage, hooks)
 		6: return m06_turn(w, rng, stage, hooks)
 		7: return m07_turn(w, rng, stage, hooks, caller)
+		8: return m08_turn(w, rng, stage, hooks, caller[0] if caller.size() == 1 else null)
 		9: return m09_turn(w, rng, stage, hooks)
+		10: return m10_turn(w, rng, stage, hooks)
 	return 0
 
 
@@ -463,7 +502,9 @@ static func run_speech(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		5: return flight_turn(w, rng, hooks)
 		6: return flight_turn(w, rng, hooks)
 		7: return flight_turn(w, rng, hooks)
+		8: return flight_turn(w, rng, hooks)
 		9: return flight_turn(w, rng, hooks)
+		10: return flight_turn(w, rng, hooks)
 	return 0
 
 
@@ -477,7 +518,9 @@ static func run_menu(w: Pd2World, u: int) -> Array:
 		5: return [1, 0x51A770]
 		6: return [1, 0x51A7B8]
 		7: return [1, 0x51AB48 if w.ds8(0x50AD6E) & 1 else 0x51AB38]
+		8: return m08_menu(w, u)
 		9: return [1, 0x51B0F0]
+		10: return [1, 0x51BAC0]
 	return [0, -1]
 
 
@@ -490,7 +533,9 @@ static func run_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		5: return m05_command(w, rng, u, hooks)
 		6: return m06_command(w, rng, u, hooks)
 		7: return m07_command(w, rng, u, hooks)
+		8: return m08_command(w, rng, u, hooks)
 		9: return m09_command(w, rng, u, hooks)
+		10: return m10_command(w, rng, u, hooks)
 	return 0
 
 
@@ -504,7 +549,9 @@ static func run_scenario(w: Pd2World, rng: Pd2Random) -> bool:
 		5: m05_scenario(w, rng)
 		6: w.set_ds8(0x50ADF2, m06_end(w, rng, true))
 		7: w.set_ds8(0x50ADF2, m07_end_code(w, rng) & 0xFF)
+		8: m08_scenario(w, rng)
 		9: m09_scenario(w, rng)
+		10: w.set_ds8(0x50ADF2, 0x82)
 		_: return false
 	return true
 
@@ -515,6 +562,7 @@ static func run_bomb_rule(w: Pd2World, u: int, hooks: Hooks) -> int:
 		4: return m04_bomb_rule(w, u, hooks)
 		7: return m07_bomb_rule(w, u, hooks)
 		9: return m09_bomb_rule(w, u, hooks)
+		10: return m10_bomb_rule(w, u, hooks)
 	return -1
 
 
@@ -523,7 +571,9 @@ static func run_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		2: return m02_start(w, rng, hooks)
 		4: return m04_start(w, rng, hooks)
 		7: return m07_start(w, rng, hooks)
+		8: return m08_start(w, rng, hooks)
 		9: return m09_start(w, rng, hooks)
+		10: return m10_start(w, rng, hooks)
 	return 0
 
 
@@ -532,6 +582,7 @@ static func run_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 		4: return m04_bomb(w, rng, i, hooks)
 		7: return m07_bomb(w, rng, i, hooks)
 		9: return m09_bomb(w, rng, i, hooks)
+		10: return m10_bomb(w, rng, i, hooks)
 	return 0
 
 
@@ -1895,6 +1946,8 @@ static func m06_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 
 ## 0x489430: the radio portrait of member k by its crew's name id (rules.face_of)
 static func face_of(w: Pd2World, rng: Pd2Random, k: int) -> int:
+	if k == -1:
+		return 0
 	var v := Pd2World.s8(w.mem8(0x506734 + 16 * k))
 	if v == 0 or (v > 1 and v < 0x10):
 		return 0xD
@@ -2468,4 +2521,497 @@ static func m09_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		break_site(w, 0x51B030, 9, 0x22)
 	if w.ds8(0x50AD52) & 1:
 		break_site(w, 0x51B090, 9, 0x22)
+	return 0
+
+
+# --- mission 8 (script 8, PD2 chunk 7: units 40-45, the pickup by submarine; rules.m08_*) --
+
+const M08_ALARM_TIMES := [0x1E, 0xA5, 0x3C, 0x78, 0x4B, 0x87, 0x5A, 0x2D, 0x69, 0x96]
+const M08_LATE := [5, 8, 0xB, 0xE]
+const M08_ZONES := {1: [0, 0xC, 0x1C, 0x23], 2: [0x1A, 0x24, 0x37, 0x3E], 3: [0x3D, 0x46, 0x12, 0x1D]}
+const M08_PIERS := {1: [0x51ADE8, 8], 2: [0x51AE38, 8], 3: [0x51AE88, 6]}
+const M08_LANDING := {0: 0x51AC58, 1: 0x51ACB8, 2: 0x51AD18}
+
+
+static func m08_load(w: Pd2World) -> void:
+	for c in [[0x51AC58, 0x51AC88, 48], [0x51ACB8, 0x51ACE8, 48], [0x51AD18, 0x51AD48, 48],
+			[0x51AD88, 0x51ADB8, 48], [0x51ADE8, 0x51AE10, 40], [0x51AE38, 0x51AE60, 40],
+			[0x51AE88, 0x51AEA8, 30]]:
+		static_copy(w, c[0], c[1], c[2])
+
+
+static func m08_init(w: Pd2World) -> int:
+	for p in [[0x50ADA7, 6], [0x50AD95, 7], [0x50AD97, 7], [0x50ADA9, 4], [0x50AD99, 0],
+			[0x50AD9B, 0], [0x50AD9D, 0], [0x50AD9F, 0], [0x50ADA1, 0], [0x50ADA3, 0],
+			[0x50ADA5, 0], [0x50ADAB, 0], [0x50ADAD, 0xB], [0x50ADAF, 0]]:
+		w.set_ds16(p[0], p[1])
+	for i in 0x20:
+		w.ds[0xB1 + i] = w.mem8(0x51ABF8 + i)
+		w.ds[0xD1 + i] = w.mem8(0x51AC18 + i)
+	set_506651(w, 0xD3)
+	return 0
+
+
+static func m08_cost(w: Pd2World, u: int) -> int:
+	return 4 if w.mem8(0x50673C + 16 * w.sb(u, 0xB)) & 4 else 8
+
+
+static func m08_menu(w: Pd2World, u: int) -> Array:
+	if w.ds8(0x50AD6E) & 1:
+		return [0, -1]
+	w.mem_write(0x51AED2, 0x30 + m08_cost(w, u))
+	return [1, 0x51AEC8]
+
+
+## DS:0x50DD44, kept in the exe data image too (rules.set_radar_flag)
+static func set_radar_flag(w: Pd2World, v: int) -> void:
+	w.radar = v
+	for base in w.static_mem:
+		if 0x50DD44 >= base and 0x50DD44 < base + w.static_mem[base].size():
+			w.mem_write(0x50DD44, v)
+			return
+
+
+static func m08_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> int:
+	var cost := m08_cost(w, u)
+	if w.sb(u, 0xE) < cost:
+		var r0 := hooks.message(0xA1, [cost])
+		return r0 if r0 in AI_ABORT else 0
+	var res := hooks.dialog(0xA2, [cost], 2)
+	if res in AI_ABORT:
+		return res
+	if res != 0:
+		return 0
+	ds_or(w, 0x50AD6E, 1)
+	w.setb(u, 0xE, (w.ub(u, 0xE) - cost) & 0xFF)
+	var crew_face := func() -> int: return face_of(w, rng, w.sb(u, 0xB))
+	res = radio_scene(w, hooks, [["face", crew_face, 10, null], ["say", 0xA3, 10]])
+	if res:
+		return res
+	res = hooks.dialog(0x51AEFC, [], 3)
+	if res in AI_ABORT:
+		hooks.flight.radio_close(-1)
+		return res
+	if res >= 0 and res <= 2:
+		w.set_ds8(0x50AD6F, w.ds8(0x50AD6F) & [0xF1, 0xF2, 0xF3][res] | res + 1)
+	res = radio_scene(w, hooks, [["close"], ["face", 0x10, 0xB, null], ["say", 0xC3, 0xB], ["close"]])
+	if res:
+		return res
+	if w.radar:
+		hooks.radar_close()
+		set_radar_flag(w, 0)
+		res = hooks.unit_panel()
+		if res in AI_ABORT:
+			return res
+		res = hooks.map_redraw()
+		if res in AI_ABORT:
+			return res
+		res = hooks.date_window()
+		if res in AI_ABORT:
+			return res
+		set_radar_flag(w, 0)
+	return 0
+
+
+static func m08_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
+	var p: Variant = M08_PIERS.get(w.ds8(0x50AD6F) & 0xF)
+	if p == null:
+		return 0
+	for j in p[1]:
+		var a: int = p[0] + 5 * j
+		var x := static_s16(w, a)
+		var y := static_s16(w, a + 2)
+		set_height_tile(w, x, y, w.mem8(a + 4), 0x1E)
+		if not w.radar:
+			var res := hooks.redraw_hex(x, y)
+			if res == 0x10000 or res == 0x20000:
+				return res
+	return 0
+
+
+static func m08_fates(w: Pd2World, rng: Pd2Random) -> void:
+	for k in mini(w.units.size() / 55, 254):
+		if not (w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4):
+			continue
+		if not w.ub(k, 0) & 1:
+			if w.ub(k, 9) == 0xFF or (rng.roll(100) & 0xFFFF) & 3 == 2:
+				continue
+			mark_crew(w, w.ub(k, 0xB), 1)
+			if (rng.roll(100) & 0xFFFF) % 2 == 1:
+				w.setb(k, 0, w.ub(k, 0) | 2)
+			else:
+				w.setb(k, 0, w.ub(k, 0) | 1)
+				w.setb(k, 0xD, 0)
+		elif (rng.roll(100) & 0xFFFF) & 3 != 2:
+			mark_crew(w, w.ub(k, 0xB), 1 if (rng.roll(100) & 0xFFFF) % 2 == 1 else 2)
+
+
+static func m08_end_code(w: Pd2World, rng: Pd2Random) -> int:
+	var n := 0
+	for k in range(40, 46):
+		if w.ub(k, 0) & 1:
+			n += 1
+	var code := 0x80 if n == 6 else (0x83 if n == 5 else 0x82)
+	m08_fates(w, rng)
+	return code
+
+
+static func m08_on_map(w: Pd2World) -> bool:
+	for k in mini(w.units.size() / 55, 254):
+		if w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4 and w.ub(k, 9) != 0xFF:
+			return true
+	return false
+
+
+## 0x4DE290 on group 0: the lowest crew (signed) among its members, 0xFF with none
+static func m08_lead(w: Pd2World) -> int:
+	var least := 0xFF
+	for i in 16:
+		var m := g(w, 0, 6 + i)
+		if m != 0xFF:
+			least = mini(least, Pd2World.s8(table_byte(w, 55 * m + 0xB)))
+	return least
+
+
+static func m08_scenario(w: Pd2World, rng: Pd2Random) -> void:
+	w.set_ds8(0x50ADF2, m08_end_code(w, rng))
+
+
+static func m08_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks, stale: Variant = null) -> int:
+	var lead := func() -> int: return face_of(w, rng, m08_lead(w))
+	if stage == 0:
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		if w.ds8(0x50AD6E) & 1:
+			if not w.ds8(0x50AD72) & 1:
+				ds_or(w, 0x50AD72, 1)
+				var res := radio_scene(w, hooks, [["face", 1, 0x2A, 1], ["say", 0xAE, 0x2A], ["face", 0x10, 0x2A, 0],
+						["say", 0xAF if w.ds8(0x50AD70) & 1 else 0xC4, 0x2A], ["close"]])
+				if res:
+					return res
+				res = m08_start(w, rng, hooks)
+				if res == 0x10000 or res == 0x20000:
+					return res
+			elif w.ds8(0x50AD72) & 0x3E < 0xC:
+				var v := w.ds8(0x50AD72)
+				w.set_ds8(0x50AD72, v ^ ((v & 0xFE) + 2 ^ v) & 0x3E)
+		if w.ds8(0x50AD72) & 0x3E == 4 and not w.ds8(0x50AD74) & 1:
+			ds_or(w, 0x50AD74, 1)
+			var res := radio_scene(w, hooks, [
+					["face", 1, 0x2A, 1], ["say", 0xB0, 0x2A], ["face", 0x10, 0x2A, 0], ["say", 0xB1, 0x2A],
+					["face", lead, 0xB, null], ["say", 0xB2, 0xB], ["say", 0xB3, 0x2A], ["face", 7, 0xB, null],
+					["say", 0xB4, 0xB], ["say", 0xB5, 0x2A], ["face", lead, 0xB, null], ["say", 0xB6, 0xB], ["close"]])
+			if res:
+				return res
+		if w.ds8(0x50AD72) & 0x3E == 8 and not w.ds8(0x50AD76) & 1 and w.ds8(0x50AD74) & 1:
+			ds_or(w, 0x50AD76, 1)
+			var res := radio_scene(w, hooks, [
+					["face", 0, 0x2A, 1], ["say", 0xB7, 0x2A], ["face", 0x10, 0x2A, 0], ["say", 0xB8, 0x2A],
+					["face", lead, 0xB, null], ["say", 0xB9, 0xB], ["say", 0xBA, 0x2A], ["face", 7, 0xB, null],
+					["say", 0xBB, 0xB], ["say", 0xBC, 0x2A], ["say", 0xBD, 0xB], ["say", 0xBE, 0x2A],
+					["say", 0xBF, 0xB], ["say", 0xC0, 0x2A], ["face", lead, 0xB, null], ["say", 0xC1, 0xB], ["close"]])
+			if res:
+				return res
+		var r1 := flight_turn(w, rng, hooks)
+		if r1 in AI_ABORT:
+			return r1
+	elif stage == 1:
+		if not w.ds8(0x50AD70) & 1:
+			var seen := false
+			for k in 254:
+				var f := w.ub(k, 0)
+				if not f & 4:
+					continue
+				if w.ub(k, 0x36) == 0:
+					if f & 0x10 or w.ub(k, 0xD) < 100 or f & 1:
+						seen = true
+				elif w.ub(k, 0xC) != 0xFF and w.ub(k, 0xD) < 100 and k >= 40 and k <= 45:
+					seen = true
+			if seen:
+				w.set_ds8(0x50ADF1, 1)
+				for j in 11:
+					var grp := 21 + j
+					Ai.group_retarget(w, grp, w.ds8(0x50AD95), w.ds8(0x50AD97))
+					var t: Variant = M08_ALARM_TIMES[j] if j < 10 else stale
+					if t != null:
+						set_g(w, grp, 0x1C, int(t))
+					set_g(w, grp, 2, g(w, grp, 2) & 0xDF | 0x10)
+					set_g(w, grp, 0x22, 0)
+				for j in 4:
+					var grp := 32 + j
+					Ai.group_retarget(w, grp, w.ds8(0x50AD95), (w.ds8(0x50AD97) - 1) & 0xFF)
+					var v: int = (M08_LATE[j] + w.mission_turn) & 0xFFFF
+					set_g(w, grp, 0x1D, v & 0xFF)
+					set_g(w, grp, 0x1E, v >> 8)
+				ds_or(w, 0x50AD70, 1)
+		if w.ds8(0x50AD72) & 1:
+			for k in 254:
+				if not (w.ub(k, 0xD) and w.sb(k, 0x36) < 3 and w.ub(k, 0) & 4 and w.ub(k, 9) != 0xFF):
+					continue
+				var z: Variant = M08_ZONES.get(w.ds8(0x50AD6F) & 0xF)
+				var x := w.sb(k, 9)
+				var y := w.sb(k, 10)
+				if z == null or not (x >= z[0] and x <= z[1] and y >= z[2] and y <= z[3]):
+					continue
+				var res := hooks.scroll(x, y)
+				if res in AI_ABORT:
+					return res
+				res = hooks.dialog(0xC2, [w.ucrew(k, 0)], 2)
+				if res in AI_ABORT:
+					return res
+				if res == 0:
+					Action.take_off_map(w, k)
+			if not m08_on_map(w):
+				w.set_ds8(0x50ADF2, m08_end_code(w, rng))
+	if not w.ds8(0x50AD4E) & 1:
+		group_scan(w)
+		var table := -1
+		var count := [0, 0, 0]
+		for grp in [0, 2, 4]:
+			if not g(w, grp, 5):
+				continue
+			for f in [0x1A, 0x18, 0x16, 0x1B, 0x19, 0x17]:
+				set_g(w, grp, f, 0xFF)
+			var sel := Pd2World.s8(g(w, grp, 0x1F))
+			table = M08_LANDING.get(sel, table)
+			for i in 16:
+				var m := g(w, grp, 6 + i)
+				if m == 0xFF:
+					continue
+				if table == -1 or not M08_LANDING.has(sel):
+					w.fault = "m08 landing: group %d +0x1F = %d reads the stack or low memory" % [grp, sel]
+					return 0
+				var a: int = table + 4 * count[sel]
+				w.mem_write(UNITS_ADDR + 55 * m + 9, w.mem8(a))
+				w.mem_write(UNITS_ADDR + 55 * m + 10, w.mem8(a + 2))
+				count[sel] += 1
+		var rr: Variant = hooks.radar_open()
+		var res: int = int(rr) if rr != null else Flight.grid_init(w, hooks.flight, 0)
+		if res in AI_ABORT:
+			return res
+		var first := func() -> int: return face_of(w, rng, 1)
+		res = radio_scene(w, hooks, [
+				["face", first, 10, null], ["say", 0xA4, 10], ["face", 0x10, 0x2B, 0], ["say", 0xA5, 0x2B],
+				["face", 7, 10, null], ["say", 0xA6, 10], ["say", 0xA7, 0x2B], ["say", 0xA8, 10], ["say", 0xA9, 0x2B],
+				["face", 0, 0x2B, 1], ["say", 0xAA, 0x2B], ["face", first, 10, null], ["say", 0xAB, 10],
+				["face", 7, 0x2B, 0], ["say", 0xAC, 0x2B], ["face", 0x10, 0x2B, 0], ["say", 0xAD, 0x2B], ["close"]])
+		if res:
+			return res
+		var px := w.ds8(0x50AD95)
+		var py := w.ds8(0x50AD97)
+		for f in [G_TARGET_X, G_PREV_X, G_X]:
+			set_g(w, 0, f, px)
+			set_g(w, 0, f + 1, py)
+		set_g(w, 0, 2, g(w, 0, 2) & 0xF | 0x20)
+		for k in range(40, 46):
+			var left := false
+			for i in 12:
+				if static_s16(w, 0x51AD88 + 4 * i):
+					left = true
+			if not left:
+				w.fault = "m08 targets: no unused point left (an endless loop)"
+				return 0
+			var i := rng.r16(12)
+			while static_s16(w, 0x51AD88 + 4 * i) == 0:
+				i = rng.r16(12)
+			var x := w.mem8(0x51AD88 + 4 * i)
+			var y := w.mem8(0x51AD8A + 4 * i)
+			w.setb(k, 9, x)
+			w.setb(k, 10, y)
+			w.setb(k, 7, x)
+			w.setb(k, 8, y)
+			w.mem_write(0x51AD88 + 4 * i, 0)
+			w.mem_write(0x51AD89 + 4 * i, 0)
+		ds_or(w, 0x50AD4E, 1)
+	if not m08_on_map(w):
+		w.set_ds8(0x50ADF2, m08_end_code(w, rng))
+	return 0
+
+
+# --- mission 10 (script 10, PD2 chunk 9: the sites and the control room; rules.m10_*) -----
+
+const M10_GUARDS := {2: [0x14, 0x16, 0x19], 3: [0x15, 0x22], 4: [0x21, 0x20], 5: [0x18], 6: [0x17],
+		7: [0x1B], 8: [0x1A], 9: [0x1C]}
+
+const M10_STOCK := [[0x50668A, 0, 4], [0x506654, 0x0C0C0C0C, 4], [0x50668E, 0, 4], [0x506658, 0x0C0C, 2],
+		[0x506692, 0, 1], [0x506680, 0x18181818, 4], [0x506686, 0x18181818, 4], [0x506693, 0x1818, 2],
+		[0x506674, 0x18181818, 4], [0x50665A, 0x0C, 1], [0x506695, 0x18, 1], [0x506678, 0x18181818, 4],
+		[0x5066D4, 0, 4], [0x5066E5, 0, 4], [0x5066D8, 0, 2], [0x5066E9, 0, 4], [0x5066FE, 0, 4],
+		[0x5066ED, 0, 2], [0x50667C, 0, 4], [0x506684, 0, 1], [0x506685, 0, 1], [0x5066BF, 0x18, 1],
+		[0x5066F2, 0, 2], [0x506702, 0, 1], [0x506706, 0, 41], [0x5066DA, 0x3C3C3C3C, 4],
+		[0x506730, 0, 4], [0x5066DE, 0x3C3C3C3C, 4], [0x5066E0, 0x0F, 1], [0x5066E2, 0x3C3C, 2],
+		[0x50672F, 0x3C, 1], [0x5066F4, 0x3C3C3C3C, 4], [0x5066E4, 0x3C, 1], [0x5066EF, 0x3C3C, 2],
+		[0x5066F8, 0x3C3C3C3C, 4], [0x506703, 0x3C3C, 2], [0x5066F1, 0x3C, 1], [0x5066FC, 0x3C3C, 2],
+		[0x506705, 0x3C, 1]]
+
+
+static func m10_load(w: Pd2World) -> void:
+	static_copy(w, 0x51B1A0, 0x51B1D0, 48)
+	for k in 10:
+		static_copy(w, 0x51B200 + 0x30 * k, 0x51B218 + 0x30 * k, 24)
+	for k in 10:
+		static_copy(w, 0x51B3E0 + 0xB0 * k, 0x51B438 + 0xB0 * k, 84)
+
+
+static func m10_init(w: Pd2World, hooks: Hooks) -> int:
+	for a in [0x50AD99, 0x50AD9B, 0x50AD9D, 0x50AD9F, 0x50ADA1, 0x50ADA3, 0x50ADA5, 0x50ADA7,
+			0x50ADA9, 0x50ADAB, 0x50ADAD, 0x50ADAF]:
+		w.set_ds16(a, 0)
+	w.set_ds16(0x50AD95, 7)
+	w.set_ds16(0x50AD97, 7)
+	for i in 0x20:
+		w.ds[0xB1 + i] = w.mem8(0x51B140 + i)
+		w.ds[0xD1 + i] = w.mem8(0x51B160 + i)
+	set_506651(w, 0x101)
+	if w.ds8(0x50AD94):
+		return w.ds8(0x50AD94)
+	var t92 := Flight.s16(w.ds16(0x50AD92))
+	for c in 64:
+		var q := c * Pd2World.CREW
+		if w.crew[q + 4] > t92 or w.crew[q + 2] != 0:
+			continue
+		Equipment.free_all(w, c)
+		var grp := w.crew[q + 5]
+		if grp == 0xFF:
+			continue
+		if grp >= 64:
+			w.fault = "m10 init: crew %d in group %d, past the group table" % [c, grp]
+			return 0
+		if Action.group_drop_player(w, grp, c):
+			var res := hooks.note(0x1CE) if hooks != null else 0
+			if res < 0:
+				return res
+		w.setb(c, 0, w.ub(c, 0) & 0xFB)
+	for e in M10_STOCK:
+		for i in e[2]:
+			w.mem_write(e[0] + i, (e[1] >> 8 * i) & 0xFF if i < 4 else 0)
+	return 0x3C3C3C3C
+
+
+## 0x453900: "HH:MM" of turn t from the start d over the digits of DS:0x515170 (rules.time_text)
+static func time_text(w: Pd2World, t: int, d: int) -> Array:
+	var v := (t + d) * 5
+	var h := v / 60
+	var m := v % 60
+	if h > 23:
+		h %= 24
+	for p in [[0x515170, h / 10], [0x515171, h % 10], [0x515173, m / 10], [0x515174, m % 10]]:
+		for base in w.static_mem:
+			if p[0] >= base and p[0] < base + w.static_mem[base].size():
+				w.mem_write(p[0], 0x30 + p[1])
+	return ["time", t, d]
+
+
+static func m10_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> int:
+	if w.sb(u, 0xE) < 0x1E:
+		var r0 := hooks.line(0xA1)
+		return r0 if r0 in AI_ABORT else 0
+	if w.ub(u, 9) != 0x24 or w.ub(u, 10) != 0x29:
+		var r1 := hooks.line(0xA4)
+		return r1 if r1 in AI_ABORT else 0
+	var res := Flight._radio_face(w, hooks.flight, 3, 0x3A, null)
+	if not res in AI_ABORT:
+		var when := time_text(w, w.mission_turn & 0xFFFF, (w.ds_506651 & 0xFF) | w.mem8(0x506652) << 8)
+		res = hooks.flight.radio_say(0xA2, [when], 0x3A)
+		if not res in AI_ABORT:
+			res = Flight._radio_face(w, hooks.flight, face_of(w, rng, m08_lead(w)), 0xB, null)
+			if not res in AI_ABORT:
+				res = hooks.flight.radio_say(0xA3, [], 0xB)
+				if not res in AI_ABORT:
+					hooks.flight.radio_close(-1)
+					if w.radar:
+						hooks.radar_close()
+						set_radar_flag(w, 0)
+						res = hooks.unit_panel()
+						if res in AI_ABORT:
+							return res
+						res = hooks.map_redraw()
+						if res in AI_ABORT:
+							return res
+						res = hooks.date_window()
+						if res in AI_ABORT:
+							return res
+						set_radar_flag(w, 0)
+					w.set_ds8(0x50ADF2, 0x80)
+					return 1
+	hooks.flight.radio_close(-1)
+	return res
+
+
+static func m10_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
+	if stage == 0:
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		var r0 := flight_turn(w, rng, hooks)
+		if r0 in AI_ABORT:
+			return r0
+	if not w.ds8(0x50AD4E) & 1:
+		group_scan(w)
+		var px := w.ds8(0x50AD95)
+		var py := w.ds8(0x50AD97)
+		for f in [G_X, G_PREV_X, G_TARGET_X]:
+			set_g(w, 0, f, px)
+			set_g(w, 0, f + 1, py)
+		set_g(w, 0, 2, g(w, 0, 2) & 0xF | 0x20)
+		set_g(w, 0, 0x1C, 0)
+		set_g(w, 0, 0x22, 0)
+		var a := 0x51B1A0
+		for i in 16:
+			var m := g(w, 0, 6 + i)
+			if m != 0xFF:
+				w.mem_write(UNITS_ADDR + 55 * m + 9, w.mem8(a))
+				w.mem_write(UNITS_ADDR + 55 * m + 10, w.mem8(a + 2))
+				a += 4
+		var res := radio_scene(w, hooks, [["face", 3, 0x3A, null], ["say", 0x121, 0x3A], ["face", 10, 0xB, null],
+				["say", 0x122, 0xB], ["close"]])
+		if res:
+			return res
+		ds_or(w, 0x50AD4E, 1)
+	if g(w, 0, 5) + g(w, 2, 5) + g(w, 4, 5) == 0:
+		w.set_ds8(0x50ADF2, 0x82)
+	return 0
+
+
+static func m10_bomb_rule(w: Pd2World, u: int, hooks: Hooks) -> int:
+	var x := w.sb(u, 9)
+	var y := w.sb(u, 10)
+	for n in 10:
+		if hit_table(w, x, y, 0x51B200 + 0x30 * n, 6):
+			return n + 1
+	return -1
+
+
+static func m10_break(w: Pd2World, hooks: Hooks, n: int) -> int:
+	for j in 14:
+		var a := 0x51B3E0 + 0xB0 * (n - 1) + 6 * j
+		var x := static_s16(w, a)
+		var y := static_s16(w, a + 2)
+		set_height_tile(w, x, y, w.mem8(a + 4), w.mem8(a + 5))
+		var res := hooks.redraw_hex(x, y)
+		if res == 0x10000 or res == 0x20000:
+			return res
+	return 0
+
+
+static func m10_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
+	var v := w.mem8(0x50AC1F + 4 * i)
+	if v < 1 or v > 10:
+		if i > 0:
+			w.fault = "m10 bomb hook: an entry without a site reads low memory"
+		return 0
+	ds_or(w, 0x50AD50 + 2 * (v - 1), 1)
+	for j in 16:
+		for grp in M10_GUARDS.get(v, []):
+			var a: int = UNITS_ADDR + 55 * g(w, grp, 6 + j) + 3
+			var o := w.mem8(a)
+			w.mem_write(a, o >> 4 | o & 0xF0)
+	if v == 10:
+		w.set_ds8(0x50ADF1, 1)
+	return m10_break(w, hooks, v)
+
+
+static func m10_start(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
+	for n in range(1, 11):
+		if w.ds8(0x50AD50 + 2 * (n - 1)) & 1:
+			var res := m10_break(w, hooks, n)
+			if res:
+				return res
 	return 0

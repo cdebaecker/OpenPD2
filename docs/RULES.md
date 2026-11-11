@@ -1590,7 +1590,9 @@ script passes), `ui_message_box` 0x451FB0 (buttons DS:0x50CBC9[kind]: 了解 / �
 中止; 1 for the first, 0 for the second or a cancel), 0x4521C0 (a line), 0x4DD390 (the
 sortie's refusal), the explosion window 0x40F590 / 0x40F730 / 0x417410 / 0x410510 (0x417410
 returns 0x80000 when the player skips; its end empties the hex of a unit at condition 0),
-the radio's talk windows (0x488DE0 / 0x489140 / 0x489390) and the speech window 0x4403D0
+the radio's talk windows (0x488DE0 / 0x489140 / 0x489390; 0x489430 the portrait of a crew, 0 for crew −1), the
+radar map's close (0x43F060) and redraws (0x466790, 0x4830E0, 0x4361C0, a hex 0x4F2150)
+and the speech window 0x4403D0
 (the approach: the speech hook in a loop until a transport lands; not ported, the
 battle's own drop handling stands in). `occupant_at` 0x46EC80, as the scripts call it,
 has no bounds check (x = −1 reads the row before's last hex).
@@ -1784,6 +1786,37 @@ fly him out). Emulated 1,300 / 1,300:
 - **Deploy** (0x4A29D0): the drop groups must share their task (0x12B) and the rescue
   group 12 be formed (0x12C).
 
+**Mission 8** (script 8, PD2 chunk 7: destroy units 40–45, then leave by submarine).
+Emulated 1,300 / 1,300:
+- **Pickup call** (0x4A5A60, "回収依頼 8AP"; the menu hook writes the digit 0x51AED2 as '4'
+  for a crew with skills bit 2, and drops the entry once the call is made): under the AP
+  0xA1. Else 0xA2 (はい / いいえ); on はい DS:0x50AD6E bit 0, the AP spent, the radio (the
+  unit's crew, 0xA3), the pickup point (0x51AEFC, three choices 0x51AD78: the west quay,
+  the cape's quay, the east beach → DS:0x50AD6F's nibble 1–3) and the submarine's 0xC3.
+  With the radar map open it is closed (0x43F060) and the unit panel (0x466790), the map
+  (0x4830E0) and the date window (0x4361C0) are redrawn.
+- **Turn script** (0x4A5DF0). Stage 0, after the call: the first time the submarine
+  answers (0xAE, then 0xC4, or 0xAF after the alarm), surfaces (DS:0x50AD72 bit 0) and its
+  pier appears (the start script 0x4A7240: 8, 8 or 6 hexes of 0x51ADE8 / 0x51AE38 /
+  0x51AE88, H 0x1E); then its wait counter (bits 1–5) counts the turns to 6; at 2 the scene
+  0xB0–0xB6, at 4 the scene 0xB7–0xC1 (the captain waits after all). Then the flight turn.
+  Stage 1: before the alarm (DS:0x50AD70) any spotted, damaged or destroyed player unit,
+  or a damaged one of units 40–45, raises it: the alert, groups 21–31 head for the camera
+  point (+0x1C from a 10‑byte local table; group 31 reads the byte after it, never set),
+  groups 32–35 one row above it with +0x1D = turn + 5, 8, 11, 14. Once the submarine is
+  up, each player unit on the chosen point's area (x 0–12, y 28–35; x 26–36, y 55–62; x
+  61–70, y 18–29) is asked 0xC2 (its crew's names) and leaves the map on はい.
+- **The first call:** groups 0, 2, 4 land on the points their +0x1F picks (0x51AC58 /
+  0x51ACB8 / 0x51AD18; another value reads the stack or low memory), the radar map, the
+  landing scene 0xA4–0xAD, group 0 holds at the camera point, and units 40–45 go to six
+  of the twelve points of 0x51AD88 (random(12), each point used once).
+- **End:** with no player unit on the map (any stage) or at the withdraw: 0x80 with all
+  six of units 40–45 destroyed, 0x83 with five, else 0x82; the fates (0x4A7410): each
+  player unit on the map, unless random(100) & 3 is 2, marks its crew and is flagged (odd
+  random(100)) or destroyed; a destroyed one, unless random(100) & 3 is 2, marks its crew
+  bit 0 or 1. Init: camera (7, 7), the computer's points (0, 6), (4, 0), (11, 0),
+  DS:0x506651 = 0xD3. The load script copies the seven tables.
+
 **Mission 9** (script 9, PD2 chunk 8: find the dry test shaft; two bridges). Emulated
 1,300 / 1,300. The command ("坑内確認 25AP", 0x4A8380) checks a shaft: on four decoy hexes
 0xA2 then 0xA3 (seawater), on the four test shafts (DS:0x51AFD0) 0xA2 and the shaft's
@@ -1795,6 +1828,33 @@ its crew when random(100) & 3 is 2; at the withdraw each player unit on the map 
 destroyed on that draw). Two demolition sites: the bomb rule (charge points 0x51AFF0 /
 0x51B010 → 1 / 2), the bomb hook breaks 9 hexes each (0x51B030 / 0x51B090, H 0x22; flags
 DS:0x50AD50 / 0x50AD52), the start script restores them. Init: camera (7, 7).
+
+**Mission 10** (script 10, PD2 chunk 9: the last mission; ten demolition sites, then the
+control room). Emulated 1,300 / 1,300:
+- **Init** (0x4A9240): camera (7, 7), every drop point cleared, DS:0x506651 = 0x101 (a
+  word). On a new mission (DS:0x50AD94 = 0; else it returns that byte), every crew 0–63
+  in service (+4 not after DS:0x50AD92, +2 = 0) has its unit unequipped (0x457130: the
+  machine, launchers and rounds back to stock) and, in a group, leaves it
+  (group_drop_player 0x4549B0; not listed: the note 0x1CE, whose negative answer is
+  returned) and loses flag bit 2 (0x4EE800). Then the stock is set to a fixed issue (39
+  stores over DS:0x506654–0x506733: launchers 0x0C / 0x18, rounds 0x3C, the rest 0;
+  `rules.M10_STOCK`). It returns 0x3C3C3C3C, its last store.
+- **Turn script** (0x4A99F0): stage 0 the turn counter and the flight turn; the first
+  call holds group 0 at the camera point (+0x1C = +0x22 = 0), puts its members on the
+  successive points of 0x51B1A0 and plays the radio (0x121, 0x122); with no member left
+  in groups 0, 2 and 4, 0x82.
+- **Command** (0x4A9700, "状態確認 30AP"): under 30 AP 0xA1; on the control room hex
+  (0x24, 0x29) the radio 0xA2 with the time (0x453900: (turn + DS:0x506651) × 5 minutes,
+  "HH:MM" written over DS:0x515170) and 0xA3, the radar map closed as in mission 8, and
+  the end code 0x80 (result 1); elsewhere 0xA4.
+- **Demolitions:** the bomb rule (0x4A9C10) gives site n (1–10) for a charge on one of
+  its six points (0x51B200 + 0x30 (n − 1)); the bomb hook (0x4AA190) sets the site's
+  flag (DS:0x50AD50 + 2 (n − 1)), turns the guards of sites 2–9 to their alert orders
+  (+3 = +3 >> 4 | +3 & 0xF0 for each member slot of their groups; an empty slot, 0xFF,
+  reaches unit 255, i.e. group 0's +3), site 10 raises the alert, and the site's 14 hexes
+  take their T and H bytes (0x51B3E0 + 0xB0 (n − 1), 6 B entries), each redrawn. Another
+  hook byte reads low memory. The start script breaks the blown sites again; the
+  withdraw is 0x82.
 
 **The group scan** (0x4DE090): groups 0–19 not yet placed (+3 bit 0 clear, +2 bits 4–5
 clear, +0x16 = 0xFF, with members) get their drop point at +0x18/+0x19: player point
@@ -2402,7 +2462,7 @@ before it loads the mission. Then it leaves its turn loop:
     the loop breaks and calls the mission's hook from table 0x51F038 (by DS:0x50CE72),
     and the end code is DS:0x50ADF2. Mission 1's hook (0x49A6C0) sets 0x80, so
     withdrawing from mission 1 clears it. Entry 0 (0x4DE070) only shows "bad story
-    level". The other missions' hooks are ported with their scripts (§5.8; PD2 1–7 and 9
+    level". The other missions' hooks are ported with their scripts (§5.8; all of PD2
     so far);
   - entry 0xC (WMES 0x1DF) gives 0x81, which quits to the title;
   - 0x99 becomes 0x82, and 0xC0 returns at once.
@@ -2625,9 +2685,8 @@ sorted random fill can bring about — the game draws for ever: the port stops t
      search, conceal, reload). Left for the Godot engine, written from the
      decompiled C: the event scripts (the player's dialogs — reaction menu, mine
      clearing, "enemy discovered" — are ported);
-   - the event scripts mission by mission (226 KB in all): PD2 missions 1–7 and 9 are
-     ported and emulated; left: PD2 8 and 10 (mission 10's init and command use base
-     and calendar routines not ported yet) and DASH's 12 (scripts 11–22), and the
+   - the event scripts mission by mission (226 KB in all): all ten PD2 missions are
+     ported and emulated; left: DASH's 12 (scripts 11–22), and the
      approach loop 0x4403D0 and the operation plan's deployment rules (0x51EAE8..).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.
