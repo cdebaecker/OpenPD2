@@ -57,6 +57,7 @@ func battle(w: Pd2World, sortie := false) -> Node:
 	b.title_carry = {"image": Debrief.save_image(w), "script": w.script_no, "stash": w.stash, "new_campaign": false}
 	b.auto_react = not sortie
 	b.sortie_window = sortie
+	b.plan_window = false               # the operation plan pressed done at once
 	root.add_child(b)
 	return b
 
@@ -131,6 +132,7 @@ func _init() -> void:
 	print("PD2 step 7 cleared: debrief 0x%X, next %s, mission %d, mode %d, step %d" % [b.debrief_result,
 		str(nxt), bw.script_no, Debrief.campaign_mode(bw), bw.ds16(0x50AD8E)])
 	b.sortie_window = true             # the next mission's sortie opens and waits
+	b.plan_window = false
 	b.auto_react = false
 	var b2: Node = await next_battle(b, nxt)
 	var saved := false

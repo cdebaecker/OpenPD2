@@ -213,7 +213,10 @@ func _ready() -> void:
 	mission_hooks.flight = flight_hooks
 	mission_hooks.options = options
 	w.map_chg = GameData.tables(campaign).get("map_chg", []) if campaign == "dash" else []   # (DASH mission 6's tide)
-	MissionScripts.run_init(w, mission_hooks)   # in the game the pre-battle screen runs it (0x4DD2F0)
+	# the mission start's loop (0x416CF0, Plan): DS:0x50663A and the mission turn 0, the
+	# briefing (0x4DD2F0: the SCN_MIS record, the mission's init), the plan, the sortie
+	Plan.pre_battle_begin(w)
+	brief_code = Plan.briefing(w, doc.get("record", PackedByteArray()), mission_hooks)
 	if script_no == 1:
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
 			w.exits.append(Vector2i(int(p[0]), int(p[1])))
@@ -239,7 +242,7 @@ func _ready() -> void:
 	cam.limit_bottom = MAP * TILE_H
 	add_child(cam)
 	_build_hud()
-	_sortie()
+	_plan()
 
 
 func _begin_battle() -> void:
@@ -521,6 +524,361 @@ func sortie_say(t: String) -> void:
 	sortie_text = t
 
 
+# --- the briefing (0x4DD2F0) and the operation plan (0x443F60, "plan_g.pac") ------------
+
+var brief_code := 0             # the briefing's result, for 0x416CF0's loop (Plan.pre_battle_round)
+var plan_code := 0              # the plan's
+var plan_window := true         # false: the plan presses done at once (tests)
+var plan_panel: PanelContainer
+## the plan's state between buttons: mode "page" (k), "orders" (g, the selected group;
+## ask: the open list or question), "list", "maps" (i)
+var plan_st := {}
+
+
+func _plan() -> void:
+	## The operation plan before the sortie (Plan.plan_screen's buttons): the mission's
+	## pages A-D, the orders (the player's groups' name, plan type, time, target), the
+	## plans' list, the area maps, done. Without a window it presses done at once.
+	if auto_react or not sortie_window or not plan_window:
+		plan_code = Plan.plan_screen(w, Plan.Hooks.new(), [])
+		_sortie()
+		return
+	if hud_panel:
+		hud_panel.visible = false
+	plan_st = {"mode": "page", "k": 0, "g": 0, "ask": null, "i": 0}
+	_plan_draw()
+
+
+func plan_exe(va: int) -> String:
+	return GameData.exe_text(campaign, va).replace(char(12), "").strip_edges()
+
+
+func plan_time(t: int) -> String:
+	## 0x453900: "HH:MM" of (t + DS:0x506651) x 5 minutes, the hour mod 24
+	var m := (t + w.ds_506651) * 5
+	return "%02d:%02d" % [(m / 60) % 24, m % 60]
+
+
+func plan_line(item: Array) -> String:
+	## a page's line: its MES text with its arguments (a crew's given name for "crew_of")
+	var args := []
+	for a in item[1]:
+		if a is Array and a[0] == "crew_of":
+			var cn: Array = GameData.tables(campaign).crew_names
+			var n := Plan.crew_name_id(w, a[1])
+			args.append(cn[n][0] if n >= 0 and n < cn.size() else "")
+		else:
+			args.append(a)
+	return mes(item[0], args)
+
+
+func plan_type_name(g: int) -> String:
+	var names := SaveFiles.choice_texts(Plan.TYPE_NAMES)
+	var i: int = w.scenario[Plan.entry(Flight.gb(w, g, 0x21))] if w.scenario.size() > Plan.entry(Flight.gb(w, g, 0x21)) else 0
+	return names[i] if i < names.size() else "#%d" % i
+
+
+func plan_target(g: int) -> String:
+	## the orders' target line (0x446320): a cell, a direction, a site, or none
+	match Plan.kind(w, g):
+		0:
+			return "%2d-%2d" % [Flight.s8(Flight.gb(w, g, 0x1A)), Flight.s8(Flight.gb(w, g, 0x1B))]
+		1:
+			var d := SaveFiles.choice_texts(Plan.DIRECTIONS)
+			var i := Flight.s8(Flight.gb(w, g, 0x1F))
+			return d[i].strip_edges() if i >= 0 and i < d.size() else ""
+		2, 3:
+			var s := SaveFiles.choice_texts(Plan.SITE_NAMES)
+			var i := Flight.s8(Flight.gb(w, g, 0x1F))
+			return s[i] if i >= 0 and i < s.size() else ""
+	return ""
+
+
+func _plan_draw() -> void:
+	if plan_panel:
+		plan_panel.queue_free()
+	plan_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	plan_panel.theme = theme
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
+	bg.set_content_margin_all(8)
+	plan_panel.add_theme_stylebox_override("panel", bg)
+	plan_panel.position = Vector2(16, 16)
+	var box := VBoxContainer.new()
+	plan_panel.add_child(box)
+	var title := Label.new()
+	title.text = "%s  %s" % [ui("UI_PLAN"), SaveFiles.mission_name(script_no)]
+	box.add_child(title)
+	var buttons := HBoxContainer.new()            # the screen's nine regions (0x438210(9))
+	box.add_child(buttons)
+	var orders_open: bool = plan_st.mode == "orders"
+	for k in 4:
+		buttons.add_child(_plan_button(plan_exe(Plan.PAGE_TITLES[k]), func(): plan_st.mode = "page"; plan_st.k = k, orders_open))
+	buttons.add_child(_plan_button(plan_exe(Plan.ORDERS_TITLE), func(): plan_st.mode = "orders"; plan_st.g = 0; plan_st.ask = null, orders_open))
+	buttons.add_child(_plan_button(plan_exe(Plan.LIST_TITLE), func(): plan_st.mode = "list", orders_open))
+	buttons.add_child(_plan_button(ui("UI_PLAN_MAPS"), func(): plan_st.mode = "maps"; plan_st.i = 0, orders_open))
+	var done := Button.new()
+	done.text = ui("UI_PLAN_DONE")
+	done.disabled = orders_open
+	done.pressed.connect(_plan_done)
+	buttons.add_child(done)
+	match plan_st.mode:
+		"page":
+			_plan_page_ui(box)
+		"orders":
+			_plan_orders_ui(box)
+		"list":
+			_plan_list_ui(box)
+		"maps":
+			_plan_maps_ui(box)
+	hud_layer.add_child(plan_panel)
+
+
+func _plan_button(text: String, f: Callable, disabled := false) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.disabled = disabled
+	b.pressed.connect(func(): f.call(); _plan_draw())
+	return b
+
+
+func _plan_done() -> void:
+	plan_code = 0
+	plan_panel.queue_free()
+	plan_panel = null
+	_sortie()
+
+
+func _plan_page_ui(box: VBoxContainer) -> void:
+	## the mission's page k (its hook in tables 0x51EAE8 .. 0x51EC08): its lines, a blank
+	## line where the game waits for a click
+	var v := list_box(box)
+	v.custom_minimum_size = Vector2(420, 0)
+	var head := Label.new()
+	head.text = plan_exe(Plan.PAGE_TITLES[plan_st.k])
+	v.add_child(head)
+	for item in Plan.page(w, plan_st.k):
+		var l := Label.new()
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size = Vector2(400, 0)
+		l.text = "" if item[0] < 0 else plan_line(item).replace("@", "\n")
+		v.add_child(l)
+
+
+func _plan_list_ui(box: VBoxContainer) -> void:
+	## 0x4442C0: each group's call sign, then its type's line (MES 0xF1 + t) with its time
+	var v := list_box(box)
+	for g in Plan.list_rows(w):
+		var t := Flight.gb(w, g, 0x21) & 15
+		var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
+		var l := Label.new()
+		l.text = "%s  %s" % [GameData.call_sign(campaign, Flight.gb(w, g, 1)), mes(0xF1 + t, [plan_time(time)])]
+		v.add_child(l)
+
+
+func _plan_maps_ui(box: VBoxContainer) -> void:
+	## 0x444500: AMAP.pac entry DS:0x50663D * 4 - 4 + i; next / the one before wrap
+	var t := _plan_tex("%s/%s/images/amap/%02d.bmp" % [GameData.ROOT, campaign, mission_index * 4 + plan_st.i])
+	if t:
+		var r := TextureRect.new()
+		r.texture = t
+		box.add_child(r)
+	else:
+		var l := Label.new()
+		l.text = "%s %d / 4" % [ui("UI_PLAN_MAPS"), plan_st.i + 1]
+		box.add_child(l)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	row.add_child(_plan_button("<", func(): plan_st.i = 3 if plan_st.i == 0 else plan_st.i - 1))
+	row.add_child(_plan_button(">", func(): plan_st.i = 0 if plan_st.i == 3 else plan_st.i + 1))
+	row.add_child(_plan_button(ui("UI_BACK"), func(): plan_st.mode = "page"; plan_st.k = 0))
+
+
+var _plan_texs := {}
+
+
+func _plan_tex(path: String) -> Texture2D:
+	if not _plan_texs.has(path):
+		var img := Image.load_from_file(path) if FileAccess.file_exists(path) else null
+		_plan_texs[path] = ImageTexture.create_from_image(img) if img else null
+	return _plan_texs[path]
+
+
+func _plan_orders_ui(box: VBoxContainer) -> void:
+	## 0x444730: the selected group's orders (0x446320's lines) and its six buttons
+	var g: int = plan_st.g
+	var t := Flight.gb(w, g, 0x21) & 15
+	var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
+	var info := VBoxContainer.new()
+	box.add_child(info)
+	for s in [GameData.call_sign(campaign, Flight.gb(w, g, 1)) + "  " + group_name(g),
+			plan_type_name(g), mes(0xC1 + t) + "  " + plan_time(time),
+			mes(0xD1 + t) + "  " + plan_target(g)]:
+		var l := Label.new()
+		l.text = s
+		info.add_child(l)
+	for id in Plan.requirements(w, g):
+		var l := Label.new()
+		l.text = mes(id)
+		info.add_child(l)
+	var ex := Label.new()
+	ex.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ex.custom_minimum_size = Vector2(400, 0)
+	ex.text = mes(0xE1 + t).replace("@", "\n")
+	info.add_child(ex)
+	if plan_st.ask != null:
+		_plan_ask_ui(box)
+		return
+	var row := HBoxContainer.new()               # regions 0x438210(6): leave, group, name, type, time, target
+	box.add_child(row)
+	row.add_child(_plan_button(ui("UI_PLAN_LEAVE"), _plan_leave))
+	row.add_child(_plan_button(ui("UI_PLAN_GROUP"), func(): plan_st.ask = ["group", Plan.rows_groups(w)]))
+	row.add_child(_plan_button(ui("UI_PLAN_NAME"), func(): plan_st.ask = ["name", range(Plan.NAMES)]))
+	row.add_child(_plan_button(ui("UI_PLAN_TYPE"), func():
+		var rows := Plan.rows_types(w, g)
+		if not rows.is_empty():
+			plan_st.ask = ["type", rows]))
+	row.add_child(_plan_button(ui("UI_PLAN_TIME"), func():
+		var tt := Plan.times(w, g)
+		if tt[1] > 0:
+			plan_st.ask = ["time", range(tt[0], tt[0] + tt[1])]))
+	row.add_child(_plan_button(ui("UI_PLAN_TARGET"), _plan_target_ask))
+
+
+func _plan_target_ask() -> void:
+	## button 5, by the plan's kind: 0 a cell of the map, 1 a direction, 2 / 3 a site
+	var g: int = plan_st.g
+	match Plan.kind(w, g):
+		0:
+			plan_st.ask = ["cell"]
+		1:
+			plan_st.ask = ["direction", range(8)]
+		2:
+			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_A)]
+		3:
+			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_B)]
+
+
+func plan_choices(arr: int) -> Array:
+	return SaveFiles.choice_texts(arr)
+
+
+func _plan_leave() -> void:
+	## button 0: the mission's objective message, if any, with 無視 (leave) / 再考 (stay)
+	var m := Plan.objective(w)
+	if m < 0:
+		plan_st.mode = "page"
+		plan_st.k = 0
+	else:
+		plan_st.ask = ["objective", m]
+
+
+func _plan_ask_ui(box: VBoxContainer) -> void:
+	var a: Array = plan_st.ask
+	var g: int = plan_st.g
+	var v := list_box(box)
+	var close := func(): plan_st.ask = null; _plan_draw()
+	match a[0]:
+		"objective":
+			var l := Label.new()
+			l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			l.custom_minimum_size = Vector2(400, 0)
+			l.text = mes(a[1] + 0x20).replace("@", "\n")
+			v.add_child(l)
+			var labels := SaveFiles.choice_texts(Plan.OBJECTIVE_BUTTONS)
+			for i in 2:
+				var b := Button.new()
+				b.text = labels[i] if i < labels.size() else str(i)
+				b.pressed.connect(func():
+					plan_st.ask = null
+					if i == 0:
+						plan_st.mode = "page"
+						plan_st.k = 0
+					_plan_draw())
+				v.add_child(b)
+		"cell":
+			var r := TextureRect.new()
+			r.texture = _plan_tex("%s/%s/images/smap/%02d.bmp" % [GameData.ROOT, campaign, mission_index])
+			r.custom_minimum_size = Vector2(360, 360)
+			r.mouse_filter = Control.MOUSE_FILTER_STOP
+			r.gui_input.connect(func(ev):
+				if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+					var x := int(ev.position.x) / 24
+					var y := int(ev.position.y) / 24
+					# 0x4459E0: a cell of the 15 x 15 grid, not the camera point's
+					if x < 15 and y < 15 and (x != w.ds16(0x50AD95) or y != w.ds16(0x50AD97)):
+						Flight.setgb(w, g, 0x1A, x)
+						Flight.setgb(w, g, 0x1B, y)
+						plan_st.ask = null
+						_plan_draw())
+			v.add_child(r)
+		"site":
+			if a.size() > 2:                       # 0x451E30: the site question (0x514BB8)
+				var q := Label.new()
+				q.text = plan_exe(Plan.SITE_QUESTION)
+				v.add_child(q)
+				for yes in [true, false]:
+					var b := Button.new()
+					b.text = ui("UI_YES") if yes else ui("UI_NO")
+					b.pressed.connect(func():
+						if yes:
+							Flight.setgb(w, g, 0x1F, a[2])
+							plan_st.ask = null
+						else:
+							plan_st.ask = ["site", a[1]]
+						_plan_draw())
+					v.add_child(b)
+			else:
+				var names := SaveFiles.choice_texts(Plan.SITE_NAMES)
+				for i in a[1]:
+					var b := Button.new()
+					b.text = names[i] if i < names.size() else str(i)
+					b.pressed.connect(func(): plan_st.ask = ["site", a[1], i]; _plan_draw())
+					v.add_child(b)
+		_:
+			for i in a[1].size():
+				var row_v: int = a[1][i]
+				var b := Button.new()
+				match a[0]:
+					"group":
+						b.text = "%s  %s" % [GameData.call_sign(campaign, Flight.gb(w, row_v, 1)), group_name(row_v)]
+					"name":
+						b.text = GameData.call_sign(campaign, 39 + row_v)
+					"type":
+						var names := SaveFiles.choice_texts(Plan.TYPE_NAMES)
+						var n: int = w.scenario[Plan.entry(row_v)] if w.scenario.size() > Plan.entry(row_v) else 0
+						b.text = names[n] if n < names.size() else "#%d" % n
+					"time":
+						b.text = plan_time(row_v)
+					"direction":
+						var d := SaveFiles.choice_texts(Plan.DIRECTIONS)
+						b.text = d[row_v].strip_edges() if row_v < d.size() else str(row_v)
+				b.pressed.connect(func():
+					match a[0]:
+						"group":
+							plan_st.g = row_v
+						"name":
+							if row_v != Flight.gb(w, g, 0):
+								Flight.setgb(w, g, 0, row_v)
+						"type":
+							if row_v != Flight.gb(w, g, 0x21) & 15:
+								Plan.set_type(w, g, row_v)
+						"time":
+							Plan.set_time(w, g, row_v)
+						"direction":
+							if row_v != Flight.s8(Flight.gb(w, g, 0x1F)):
+								Flight.setgb(w, g, 0x1F, row_v)
+					plan_st.ask = null
+					_plan_draw())
+				v.add_child(b)
+	var c := Button.new()
+	c.text = ui("UI_CANCEL")
+	c.pressed.connect(close)
+	box.add_child(c)
+
+
 func _sortie() -> void:
 	## The sortie screen before the battle: the formable groups (+2 bit 0), their members
 	## and the free pilots; join, drop, start (the game's checks, then "start the
@@ -528,7 +886,8 @@ func _sortie() -> void:
 	sortie_hooks = BattleSortieHooks.new()
 	sortie_hooks.battle = self
 	if auto_react or not sortie_window:
-		Campaign.sortie_screen(w, sortie_hooks, [["start"]])
+		var sr: Array = Campaign.sortie_screen(w, sortie_hooks, [["start"]])
+		Plan.pre_battle_round(w, brief_code, plan_code, int(sr[0]))
 		_begin_battle()
 		return
 	Campaign.sortie_open(w)
@@ -644,6 +1003,7 @@ func _sortie_draw(confirm := false) -> void:
 			b.pressed.connect(func():
 				Campaign.sortie_start(w, yes)
 				if yes:
+					Plan.pre_battle_round(w, brief_code, plan_code, 0)
 					sortie_panel.queue_free()
 					sortie_panel = null
 					hud_panel.visible = true
@@ -2589,6 +2949,7 @@ func _next_mission(nxt: Array) -> void:
 	b.mission_index = int(nxt[1]) - 1
 	b.auto_react = auto_react
 	b.sortie_window = sortie_window
+	b.plan_window = plan_window
 	get_tree().root.add_child(b)
 	get_tree().current_scene = b
 	queue_free()

@@ -24,6 +24,7 @@ func _init() -> void:
 	b.carry = {"image": Debrief.save_image(w0), "script": w0.script_no, "stash": w0.stash}
 	b.campaign = "pd2"
 	b.mission_index = Debrief.chunk(w0) - 1
+	b.plan_window = false               # the operation plan pressed done at once
 	root.add_child(b)
 	for i in 5:
 		await process_frame

@@ -23,6 +23,7 @@ func _init() -> void:
 	var b = load("res://ui/battle.tscn").instantiate()
 	b.campaign = "dash"
 	b.mission_index = 0
+	b.plan_window = false               # the operation plan pressed done at once
 	root.add_child(b)
 	for i in 8:
 		await process_frame

@@ -1551,7 +1551,7 @@ DASH missions apply damage directly. There are 16 tables of 23 entries (entry
 
 | Table | Caller | Role |
 |---|---|---|
-| 0x51EAE8 / 0x51EB48 / 0x51EBA8 / 0x51EC08 | 0x443F60 | sortie / deployment rules |
+| 0x51EAE8 / 0x51EB48 / 0x51EBA8 / 0x51EC08 | 0x443F60 | the operation plan's pages A–D (display only, §5.22) |
 | 0x51EC68 | the sortie screen 0x45ED60 (0x460D60) | deploy check: 1 passes, 0 refuses (after a dialog) |
 | 0x51ECC8 | 0x4DD2F0 | mission init (camera, timers) |
 | 0x51ED28 | 0x444730 | objective message (an id or −1) |
@@ -1571,7 +1571,7 @@ objective, deploy, turn, speech, menu, command, scenario, bomb_rule, start, bomb
 windows stubbed and logged, answers random and replayed, a time limit per call) and
 compares the result, units, crews, groups, the DS block, bombs, the H / T / F / O layers,
 the stock, the turn counter, DS:0x506651, the RNG, the exe data and the log. The
-deployment rules A-D belong to the operation plan screen, not ported.
+tables 0x51EAE8..0x51EC08 are the operation plan's pages (§5.22): they only draw.
 
 **Set explosives** (0x428D80, the machine status window's pocket menu entry 7: a round of
 warhead 13 with rounds left and a pocket not broken; AP = the round's +7 low 5 bits,
@@ -3233,6 +3233,66 @@ What moves:
   round, count and pocket state go to o's **last** empty pocket (pocket 0 when there is
   none, overwriting it). The giver's slot and its pocket are emptied.
 
+### 5.22 The briefing and the operation plan: Emulated
+
+0x416CF0, after the mission load, runs a loop (read in the disassembly at 0x416F37):
+DS:0x50663A = 0 and the mission turn (u16 DS:0x50663B) = 0, then per round the briefing
+(0x4DD2F0), DS:0x50AD94 = 1, the operation plan (0x443F60), the sortie screen (0x45ED60).
+The round's code: the briefing's 0x80 gives 0x80, its 1 gives 0x65, its 0x10000 / 0x20000
+/ 0x40000 give 0x7F; the plan's 0x10000 / 0x20000 / 0x40000 give 0x7F; then the sortie's
+result overrides: 0x20000 → 0x68, 0 → DS:0x50AD94 = 0, the mission turn 0, savedata.tmp
+written (0x4981F0), 0x80; 3 → the save without the reset, 0x80; 1 → 0x81; −1 → 0x66;
+0x40000 → 0x67; any other leaves it. A code of 0 goes round again: the briefing, and the
+mission's init with it, run once more (the sortie's 2). `rules.pre_battle`, emulated 1000 /
+1000 (`verify_pre_battle`).
+
+**The briefing** (0x4DD2F0) draws nothing itself: it loads the MES messages (0x471930), reads
+the mission's SCN_MIS.PCK entry (chunk DS:0x50663D − 1, 0x1C6 bytes) to DS:0x50DE41 (no
+entry or a failed read: 1, the record as it was) and returns the mission's init (table
+0x51ECC8 by DS:0x50CE72). In play every init returns 0, mission 10's 0x3C3C3C3C (no code).
+`rules.briefing`, emulated 600 / 600 (`verify_briefing`, the inits stubbed: each is checked
+by `verify_missions`).
+
+**The record** (DS:0x50DE41): three words of plan-type masks (+0 groups 0–5, +2 groups 6–11,
++4 groups 12 on; type i is bit 0x8000 >> i), then 16 entries of 0x1C bytes at +6: +0 the
+name (DS:0x50C965, 18 names), +1 three requirements of 7 bytes (the kind, 0xFF none; the
+test: 1 the time within the two words, 2 outside them, 3 equal to the first; a direction
+mask for a kind-1 plan), +0x16 / +0x18 the first and last time (u16), +0x1A the kind (0 a
+target cell, 1 a direction, 2 a site of DS:0x50ADB1, 3 a site of DS:0x50ADD1, others
+none), +0x1B the high nibble the group's +0x21 takes.
+
+**The operation plan** (0x443F60, plan_g.pac, the mission's name, SMAP.pac): a fade
+(0x4875D0: −3 / −2 / −1 give 0x20000 / 0x40000 / 0x10000) in, page A, then nine buttons:
+0–3 the mission's pages A–D (状況 situation, 目的 objective, 敵兵力 enemy, 味方兵力
+friendly: the hooks of tables 0x51EAE8 / 0x51EB48 / 0x51EBA8 / 0x51EC08; B's non-zero
+result ends the plan), 4 the orders (0x444730), then page A again, 5 the groups' plans
+(0x4442C0), 6 done (a fade out, then 0), 7 the area maps (0x444500: AMAP.pac, four per
+chunk, next / back wrapping), 8 the XMS line (0x452200). The 88 page hooks only draw:
+their MES lines (0x121 on), the small map's blinking points and, in m21 C / D and m22 A,
+lines chosen from the crews and units (m22 A with no matching crew names crew −1, the
+byte before the crew table). Emulated whole, 1500 / 1500 (`verify_plan`: the pages, the
+orders' display 0x446320, the camera blink 0x446E80, the site list 0x446F50 and the
+objective hooks run; the fades, lists, the target pick 0x4459E0, the flash 0x445750 and
+the questions answer a script).
+
+**The orders** (0x444730) are the plan's only state: group 0 selected, six buttons:
+- 0 leave: the mission's objective hook (0x51ED28; m21's writes groups 0 and 2, §5.8);
+  −1 leaves, else MES (id + 0x20) with 無視 / 再考 (0x4DD390): the first leaves, the second
+  stays, −100 / −101 / −102 give 0x10000 / 0x40000 / 0x20000. Left, the plan sees
+  UpdateWindow's 1;
+- 1 a group: groups 0–19 with +2 bit 0, the odd ones below 12 left out;
+- 2 its name: +0 = one of 34 (DS:0x50C881), if it differs;
+- 3 its type: from the mask for its class; a different one sets +0x21 = entry +0x1B << 4
+  | type, +0x1D = its first time, then by the kind: 0 +0x1A = DS:0x50AD95's byte, +0x1B =
+  DS:0x50AD97's word − 1 (1 at 0); kinds 0 and 2 +0x1F = the first site of DS:0x50ADB1
+  (the eight (x, y) words with x ≠ −1), 3 of DS:0x50ADD1 (none: +0x1F kept);
+- 4 its time: +0x1D = first + the pick of last − first + 1 (a negative count: the
+  allocation fails, 0x10000);
+- 5 by the kind: 0 a cell of the 15 × 15 grid other than the camera point's (+0x1A / +0x1B);
+  1 a direction 0–7 (+0x1F, if it differs); 2 / 3 a site, confirmed with
+  the site question (0x514BB8, 0x451E30: yes sets +0x1F; −3 / −2 / −1 abort).
+The lists answer −12 / −11 for the window closed / quit (0x20000 / 0x40000).
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |
@@ -3288,7 +3348,7 @@ What moves:
      clearing, "enemy discovered" — are ported);
    - the event scripts mission by mission (226 KB in all): all ten PD2 missions and
      DASH's missions 2-7 (scripts 12, 14-18) are ported and emulated; left: DASH's other 6 (scripts 11–22), and the
-     approach loop 0x4403D0 and the operation plan's deployment rules (0x51EAE8..).
+     approach loop 0x4403D0 (the operation plan and its pages are ported, §5.22).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.
 4. The remaining action costs: conceal, lay mines, throw, reload and item use.

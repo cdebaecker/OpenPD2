@@ -189,6 +189,11 @@ SCRIPT_CHOICES = {0x517F78: 2, 0x517F80: 2, 0x517F88: 2, 0x50CBC1: 2, 0x50CBB9: 
 # number (0x50CB4E, 23 pointers: the scenario list, the save's name), the sortie's system
 # menu (0x50D70D: abort the operation, save, load).
 SCRIPT_CHOICES.update({0x50D86C: 3, 0x5173A0: 2, 0x50CB4E: 23, 0x50D70D: 3})
+# The operation plan (0x443F60, core/plan.gd): the objective dialog's buttons (DS:0x50E06D),
+# the directions (0x50E009), the sites (0x50E075) and the plan types' names (0x50C965, the
+# record entries' +0: 18 in use); its titles, the site question and the XMS box's lines.
+SCRIPT_CHOICES.update({0x50E06D: 2, 0x50E009: 8, 0x50E075: 8, 0x50C965: 18})
+PLAN_TEXTS = {0x50E029, 0x50E032, 0x50E03B, 0x50E046, 0x50E053, 0x50E060, 0x514BB8, 0x514AA4, 0x514A98}
 # ... and its notes (0x46D780, the pickers 0x4985A0 / 0x4983A0, the save 0x497F60 and the
 # slot's header line 0x498070).
 TITLE_TEXTS = {0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517474, 0x517458,
@@ -224,7 +229,7 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
              0x50CBE1,
              # the slot menu's (0x427530) and the pocket menu's (0x427FF0) entries
-             0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS))
+             0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -372,7 +377,7 @@ def export_messages(game, out):
 # the counters KOMA.DAT (26 tiles of 8 x 8, four bit planes, 0x43FB20); the radio's talk
 # windows (0x488DE0): portraits Evkao.pac (128 x 128) and Event.pac (256 x 128).
 SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac')
-CAMPAIGN_IMAGES = ('smap.pac',)
+CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 
 def export_images(game, out):
