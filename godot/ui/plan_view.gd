@@ -21,6 +21,8 @@ extends Control
 signal pressed(region: int)
 signal advanced
 signal maps_nav(k: int)          # the area maps' regions: 0 next, 1 the one before, 2 close
+signal order_pressed(i: int)     # the orders' regions (DS:0x514A10): leave, group, name, type, time, target
+signal cell_pressed(c: Vector2i) # a cell of the mission's map (8, 0x20) while one is asked
 
 const W := 640
 const H := 400
@@ -41,6 +43,13 @@ var orders := ""                # "" none, "open" (plan_gb), "closed" (plan_gc p
 var note := ""                  # the XMS box's text, until a click
 var maps_i := -1                # the area map shown (0x444500), -1 none
 var list_win: Variant = null    # the plans' list's text window (0x4442C0) while it prints
+var order_fills: Array = []     # the orders' windows filled with the picture table's 0xA0 (0x446320)
+var fill_col := Color.BLACK
+var asking_cell := false
+var cell_frame: Variant = null  # the target cell's frame (0x446320's XOR frame), [x, y]
+## 0x444730's regions (type 2): leave, the group, its name, its type, its time, its target
+const ORDER_REGIONS := [Rect2i(576, 324, 39, 14), Rect2i(388, 244, 103, 15), Rect2i(492, 244, 131, 15),
+	Rect2i(388, 260, 235, 15), Rect2i(388, 276, 159, 15), Rect2i(388, 308, 141, 15)]
 ## 0x444500's regions (type 2): next, the one before, close
 const MAPS_REGIONS := [Rect2i(0x188, 0x120, 0x2F, 0xF), Rect2i(0x1B8, 0x120, 0x2F, 0xF), Rect2i(0x188, 0x130, 0x5F, 0xF)]
 var _on := false
@@ -97,6 +106,16 @@ func _gui_input(ev: InputEvent) -> void:
 	var p := Vector2i(ev.position)
 	if list_win != null and is_instance_valid(list_win) and list_win._waiting:
 		list_win.outside(ev.button_index)
+		return
+	if orders == "open":
+		if asking_cell and ev.button_index == MOUSE_BUTTON_LEFT and p.x >= 8 and p.x < 8 + 360 and p.y >= 0x20 and p.y < 0x20 + 360:
+			cell_pressed.emit(Vector2i((p.x - 8) / 24, (p.y - 0x20) / 24))
+			return
+		for i in ORDER_REGIONS.size():
+			var r: Rect2i = ORDER_REGIONS[i]
+			if p.x >= r.position.x and p.x <= r.end.x and p.y >= r.position.y and p.y <= r.end.y:
+				order_pressed.emit(i)
+				return
 		return
 	if maps_i >= 0:
 		for i in MAPS_REGIONS.size():
@@ -181,6 +200,12 @@ func _draw() -> void:
 		var am := tex("%s/%s/images/amap/%02d.bmp" % [root, camp, (chunk - 1) * 4 + maps_i])
 		if am:
 			draw_texture(am, Vector2(0x30, 0x48))
+	for f in order_fills:
+		draw_rect(f, fill_col)
+	if cell_frame != null:
+		# 0x446320: the target cell's frame, XOR 15 (an outer and an inner fill: a 2 px ring)
+		var r := Rect2(cell_frame[0] * 24 + 9, cell_frame[1] * 24 + 0x21, 0x17, 0x17)
+		draw_rect(r, pal(15), false, 2.0)
 	if blink != null and _on:
 		_draw_blink(blink)
 	if note != "":

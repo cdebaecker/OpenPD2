@@ -683,6 +683,8 @@ func _plan_view_open() -> void:
 	plan_view.chunk = Debrief.chunk(w)
 	plan_view.title = SaveFiles.mission_name(script_no)
 	plan_view.pressed.connect(_plan_region)
+	plan_view.order_pressed.connect(_plan_order_region)
+	plan_view.cell_pressed.connect(_plan_cell)
 	plan_view.maps_nav.connect(func(k: int):
 		# 0x444500's loop: next and the one before wrap over the four maps; close
 		match k:
@@ -789,12 +791,18 @@ func _plan_list_show() -> void:
 func _plan_view_update() -> void:
 	if plan_view == null:
 		return
+	if plan_st.mode != "page":
+		plan_view.views = []
 	if plan_st.mode != "list":
 		plan_view.list_win = null
 		for c in plan_view.get_children():
 			c.queue_free()                    # (the plans' list's windows)
 	if plan_st.mode != "maps":
 		plan_view.maps_i = -1
+	if plan_st.mode != "orders":
+		plan_view.order_fills = []
+		plan_view.cell_frame = null
+		plan_view.asking_cell = false
 	if plan_st.mode == "orders":
 		plan_view.orders = "open"
 	elif plan_view.orders == "open":
@@ -903,7 +911,11 @@ func _plan_draw() -> void:
 			if plan_view == null:
 				_plan_maps_ui(box)
 	hud_layer.add_child(plan_panel)
-	plan_panel.visible = plan_view == null or plan_st.mode == "orders"
+	# the orders are the plan window's own (0x444730 / 0x446320); the objective's question and
+	# the site's picker stay on the panel
+	plan_panel.visible = plan_view == null or (plan_st.mode == "orders" and plan_st.ask != null 			and plan_st.ask[0] in ["objective", "site"])
+	if plan_view and plan_st.mode == "orders":
+		_plan_orders_view()
 
 
 func _plan_button(text: String, f: Callable, disabled := false) -> Button:
@@ -1018,6 +1030,190 @@ func _plan_orders_ui(box: VBoxContainer) -> void:
 		if tt[1] > 0:
 			plan_st.ask = ["time", range(tt[0], tt[0] + tt[1])]))
 	row.add_child(_plan_button(ui("UI_PLAN_TARGET"), _plan_target_ask))
+
+
+func _plan_win(x: int, y: int, c: int, r: int, h: int, filled: bool) -> GameWindow:
+	## an unframed window of the orders in the plan's window: filled with the picture
+	## table's 0xA0 (pattern DS:0x50D699 with the solid 0x90) or black (none given)
+	var gw := GameWindow.new()
+	gw.cols = c
+	gw.rows = r
+	gw.lh = h
+	gw.framed = false
+	gw.black = true
+	gw.transparent = filled
+	gw.code = 0x75
+	gw.waits = false
+	gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gw.position = Vector2(x, y)
+	gw._layout()
+	if filled:
+		plan_view.order_fills.append(Rect2(x, y, c * 8, r * h))
+	plan_view.add_child(gw)
+	return gw
+
+
+func _plan_orders_view() -> void:
+	## 0x446320 for the group being ordered, in the plan's window: the call sign "%a08%12s"
+	## (DS:0x50C7E5[+1]) at (0x188, 0xF6), the name "%a05%15s" (DS:0x50C881[+0]) at (0x1F0,
+	## 0xF6), the plan type "%a05%28s" (DS:0x50C965[the entry's +0]) at (0x188, 0x106) — 12 px
+	## lines on 0xA0 —; the requirements (MES 0x31 + 9 t + 3 j that hold, "\n" between) at
+	## (0x188, 0x154) 28 x 3 of 16 px; "%a05%19s" MES 0xC1 + t at (0x188, 0x116) and the
+	## time "%5s" at (0x230, 0x116); "%a05%17s" MES 0xD1 + t at (0x188, 0x136) and the target
+	## at (0x218, 0x136) ("%2d-%2d" with the cell framed on the map, the direction, the site,
+	## or "%10s" of nothing); MES 0xE1 + t at (0x188, 0x38) 28 x 11 of 16 px
+	for c in plan_view.get_children():
+		c.queue_free()
+	plan_view.order_fills = []
+	plan_view.cell_frame = null
+	GameWindow.bmp(GameData.ROOT + "/images/plan_g/00.bmp")        # (the pictures' table)
+	plan_view.fill_col = GameWindow._pal256[0xA0] if GameWindow._pal256.size() > 0xA0 else Color.BLACK
+	var g: int = plan_st.g
+	var t := Flight.gb(w, g, 0x21) & 15
+	var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
+	var cs := func(n: int, _wd: int) -> String: return GameData.call_sign(campaign, n)
+	var mk := func(x: int, y: int, c: int, code: int, text: String, filled := true) -> void:
+		# "%a05%Ns": the text padded and cut to the window's columns (format_text's %s)
+		var gw: GameWindow = _plan_win(x, y, c, 1, 12, filled)
+		gw.print_text("\u0001" + char(code) + GameData.format_text("%" + str(c) + "s", [text]))
+	mk.call(0x188, 0xF6, 12, 0x08, cs.call(Flight.gb(w, g, 1), 12))
+	mk.call(0x1F0, 0xF6, 15, 0x05, cs.call(39 + Flight.gb(w, g, 0), 15))
+	mk.call(0x188, 0x106, 28, 0x05, plan_type_name(g))
+	var rq: GameWindow = _plan_win(0x188, 0x154, 28, 3, 16, false)
+	var reqs := Plan.requirements(w, g)
+	var rt := ""
+	for i in reqs.size():
+		rt += mes(reqs[i]) + ("\n" if i < 2 and i < reqs.size() - 1 else "")
+	rq.print_text(rt)
+	mk.call(0x188, 0x116, 19, 0x05, mes(0xC1 + t))
+	mk.call(0x230, 0x116, 5, 0x75, plan_time(time), false)
+	mk.call(0x188, 0x136, 17, 0x05, mes(0xD1 + t))
+	var tg := plan_target(g)
+	if Plan.kind(w, g) == 0:
+		tg = "%2d-%2d" % [Flight.s8(Flight.gb(w, g, 0x1A)), Flight.s8(Flight.gb(w, g, 0x1B))]
+		plan_view.cell_frame = [Flight.s8(Flight.gb(w, g, 0x1A)), Flight.s8(Flight.gb(w, g, 0x1B))]
+	mk.call(0x218, 0x136, 10, 0x75, tg, false)
+	var ex: GameWindow = _plan_win(0x188, 0x38, 28, 11, 16, false)
+	var et := GameData.base_text(campaign, 0xE1 + t, [], mission_index).replace("@", "")
+	if GameWindow.translated(et):
+		et = GameWindow.fit(et, 28)
+	ex.print_text(et)
+	plan_view.asking_cell = plan_st.ask != null and plan_st.ask[0] == "cell"
+	if plan_st.ask != null and plan_st.ask[0] in ["group", "name", "type", "time", "direction"]:
+		_plan_list_window(plan_st.ask)
+	plan_view.queue_redraw()
+
+
+func _plan_list_window(a: Array) -> void:
+	## 0x452A10 at the game's places in the plan's window, no header, a right click going
+	## back: the groups (0x1F8, 0xE0) 12 columns ("%s%-12s%s": %a7F for 0 2 4, %aEF for 6 8 10,
+	## %aCF for the others, the call sign), the names (0x148, 0xE0) 15 ("%-15s" of
+	## DS:0x50C881's 34), the plan types (0x178, 0xE0) 28 ("%-28s"), the times (0x178, 0xE0)
+	## 5 ("%-5s"), the directions DS:0x50E009 (0x178, 0xE0) 4
+	var labels := []
+	var at := Vector2i(0x178, 0xE0)
+	var c := 28
+	match a[0]:
+		"group":
+			at = Vector2i(0x1F8, 0xE0)
+			c = 12
+			for g in a[1]:
+				var pre := 0x7F if g in [0, 2, 4] else (0xEF if g in [6, 8, 10] else 0xCF)
+				labels.append("\u0001" + char(pre) + GameData.call_sign(campaign, Flight.gb(w, g, 1)) + "\u0001" + char(0x7F))
+		"name":
+			at = Vector2i(0x148, 0xE0)
+			c = 15
+			for i in a[1]:
+				labels.append(GameData.call_sign(campaign, 39 + i))
+		"type":
+			var names := SaveFiles.choice_texts(Plan.TYPE_NAMES)
+			for v in a[1]:
+				var n: int = w.scenario[Plan.entry(v)] if w.scenario.size() > Plan.entry(v) else 0
+				labels.append(names[n] if n < names.size() else "")
+		"time":
+			c = 5
+			for v in a[1]:
+				labels.append(plan_time(v))
+		"direction":
+			c = 4
+			var d := SaveFiles.choice_texts(Plan.DIRECTIONS)
+			for v in a[1]:
+				labels.append(d[v] if v < d.size() else "")
+	var ic := c
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))      # (engine-side: a longer translation widens it)
+	var hold := Control.new()
+	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var gw := GameWindow.select_window(at.x, at.y, ic, 0, 0, labels, ic, [], true)
+	gw.role = "plan_list"
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	plan_view.add_child(hold)
+	gw.chosen.connect(func(v: int):
+		if v < 0:
+			plan_st.ask = null
+		else:
+			_plan_ask_apply(a[0], a[1][v])
+		_plan_draw())
+
+
+func _plan_ask_apply(kind: String, row_v: int) -> void:
+	## an answer of the orders' lists (0x444730), as the plain panel's buttons apply it
+	var g: int = plan_st.g
+	match kind:
+		"group":
+			plan_st.g = row_v
+		"name":
+			if row_v != Flight.gb(w, g, 0):
+				Flight.setgb(w, g, 0, row_v)
+		"type":
+			if row_v != Flight.gb(w, g, 0x21) & 15:
+				Plan.set_type(w, g, row_v)
+		"time":
+			Plan.set_time(w, g, row_v)
+		"direction":
+			if row_v != Flight.s8(Flight.gb(w, g, 0x1F)):
+				Flight.setgb(w, g, 0x1F, row_v)
+	plan_st.ask = null
+
+
+func _plan_order_region(i: int) -> void:
+	## 0x444730's six regions
+	if plan_st.mode != "orders" or (plan_st.ask != null and plan_st.ask[0] != "cell"):
+		return
+	var g: int = plan_st.g
+	match i:
+		0:
+			_plan_leave()
+		1:
+			plan_st.ask = ["group", Plan.rows_groups(w)]
+		2:
+			plan_st.ask = ["name", range(Plan.NAMES)]
+		3:
+			var rows := Plan.rows_types(w, g)
+			if not rows.is_empty():
+				plan_st.ask = ["type", rows]
+		4:
+			var tt := Plan.times(w, g)
+			if tt[1] > 0:
+				plan_st.ask = ["time", range(tt[0], tt[0] + tt[1])]
+		5:
+			_plan_target_ask()
+	_plan_draw()
+
+
+func _plan_cell(c: Vector2i) -> void:
+	## 0x4459E0: a cell of the 15 x 15 grid, not the camera point's
+	if plan_st.ask == null or plan_st.ask[0] != "cell":
+		return
+	if c.x < 15 and c.y < 15 and (c.x != w.ds16(0x50AD95) or c.y != w.ds16(0x50AD97)):
+		Flight.setgb(w, plan_st.g, 0x1A, c.x)
+		Flight.setgb(w, plan_st.g, 0x1B, c.y)
+		plan_st.ask = null
+		_plan_draw()
 
 
 func _plan_target_ask() -> void:
@@ -4590,8 +4786,11 @@ var _pick_layer: CanvasLayer = null
 var _pick_count := 0
 
 
+var pick_window := true          # false: the pilot choice fills at random at once (tools)
+
+
 func _pick_interactive() -> bool:
-	return not auto_react and sortie_window and not _headless() and scripted.is_empty()
+	return pick_window and not auto_react and sortie_window and not _headless() and scripted.is_empty()
 
 
 func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
