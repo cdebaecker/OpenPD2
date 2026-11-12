@@ -37,6 +37,8 @@ class CrtRand:
 ## entry j; 0-8 sort it, ListSort.PICK), its questions (0x451E30: 1 yes, 0 no, -1 / -2 / -3)
 ## and notes (0x452170), named by their string's address.
 class Hooks:
+	var world: Pd2World = null       # the world being chosen for (set by campaign_pick: its windows read it)
+
 	func pick_list(entries: Array, picked: Array) -> int:
 		return -2
 
@@ -140,6 +142,7 @@ static func candidates(w: Pd2World) -> Array:
 ## 0x422050, the new campaign's pilot choice (rules.campaign_pick).
 static func campaign_pick(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 	var pd2 := 1 if w.campaign else 0
+	hooks.world = w
 	var texts: Dictionary = PICK_TEXT[pd2]
 	var need: int = PICK_COUNT[pd2]
 	var cands := candidates(w)

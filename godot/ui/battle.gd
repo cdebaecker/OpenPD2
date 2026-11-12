@@ -199,7 +199,20 @@ func _ready() -> void:
 		pick = Campaign.Hooks.new() if carried.get("new_campaign", false) else null
 	# the sandbox's PD2 chunk 0 starts as the title's new game does (0x46D780 "0"); its
 	# other chunks from their SAVEDATA.ORG as it is (the title, ui/boot.gd, starts the rest)
-	w = Mission.build(tables, doc, campaign, save, pick, crt, carried.is_empty() and pick != null and campaign == "pd2")
+	if pick != null and _pick_interactive():
+		# the pilot choice's windows (0x422050) wait for the player: the build runs on a
+		# worker thread meanwhile
+		var ph := BattlePickHooks.new()
+		ph.battle = self
+		var th := Thread.new()
+		var fresh := carried.is_empty() and campaign == "pd2"
+		th.start(func(): return Mission.build(tables, doc, campaign, save, ph, crt, fresh))
+		while th.is_alive():
+			await get_tree().process_frame
+		w = th.wait_to_finish()
+		_pick_close()
+	else:
+		w = Mission.build(tables, doc, campaign, save, pick, crt, carried.is_empty() and pick != null and campaign == "pd2")
 	w.play_safe = true          # in play: the game's crashes / hangs take RULES.md 5.23's logged safe path
 	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22;
 	# after a debrief, the number it set
@@ -2810,6 +2823,14 @@ func open_box(text: String, labels: Array) -> GameWindow:
 	## columns below it at its right ((.. + len + 2) * 8 - 0x30, y + 0x20); the first
 	## answers 0, the second or a right click 1. Engine-side fit: a text wider than the
 	## screen wraps (more lines), labels wider than 4 columns widen the buttons leftwards.
+	var wins := box_windows(text, labels)
+	_hold(wins)
+	wins[0].print_text(wins[0].get_meta("text"))
+	return wins[1]
+
+
+func box_windows(text: String, labels: Array) -> Array:
+	## ui_message_box's two windows (open_box's layout): [the message's, the buttons']
 	var t := text.replace("@", "").strip_edges()
 	var n := GameWindow.text_cols(t)
 	var rows := 1
@@ -2829,9 +2850,8 @@ func open_box(text: String, labels: Array) -> GameWindow:
 	var bw := GameWindow.select_window(right - 16 - ic * 8, y + 0x20 + (rows - 1) * 16, 0, 0, 0, labels, ic, [], true)
 
 	mw.waits = false
-	_hold([mw, bw])
-	mw.print_text(t)
-	return bw
+	mw.set_meta("text", t)
+	return [mw, bw]
 
 
 func open_menu(labels: Array, cols := 0xE) -> GameWindow:
@@ -4524,6 +4544,159 @@ func _mission_cmd_finished() -> void:
 func _mission_cmd_done() -> void:
 	busy = false
 	_after_command()
+
+
+# --- the new campaign's pilot choice (0x422050) --------------------------------------
+
+class BattlePickHooks extends Campaign.Hooks:
+	## Campaign.campaign_pick's windows on the build's worker thread
+	var battle
+
+	func pick_list(entries: Array, picked: Array) -> int:
+		var rows := []
+		for i in entries.size():
+			rows.append(battle.pick_row(world, entries[i], picked[i]))
+		battle.call_deferred("_open_pick", rows, picked.duplicate())
+		battle.react_sem.wait()
+		return battle.react_answer
+
+	func pick_ask(text: int, arg: Variant) -> int:
+		## 0x451E30: a message box of kind 1 in the start window; yes = 1
+		var t: String = GameData.exe_text(battle.campaign, text, [arg] if arg != null else [])
+		battle.call_deferred("_open_pick_box", t)
+		battle.react_sem.wait()
+		return battle.react_answer
+
+	func pick_note(text: int) -> int:
+		## 0x452170: a red line at y 0xAA, until a click
+		battle.call_deferred("_open_pick_note", GameData.exe_text(battle.campaign, text))
+		battle.react_sem.wait()
+		return 0
+
+
+var _pick_layer: CanvasLayer = null
+var _pick_count := 0
+
+
+func _pick_interactive() -> bool:
+	return not auto_react and sortie_window and not _headless() and scripted.is_empty()
+
+
+func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
+	## 0x422950's row for crew c: "%aFF%-14s %2d " (given and family name, crew +9), crew
+	## +0xA..+0xD as "%2X " (or "%2d " when negative), the skill bits 1 2 4 8 as 有 / 無
+	## ("%s %s %s %s%aFF"); a picked row's colour byte 'F' becomes 'C' (0x43, green)
+	var nm: Array = GameData.tables(campaign).crew_names
+	var id := Pd2World.s8(wd.crew[c * 16])
+	var n: Array = nm[id] if id >= 0 and id < nm.size() else ["", ""]
+	var name := "%s %s" % [n[0], n[1]]
+	var pad := 14 - GameWindow.text_cols(name)
+	var t := "\u0001" + char(0xCF if picked else 0xFF) + name + " ".repeat(maxi(pad, 0)) + " %2d " % Pd2World.s8(wd.crew[c * 16 + 9])
+	for f in [0xA, 0xB, 0xC, 0xD]:
+		var v := Pd2World.s8(wd.crew[c * 16 + f])
+		t += ("%2X " % v) if v >= 0 else ("%2d " % v)
+	var sk := wd.crew[c * 16 + 8]
+	var yn := func(b: int) -> String: return GameData.exe_text(campaign, 0x50CBB3 if sk & b else 0x50CBB6)
+	t += "%s %s %s %s" % [yn.call(1), yn.call(2), yn.call(4), yn.call(8)] + "\u0001" + char(0xFF)
+	return t
+
+
+func _pick_root() -> Control:
+	## the start window (DS:0x554FA4, 640 x 400, empty) while the choice is up
+	if _pick_layer == null:
+		_pick_layer = CanvasLayer.new()
+		_pick_layer.layer = 5
+		add_child(_pick_layer)
+		var bg := ColorRect.new()
+		bg.color = Color.BLACK
+		bg.size = get_viewport().get_visible_rect().size
+		_pick_layer.add_child(bg)
+		var r := Control.new()
+		r.size = Vector2(MAIN_W, MAIN_H)
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var vs := get_viewport().get_visible_rect().size
+		var sc := minf(vs.x / MAIN_W, vs.y / MAIN_H)
+		r.scale = Vector2(sc, sc)
+		_pick_layer.add_child(r)
+		r.name = "root"
+	return _pick_layer.get_node("root")
+
+
+func _pick_hold(wins: Array) -> Control:
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	for gw in wins:
+		hold.add_child(gw)
+	var top = wins[-1]
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			top.outside(ev.button_index))
+	_pick_root().add_child(hold)
+	react_panel = hold
+	return hold
+
+
+func _open_pick(rows: Array, picked: Array) -> void:
+	## 0x422050: the count line in a framed window at (0x38, 0x30) (42 x 1, flags 1:
+	## "現在%2d名選択 あと%2d名です", DASH DS:0x513A80 / PD2 0x513A64), the list (0x452A10)
+	## at (0x38, 0x50): its header DS:0x513A9C (42 x 2) whose nine columns (x 0x80 + 0x18 k
+	## .. +0x10, y 8 .. 0x27) are the sort buttons (0-8), the rows (9 + row), a right click
+	## the done / fill question (-2)
+	var pd2 := campaign != "dash"
+	var need: int = Campaign.PICK_COUNT[1 if pd2 else 0]
+	var n := 0
+	for p in picked:
+		if p:
+			n += 1
+	var cw := GameWindow.text_window(0x38, 0x30, 0x2A, 1, 1)
+	cw.waits = false
+	var regs := []
+	for k in 9:
+		regs.append([0x80 + 0x18 * k, 8, 0x90 + 0x18 * k, 0x27, 2])
+	var lst := GameWindow.select_window(0x38, 0x50, 0x2A, 2, 1, rows, 0x2A, regs, true)
+	lst.role = "pick"
+	lst.waits = false
+	_pick_hold([cw, lst])
+	cw.print_text(GameData.exe_text(campaign, 0x513A64 if pd2 else 0x513A80, [n, need - n]))
+	lst.print_text(GameData.exe_text(campaign, 0x513A9C))
+	lst.chosen.connect(func(v: int):
+		react_panel.queue_free()
+		react_panel = null
+		react_answer = v
+		react_sem.post())
+
+
+func _open_pick_box(t: String) -> void:
+	## 0x451E30: ui_message_box's layout (kind 1: 実行 / 中止) in the start window
+	var l: Array = BOX_LABELS[1]
+	var labels := [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])]
+	var wins := box_windows(t, labels)
+	_pick_hold(wins)
+	wins[0].print_text(wins[0].get_meta("text"))
+	wins[1].chosen.connect(func(v: int):
+		react_panel.queue_free()
+		react_panel = null
+		react_answer = 1 if v == 0 else 0
+		react_sem.post())
+
+
+func _open_pick_note(t: String) -> void:
+	## 0x452200 at y 0xAA: "%a4F" then the line, a click
+	var n := mini(GameWindow.text_cols(t), 76)
+	var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
+	gw.waits = not _headless()
+	var hold := _pick_hold([gw])
+	await gw.print_text("\u0001" + char(0x4F) + t + "\n")
+	hold.queue_free()
+	react_panel = null
+	react_sem.post()
+
+
+func _pick_close() -> void:
+	if _pick_layer:
+		_pick_layer.queue_free()
+		_pick_layer = null
 
 
 # --- the reaction menu ------------------------------------------------------------

@@ -247,7 +247,11 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # the command menu (unit_command_menu 0x4EE8D0): carry / release (0x4DDF70 picks one)
              0x517F20, 0x517F2E,
              # the info panel's weapon list (0x466DF0): blank, "--------", COVER UP, STACK, CARRY
-             0x516F48, 0x516F30, 0x516F54, 0x516F60, 0x516F6C) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
+             0x516F48, 0x516F30, 0x516F54, 0x516F60, 0x516F6C,
+             # the new campaign's pilot choice (0x422050): the count lines, the list's header,
+             # the questions and notes (PD2 / DASH)
+             0x513A64, 0x513A80, 0x513A9C, 0x513AF0, 0x513B00, 0x513B18, 0x513B2C, 0x513B44,
+             0x513B5C, 0x513B8C, 0x513BA8, 0x513BD8) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -261,7 +265,7 @@ def _exe_str(exe, va):
     except SystemExit:
         return ''
     n = 0
-    while n < 64 and exe_va(exe, va + n, 1) != b'\0':
+    while n < 160 and exe_va(exe, va + n, 1) != b'\0':
         n += 1
     return exe_va(exe, va, n).decode('cp932', 'replace')
 
