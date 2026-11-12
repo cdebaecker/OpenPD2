@@ -1472,7 +1472,9 @@ PC‑98 (ovseg 11 0x4BA2 / 0x4E87 / 0x6000) matches, including order 4's dead ca
     the unit‑index argument slot, so any unit other than unit 0 gets exactly one
     round. On PC‑98 it is stack garbage.
   - **The move result.** It is also unset, so a first round without a move
-    switches on a stale value. The port returns `AiUndefined` there.
+    switches on what its stack slot holds: from `ai_turn`, 0 or the order, 0x4F4790
+    when the view follows, 0x42ADFB at the fire point (5.23). Called alone, the port
+    returns `AiUndefined` there.
 
 All 11 orders are now ported. The PC‑98 dispatcher pairs them one to one with
 the Plus Dash routines.
@@ -2819,7 +2821,8 @@ with the player's clicks, menus and confirmations scripted: 23 / 23 random state
   announced) and is deployed (flags | 0x0C).
 - **Dropping everyone** (0x44B960): for each passenger, x and y come from two separate
   picks among the radius‑6 spiral (its centre excluded). So a unit can be set on
-  (70, odd row), off the map, where the game's search reads past its window.
+  (70, odd row), off the map; its search from there stays inside the layers (defined,
+  emulated: 5.23).
 
 **Type 1** (+2 & 0x0E = 8): the previous group's members drop around the last of them on
 the map (mode 1). Its +2 high nibble becomes 0xA and its position the called point; this
@@ -3292,6 +3295,104 @@ the questions answer a script).
   1 a direction 0–7 (+0x1F, if it differs); 2 / 3 a site, confirmed with
   the site question (0x514BB8, 0x451E30: yes sets +0x1F; −3 / −2 / −1 abort).
 The lists answer −12 / −11 for the window closed / quit (0x20000 / 0x40000).
+
+### 5.23 Undefined behaviours: what the game really does, and the play‑safe paths
+
+The ports stop where Pd2.exe leaves something undefined (`rules.py` raises
+NotImplementedError / ZeroDivisionError / AiUndefined, GDScript sets `w.fault`). This
+pass (2026‑11‑12) classified every such guard by reachability in the shipped game: **U**
+unreachable with the shipped data and scripts, **R** reachable only through rare random
+rolls or unusual play, **N** reachable in normal play. Then:
+
+- where the game's behaviour is defined in practice, the guard is replaced by it, read in
+  the disassembly and emulated (fixtures, 0 mismatches);
+- where the game itself crashes (a division by zero, a low‑memory read) or hangs (an
+  endless loop), the guard stays in `rules.py` and the fixtures, and the **engine in
+  play** takes a documented safe path instead (below). `Pd2World.play_safe` turns it on
+  (the battle and the title set it; tests leave it off and fault as before); each time it
+  is taken, `Pd2World.safe_hit` logs "[play‑safe ID] …" (a warning, and the battle log);
+- a value the game takes from Windows (a window handle, a system call's stack) cannot be
+  read from Pd2.exe: it is named here, and the engine's choice is stated.
+
+**Made faithful (emulated):**
+- **Order 10's first move result** (N; `ai_behaviour_10` 0x433020, from `ai_turn`
+  0x42A950). Without a move in the first round, the switch reads the move result's slot
+  [esp + 0x1C] before its first write. That slot is `ai_turn`'s [esp − 0x18] at the call,
+  and the last write there is always one of:
+  - `ai_progress`'s (0x42B360) `push esi`, run just before every unit's dispatch. It holds
+    the loop's ESI: 0, except when alerted, where 0x42ABD9 sets it to the order of the
+    pass for each unit it looks at and the dispatch result sets it back to 0. So it is 0
+    after a dispatched unit, and the order otherwise (10, or 7 at a pass's start);
+  - with option DS:0x551D29 bit 3 (the view follows the computer's units) in an alert,
+    `scroll_to` (0x4F4730) runs between them. Its call of 0x40213A leaves its return
+    address, 0x4F4790;
+  - in the fire‑point loop, `PeekMessageA`'s call at 0x42ADF5 leaves its return address,
+    0x42ADFB. This holds unless a window message is waiting for that unit; Translate /
+    DispatchMessage then write there, which is Windows' code.
+
+  0 runs the result‑0 branch (engage, support); every other value takes the default (the
+  rounds end). `rules.AI_TURN_STALE`, `AiTurn.STALE_*`; `verify_ai_turn` now runs the real
+  `ai_progress` and `scroll_to`, with order 10 and the follow option drawn: 80 / 80.
+- **A unit set down on (70, odd row)** (R; `drop_unit` 0x44B300). The drop's separate x
+  and y picks can give that hex, which is off the map. The search from it (0x47F950,
+  mode 0) reads only inside the 72‑wide layers (column 71 of a row and the like), so it
+  is defined. Emulated: 120 / 120 agree with the port's own search. The guard is gone.
+- **Unit −1's machine and round past their tables** (R; the sensors, 0x4806A0 /
+  0x450A80). Unit −1's record is the 55 bytes before the unit table, which lie in the
+  crews' combat records, so its machine and round numbers can be any byte after a long
+  campaign. The game reads what lies at that address in the working record set
+  (machines, then launchers, then ammunition); the ports now do the same (`_record_at`,
+  `mem8`).
+
+**OS‑dependent (not defined by Pd2.exe):**
+- **Reinforcements entering from side 3** (N: PD2 mission 7's group 12, DASH mission 7's
+  groups 12–14). The first member's x is 70 − (b & 1), with b read before it is set.
+  That slot is last written inside `GetUpdateRect` (user32), which `mission_loop` calls
+  just before 0x44F2E0. The engine passes b = 0 (x = 70). Later members take the
+  previous member's b, as in the game.
+- **Mission 7's groups 29 / 30, +0x1C** (N, at the alarm). These are two bytes of
+  `mission_loop`'s saved EDI, which `game_mode_loop` (0x487D70) loaded with its window
+  handle (an HWND). The battle leaves the field as loaded.
+
+**Play‑safe handling** (the engine only, logged; `rules.py` and the fixtures keep the
+guard). Every division by zero takes **a zero divisor as 1**:
+
+| ID | Where | What the game does | Reach | Engine in play |
+|---|---|---|---|---|
+| C1 | bomb hooks of missions 7, 9, 10 (0x4A4520, 0x4A88F0, 0x4AA190) | a charge whose hook byte is no site (one laid off the sites through the generic fuse rule), past the first entry: the entry number is used as a table address in low memory, an access violation | N | nothing breaks (as for entry 0) |
+| D1 | the hit chance's range term (0x413250) | weapon range 0 (a cleared pocket reads ammo −1, range 0): idiv by 0 | R | range taken as 1 |
+| D2 | the debrief's restock (`_refill`) | restock size 0: rand() % 0 | U | taken as 1 |
+| D3 | the group flight's time | machine speed 0 (machine 31): idiv by 0 | U | taken as 1 |
+| D4 | AP per turn (0x450690) | round capacity 0 | U | taken as 1 |
+| D5 | the hand‑over AP (0x4507C0) | an emptied pocket reads ammo −1, capacity 0 | N | taken as 1 |
+| D6 | melee damage (0x424290) | the defender's melee value 0 (machines 29–31 in DASH, 30 in PD2, all in mission data; a PLD loaded down to 0) | N | taken as 1 |
+| H1 | the new campaign (0x421B90) | too few ground pilots to draw: it draws forever; an empty list divides by 0 | U | the rest are drafted / drafting ends |
+| H3 | reinforcements (0x44F2E0) | a member that stays in its slot (destroyed but not dropped): the slot runs forever | U | next slot |
+| H4 | transport control (0x44BAC0) | AP left and nowhere to go: it loops | R | the move ends |
+| H5 | the airdrop (0x44AEA0) | a transport that stays in its slot: it loops | U | next slot |
+| H6 | the air fight | no pair left while both groups live (or 1000 rounds) | R | the fight ends |
+| H7 | the debrief's group dissolve | members that do not leave their group: it loops | U | the group is emptied |
+| H8 | mission 8's first call (0x4A7154) | fewer than 6 unused target points: random draws forever | U | the rest stay off the map |
+| H9 | mission 21's bombing (turn stage 0) | no unspent, uncharged gate left: random draws forever | R | the remaining charges are not laid |
+| H10 | mission 22's first call (0x4DC0D0) | more than 12 captured: no empty cell, draws forever | R | that crew is not placed |
+| H11 | mission 13's group 4 (0x4B74B0) | no free hex, or every member on the map: it loops | R | placing ends |
+
+**Kept as guards** (U: no shipped mission, save or table reaches them; the port faults
+if one is ever met): reads past a table by an id outside the shipped data (launchers /
+ammunition outside 0–95 and −1, the item damage class, the survey choice, the scenario
+hooks, a sensor without a round); crew numbers whose group (+5) is 64–254 (sortie,
+debrief, title, mission 10's init); records and windows the shipped files never produce
+(a short SCN_MIS read, mission 0, the plan's list answers, the equipment list, the
+pocket picker's state 3); `occupant_at` / `target_mark_at` / 0x46ECB0 / `height_at` / a
+mine outside the layer (units at (−1, −1) or y off the layer); mission 13's stack copies
+and rescue crews, mission 8's landing table by a +0x1F outside 0–2, mission 7's opening
+without groups 0 / 2 / 4, mission 1's speech past its landing table, mission 21's
+explosive entry −1 (its count never exceeds the free entries), the title's unset locals
+and DASH's new‑campaign draw (the list of crews 2–21 always gives 11 ground pilots).
+Also left as they were: mission 8's group 31 +0x1C, a local never written, whose last
+writer is somewhere in `mission_loop`'s earlier calls (not emulated whole; the battle
+leaves the field), the row‑72 writes past the layers (skipped), and DASH's radio lines
+and faces that read their missing arguments from the stack (display only).
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

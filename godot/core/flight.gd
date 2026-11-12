@@ -801,8 +801,10 @@ static func group_appears(w: Pd2World, g: int) -> int:
 	if speed == 30000:
 		return 0x10000
 	if speed == 0:
-		w.fault = "division by zero (machine speed 0)"
-		return 0
+		if not w.safe_hit("D3", "flight time: machine speed 0 (the game divides by zero): taken as 1"):
+			w.fault = "division by zero (machine speed 0)"
+			return 0
+		speed = 1
 	var n := (d + speed - 1) / speed
 	var arr := s16(gb(w, src, 0x1D) | gb(w, src, 0x1E) << 8)
 	if arr - n < 0:
@@ -1051,6 +1053,8 @@ static func air_fight(w: Pd2World, rng: Pd2Random, g: int, hooks: Hooks, easy :=
 		while group_alive(w, t):
 			rounds += 1
 			if rounds > 1000:
+				if w.safe_hit("H6", "air fight: 1000 rounds without an end: the fight ends"):
+					break
 				w.fault = "air fight: 1000 rounds without an end"
 				return 0
 			var fought := false
@@ -1125,6 +1129,8 @@ static func air_fight(w: Pd2World, rng: Pd2Random, g: int, hooks: Hooks, easy :=
 			if not group_alive(w, g):
 				break
 			if not fought:
+				if w.safe_hit("H6", "air fight: no pair left while both groups live (the game loops): the fight ends"):
+					break
 				w.fault = "air fight: no pair left while both groups live (the game loops forever)"
 				return 0
 	var gone := (player and gb(w, g, 5) == 0) or (not player and gb(w, t, 5) == 0)

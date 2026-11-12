@@ -28,8 +28,10 @@ static func strike(w: Pd2World, x: int, y: int, alert := 0, easy := false) -> in
 		var mx := Ai.machine_melee_of(w, x)
 		var my := Ai.machine_melee_of(w, y)
 		if my == 0:
-			w.fault = "division by zero (melee value 0)"
-			return w.ub(y, 0xD)
+			if not w.safe_hit("D6", "melee: the defender's melee value 0 (the game divides by zero): taken as 1"):
+				w.fault = "division by zero (melee value 0)"
+				return w.ub(y, 0xD)
+			my = 1
 		var e := mx * mx / my / 2
 		var c := W.s8(w.ucrew(x, 12)) + (1 if w.ucrew(x, 0) == 1 else 0)
 		var sq := c * c * (1 if c > 0 else (-1 if c < 0 else 0))

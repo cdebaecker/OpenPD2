@@ -45,8 +45,10 @@ static func max_ap(w: Pd2World, u: int) -> int:
 		var load := w.ammo(W.s8(a), 6) & 0x1F
 		var d := r0 if r0 < 128 else (r0 - 256) & 0xFFFFFFFF
 		if d == 0:
-			w.fault = "division by zero (max_ap: round capacity 0)"
-			continue
+			if not w.safe_hit("D4", "max_ap: round capacity 0 (the game divides by zero): taken as 1"):
+				w.fault = "division by zero (max_ap: round capacity 0)"
+				continue
+			d = 1
 		var part := ((((count * 200) & 0xFFFFFFFF) / d) * load) & 0xFFFFFFFF
 		part = (part / 100) & 0xFF
 		if W.s8(part) > load:

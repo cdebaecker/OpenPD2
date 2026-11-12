@@ -628,6 +628,9 @@ static func reinforcements(w: Pd2World, rng: Pd2Random, hooks: Hooks = null, sta
 					i += 1
 					continue
 				if last == Vector2i(i, k) and (w.ub(k, 0) & 1 or w.ub(k, 0xD) == 0):
+					if w.safe_hit("H3", "reinforcements: unit %d stays in its slot (the game loops): next slot" % k):
+						i += 1
+						continue
 					w.fault = "reinforcements: the game loops on this member forever"
 					return -1
 				last = Vector2i(i, k)

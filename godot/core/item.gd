@@ -10,6 +10,7 @@ const MAP := 72
 const ABORT := [0x10000, 0x20000, 0x40000]
 const UNITS := 0x506C93
 const MACHS := 0x50ADF5
+const M1_AMMO := 0x50ADF5 + 0x3E0 + 0x660   # the working ammunition table
 
 ## 0x4EDCC0: damage class by target armour x warhead (14 per row, read on past a row).
 const DAMAGE_CLASS := [
@@ -191,14 +192,13 @@ static func _m1_recon(w: Pd2World) -> Vector2i:
 	for k in 6:
 		if _m1(w, 0xF + 2 * k) == 0xFF or (_m1(w, 0x10 + 2 * k) & 0x30) == 0x20:
 			continue
+		# unit -1's bytes are combat records: its round and machine can be any number; the
+		# game reads the memory there, past the tables too (RULES.md 5.23)
 		var a := W.s8(_m1(w, 0x1B + 2 * (_m1(w, 0x10 + 2 * k) & 15)))
-		if a < 0 or a >= 96:
-			w.fault = "unit -1's round past the table (the game reads other memory)"
-			return Vector2i(0, 0)
-		rng_ = (rng_ + w.ammo(a, 4)) & 0xFF
-		pen = (pen + w.ammo(a, 5)) & 0xFF
+		rng_ = (rng_ + w.mem8(M1_AMMO + 12 * a + 4)) & 0xFF
+		pen = (pen + w.mem8(M1_AMMO + 12 * a + 5)) & 0xFF
 	var m := W.s8(_m1(w, 0xC))
-	return Vector2i((rng_ + w.machine(m, 7)) & 0xFF, (pen + w.machine(m, 8)) & 0xFF)
+	return Vector2i((rng_ + w.mem8(MACHS + 31 * m + 7)) & 0xFF, (pen + w.mem8(MACHS + 31 * m + 8)) & 0xFF)
 
 
 ## sees_unit(o, -1) (0x412190): unit -1's recon, from (vx, vy), sees unit o.

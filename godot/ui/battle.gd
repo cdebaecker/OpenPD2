@@ -198,6 +198,7 @@ func _ready() -> void:
 	# the sandbox's PD2 chunk 0 starts as the title's new game does (0x46D780 "0"); its
 	# other chunks from their SAVEDATA.ORG as it is (the title, ui/boot.gd, starts the rest)
 	w = Mission.build(tables, doc, campaign, save, pick, crt, carried.is_empty() and pick != null and campaign == "pd2")
+	w.play_safe = true          # in play: the game's crashes / hangs take RULES.md 5.23's logged safe path
 	# DS:0x50CE72, the mission number (0x46D780): PD2 chunks are 1-10, DASH chunks 11-22;
 	# after a debrief, the number it set
 	script_no = mission_index + (1 if campaign == "pd2" else 11)
@@ -2170,8 +2171,20 @@ func _cmd_carry_click(h: Vector2i) -> void:
 			_after_command())
 
 
+var _safe_shown := 0
+
+
+## RULES.md 5.23: the play-safe paths taken since the last report (the game would have
+## crashed or hung there), shown in the log.
+func _show_safe() -> void:
+	while _safe_shown < w.safe_log.size():
+		say("[color=orange]%s[/color]" % w.safe_log[_safe_shown])
+		_safe_shown += 1
+
+
 func _after_command() -> void:
 	_script_state()
+	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
@@ -2345,6 +2358,7 @@ func _end_turn_finish(res: int, undefined: Array, end_code := 0) -> void:
 		say("[color=gray](%d unit(s) reached a case the game leaves undefined; their orders ended there)[/color]" % undefined.size())
 	if res in Ai.AI_ABORT:
 		say("The computer's turn ended early (code 0x%X: its path-search pool ran out)." % res)
+	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
@@ -2624,6 +2638,7 @@ func _reinforcements() -> int:
 			say("[color=orange]%s destroyed[/color]" % unit_name(k))
 		elif before[k][1] == Vector2i(-1, -1) and w.active(k):
 			say("%s enters the map" % unit_name(k))
+	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
@@ -2735,6 +2750,7 @@ func _airdrop() -> int:
 			say("[color=orange]%s destroyed[/color]" % unit_name(k))
 		elif w.active(k) and not before[k][1]:
 			say("%s lands" % unit_name(k))
+	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
@@ -2776,6 +2792,7 @@ func _script_turn(stage: int) -> void:
 	## missions whose scripts are in.
 	if MissionScripts.has_scripts(script_no):
 		MissionScripts.run_turn(w, rng, stage, mission_hooks)
+		_show_safe()
 		if w.fault != "":
 			say("[color=red]rules fault: %s[/color]" % w.fault)
 			w.fault = ""
@@ -2828,6 +2845,7 @@ func _end_mission(code: int, exited := false) -> void:
 	dh.battle = self
 	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
 	debrief_result = Debrief.debrief(w, code, rng, crt, dh)
+	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""

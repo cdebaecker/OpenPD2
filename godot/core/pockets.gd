@@ -55,8 +55,10 @@ static func slot_hand_ap(w: Pd2World, u: int, s: int) -> int:
 		c -= 64
 	var cap := Pd2World.s8(ammo_rec(w, a, 0)) & 0xFFFFFFFF
 	if cap == 0:
-		w.fault = "slot_hand_ap: round capacity 0 (division by zero)"
-		return 0
+		if not w.safe_hit("D5", "hand-over AP: round capacity 0, an emptied pocket (the game divides by zero): taken as 1"):
+			w.fault = "slot_hand_ap: round capacity 0 (division by zero)"
+			return 0
+		cap = 1
 	var v := (((c * 200) & 0xFFFFFFFF) / cap * load) & 0xFFFFFFFF
 	var lb := (v / 100) & 0xFF
 	if load < lb:

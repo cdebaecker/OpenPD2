@@ -90,7 +90,9 @@ static func hit_terms(w: Pd2World, s: int, t: int, slot: int, mode: int, aim: in
 	if dist > 0 and w.active(s) and ranged:   # (Strike.hit has no range term)
 		var r := w.weapon_range(s, slot)
 		if r == 0:
-			return {"error": true}
+			if not w.safe_hit("D1", "hit chance: weapon range 0 (the game divides by zero): taken as 1"):
+				return {"error": true}
+			r = 1
 		rng_pen = maxi(0, ((dist - 3) * 10) / r)
 	if wh == 7:
 		rng_pen = 0

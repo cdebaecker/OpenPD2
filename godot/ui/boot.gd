@@ -212,6 +212,7 @@ func _run(entry: String) -> void:
 		return
 	busy = true
 	var w := SaveFiles.title_world()
+	w.play_safe = true          # in play: RULES.md 5.23's logged safe paths
 	var hk := BootTitleHooks.new()
 	hk.boot = self
 	worker = Thread.new()

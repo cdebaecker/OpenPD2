@@ -68,6 +68,12 @@ var drop_saved := [-1, 0, 0]      # DS:0x514D18 / 0x523E34 / 0x523E38: the unit 
 var reinf_saved := [-1, 0, 0]     # DS:0x514E04 / 0x523E48 / 0x523E4C: the unit an arriving member displaced, its hex
 var strike_saved := [-1, 0, 0]    # DS:0x51F3B4 / 0x5243B0 / 0x5243B4: the unit a striker flying in displaced, its hex
 var fault := ""                 # set where rules.py raises (division by zero): the game would crash
+## Play-safe mode (RULES.md 5.23): where the game itself crashes or hangs (a division by
+## zero, a low-memory read, an endless loop), the engine in play takes the documented safe
+## path instead of setting `fault`, and logs it (safe_hit). Off by default: the ports,
+## fixtures and tests stay faithful and fault there; the battle and the title turn it on.
+var play_safe := false
+var safe_log: PackedStringArray = []
 var events: Array = []          # side effects left to the caller: ["grow", unit, ability, n] ...
 
 
@@ -106,6 +112,7 @@ func _init(machines: PackedByteArray, launchers: PackedByteArray, ammo: PackedBy
 
 func duplicate_world() -> Pd2World:
 	var c := Pd2World.new(PackedByteArray(), PackedByteArray(), PackedByteArray(), terrain, n_units)
+	c.play_safe = play_safe
 	c.units = units.duplicate()
 	c.crew = crew.duplicate()
 	c.records = records
@@ -334,6 +341,18 @@ func mem_write(addr: int, v: int) -> void:
 				static_mem[base] = data
 				return
 		fault = "write at DS:0x%X" % addr
+
+
+## A crash or hang of the game met in play-safe mode: logged, then the caller takes its
+## documented safe path (RULES.md 5.23, table "Play-safe handling"). Returns true when the
+## caller should take it (play_safe on); false: the caller faults as the port does.
+func safe_hit(case_id: String, what: String) -> bool:
+	if not play_safe:
+		return false
+	var line := "[play-safe %s] %s" % [case_id, what]
+	safe_log.append(line)
+	push_warning(line)
+	return true
 
 
 # --- helpers named after the game functions (rules.World) --------------------------

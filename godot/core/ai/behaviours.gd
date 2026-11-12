@@ -21,6 +21,7 @@ class T:
 	var alert: int
 	var code := -1
 	var undefined := false
+	var stale: Variant = null   # order 10: its move result's slot before the first write (ai_turn's leftover)
 
 	func _init(w_: Pd2World, rng_: Pd2Random, u_: int, sight_: PackedByteArray, h_: AiTurnHooks, alert_: int) -> void:
 		w = w_
@@ -139,12 +140,13 @@ class T:
 		return move(mode)
 
 
-static func _run(order: int, w: Pd2World, rng: Pd2Random, u: int, sight: PackedByteArray, hooks: AiTurnHooks, alert: int) -> int:
+static func _run(order: int, w: Pd2World, rng: Pd2Random, u: int, sight: PackedByteArray, hooks: AiTurnHooks, alert: int, stale: Variant = null) -> int:
 	if hooks == null:
 		hooks = AiTurnHooks.new(w)
 	if hooks.rng == null:
 		hooks.rng = rng
 	var t := T.new(w, rng, u, sight, hooks, alert)
+	t.stale = stale
 	var res: int
 	match order:
 		1: res = _b1(t)
@@ -166,10 +168,11 @@ static func _run(order: int, w: Pd2World, rng: Pd2Random, u: int, sight: PackedB
 
 
 ## Run order `order` (1-11) for unit u. Returns 0, a UI abort code, or UNDEFINED.
-static func run(order: int, w: Pd2World, rng: Pd2Random, u: int, sight: PackedByteArray, hooks: AiTurnHooks = null, alert := 0) -> int:
+## stale: order 10's leftover first move result (AiTurn.run passes the game's; RULES.md 5.23).
+static func run(order: int, w: Pd2World, rng: Pd2Random, u: int, sight: PackedByteArray, hooks: AiTurnHooks = null, alert := 0, stale: Variant = null) -> int:
 	if order == 11:
 		return _b11(w, rng, u, sight, hooks, alert)
-	return _run(order, w, rng, u, sight, hooks, alert)
+	return _run(order, w, rng, u, sight, hooks, alert, stale)
 
 
 static func _fight(t: T, threshold: int, shots: int, any_check := false) -> bool:
@@ -793,7 +796,7 @@ static func _b10(t: T) -> int:
 	if any_spotted_player(t.w):
 		t.support(-1)
 	var count := 0
-	var res: Variant = null
+	var res: Variant = t.stale      # the slot before its first write (null: called alone)
 	var done := t.u != 0
 	while true:
 		if t.ap() <= 0:

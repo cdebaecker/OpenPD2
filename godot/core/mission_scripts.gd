@@ -2345,7 +2345,7 @@ static func _m07_height(x: int, y: int) -> int:
 static func m07_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 	var v := w.mem8(0x50AC1F + 4 * i)
 	if v < 1 or v > 8:
-		if i > 0:
+		if i > 0 and not w.safe_hit("C1", "mission 7 bomb hook: entry %d has no site (the game reads low memory and crashes): nothing breaks" % i):
 			w.fault = "m07 bomb hook: an entry without a site reads low memory"
 		return 0
 	var t: Array = M07_SITES[v - 1]
@@ -2693,7 +2693,7 @@ static func m09_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 	if v == 1 or v == 2:
 		ds_or(w, 0x50AD50 if v == 1 else 0x50AD52, 1)
 		break_site(w, 0x51B030 if v == 1 else 0x51B090, 9, 0x22)
-	elif i > 0:
+	elif i > 0 and not w.safe_hit("C1", "mission 9 bomb hook: entry %d has no site (the game reads low memory and crashes): nothing breaks" % i):
 		w.fault = "m09 bomb hook: an entry without a site reads low memory"
 	return 0
 
@@ -2990,6 +2990,8 @@ static func m08_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks, stal
 				if static_s16(w, 0x51AD88 + 4 * i):
 					left = true
 			if not left:
+				if w.safe_hit("H8", "mission 8 targets: no unused point left for unit %d (the game loops): units %d-45 stay unplaced" % [k, k]):
+					break
 				w.fault = "m08 targets: no unused point left (an endless loop)"
 				return 0
 			var i := rng.r16(12)
@@ -3176,7 +3178,7 @@ static func m10_break(w: Pd2World, hooks: Hooks, n: int) -> int:
 static func m10_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 	var v := w.mem8(0x50AC1F + 4 * i)
 	if v < 1 or v > 10:
-		if i > 0:
+		if i > 0 and not w.safe_hit("C1", "mission 10 bomb hook: entry %d has no site (the game reads low memory and crashes): nothing breaks" % i):
 			w.fault = "m10 bomb hook: an entry without a site reads low memory"
 		return 0
 	ds_or(w, 0x50AD50 + 2 * (v - 1), 1)
@@ -7557,6 +7559,8 @@ static func m21_calls(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 							if not used:
 								any_gate = true
 						if not any_gate:
+							if w.safe_hit("H9", "mission 21 bombing: no gate left to charge (the game loops): %d charges not laid" % k):
+								break
 							w.fault = "m21 bombing: no gate left to charge"
 							return 0
 						var gi := rng.r16(0x10) & 0xFFFF
@@ -8557,6 +8561,8 @@ static func m22_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 				if w.ds8(0x50AD50 + 2 * j) & 0x3E == 0x3E:
 					free = true
 			if not free:
+				if w.safe_hit("H10", "mission 22: no empty cell left for crew %d (the game loops): not placed" % c):
+					continue
 				w.fault = "m22 first call: no empty cell left"
 				return 0
 			var i2 := 0
@@ -8906,11 +8912,16 @@ static func m13_place4(w: Pd2World, rng: Pd2Random, P: int) -> int:
 		while true:
 			spins += 1
 			if spins > 100000:
+				if w.safe_hit("H11", "mission 13 group 4: no empty hex left (the game loops): the rest stay off the map"):
+					cnt = 0
+					break
 				w.fault = "m13 group 4: no empty hex left (the game loops forever)"
 				return 0
 			j = rng.r16(L.size()) & 0xFFFF
 			if occupant_raw(w, L[j][0], L[j][1]) == -1 and L[j][0] != 0:
 				break
+		if cnt == 0:
+			break
 		var m := -1
 		for q in 16:
 			var mm := g(w, 4, 6 + q)
@@ -8918,6 +8929,8 @@ static func m13_place4(w: Pd2World, rng: Pd2Random, P: int) -> int:
 				m = mm
 				break
 		if m == -1:
+			if w.safe_hit("H11", "mission 13 group 4: every member already on the map (the game loops): placing ends"):
+				break
 			w.fault = "m13 group 4: every member on the map (the game loops forever)"
 			return 0
 		var crew := w.ub(m, 0xB)

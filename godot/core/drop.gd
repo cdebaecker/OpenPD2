@@ -219,9 +219,7 @@ static func drop_unit(w: Pd2World, rng: Pd2Random, k: int, x: int, y: int, mode:
 			w.setb(k, 1, (w.ub(k, 1) & 0xDF) | 0x10)
 		else:
 			w.setb(k, 1, (w.ub(k, 1) & 0xF7) | 4)
-	if not w.on_map(x, y):
-		w.fault = "a unit set down off the map (its search reads past the window)"
-		return 0
+	# (70, odd row) off the map: the search reads only inside the layers (defined, emulated)
 	for o2 in Action.step_search(w, k, 0):
 		if w.sb(o2, 0x36) > 2:
 			var res2 := hooks.discovered(o2)
@@ -371,6 +369,8 @@ static func control(w: Pd2World, rng: Pd2Random, u: int, passengers: Array, a: i
 		else:
 			guard += 1
 			if guard > 2:
+				if w.safe_hit("H4", "transport %d has AP and nowhere to go (the game loops): its move ends" % u):
+					break
 				w.fault = "a transport with AP and nowhere to go: the game loops"
 				return -1
 		if w.ub(u, 0xE) == 0 or w.ub(u, 0) & 1 or menu:
@@ -442,6 +442,9 @@ static func airdrop(w: Pd2World, rng: Pd2Random, hooks: Hooks = null) -> int:
 				if n == 0:
 					break
 				if last == Vector2i(i, c) and (w.ub(c, 0xD) == 0 or w.ub(c, 0) & 1):
+					if w.safe_hit("H5", "airdrop: transport %d stays in its slot (the game loops): next slot" % c):
+						i += 1
+						continue
 					w.fault = "the game loops on this transport forever"
 					return -1
 				last = Vector2i(i, c)

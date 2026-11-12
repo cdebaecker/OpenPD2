@@ -98,11 +98,18 @@ static func refresh_strikes(w: Pd2World, side := 3) -> void:
 					Ai.mark_strike(w, w.ub(k, 7), w.ub(k, 8), k, w.ub(k, 0x35))
 
 
+## Order 10's first move result when no move was made (rules.AI_TURN_STALE, RULES.md 5.23):
+## the slot keeps ai_progress's push of the loop's ESI, or scroll_to's last return address
+## (the view following the computer in an alert), or PeekMessageA's (the fire-point loop).
+const STALE_FOLLOW := 0x4F4790
+const STALE_FIRE_POINT := 0x42ADFB
+
+
 ## 0x42B990
-static func dispatch(w: Pd2World, rng: Pd2Random, k: int, order: int, sight: PackedByteArray, hooks: AiTurnHooks, alert: int) -> int:
+static func dispatch(w: Pd2World, rng: Pd2Random, k: int, order: int, sight: PackedByteArray, hooks: AiTurnHooks, alert: int, stale: Variant = null) -> int:
 	if order < 1 or order > 11:
 		return 0
-	var res := AiBehaviours.run(order, w, rng, k, sight, hooks, alert)
+	var res := AiBehaviours.run(order, w, rng, k, sight, hooks, alert, stale)
 	if res == Ai.UNDEFINED:
 		return res
 	return res if res in Ai.AI_ABORT else 0
@@ -154,10 +161,19 @@ static func run(w: Pd2World, rng: Pd2Random, hooks: AiTurnHooks = null, alert :=
 		hooks.rng = rng
 	var sight := player_sight_map(w)
 	refresh_strikes(w, 3)
+	var esi := 0                # the loop's ESI (0x42AB03); ai_progress pushes it into order 10's move result
 	for order in AiBehaviours.ORDER_PRIORITY:
 		for k in w.n_units:
-			if w.sb(k, 0x36) > 2 and w.active(k) and _nib(w.ub(k, 3), alert) == order:
-				var res := dispatch(w, rng, k, order, sight, hooks, alert)
+			if w.sb(k, 0x36) > 2 and w.active(k):
+				var stale: Variant = esi
+				if alert:
+					esi = order         # 0x42ABD9
+				if _nib(w.ub(k, 3), alert) != order:
+					continue
+				if alert and hooks.follow:
+					stale = STALE_FOLLOW
+				var res := dispatch(w, rng, k, order, sight, hooks, alert, stale)
+				esi = 0
 				if res == Ai.UNDEFINED:
 					undefined.append(k)
 					if strict:
@@ -181,7 +197,7 @@ static func run(w: Pd2World, rng: Pd2Random, hooks: AiTurnHooks = null, alert :=
 				continue
 			if not enter_hex(w, k, cls):
 				continue
-			var res2 := dispatch(w, rng, k, _nib(w.ub(k, 3), alert), sight, hooks, alert)
+			var res2 := dispatch(w, rng, k, _nib(w.ub(k, 3), alert), sight, hooks, alert, STALE_FIRE_POINT)
 			if res2 == Ai.UNDEFINED:
 				undefined.append(k)
 				if strict:

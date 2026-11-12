@@ -210,10 +210,13 @@ static func _refill(w: Pd2World, crt: Campaign.CrtRand, kind: int, i: int, x: in
 	if _held(w, kind, i) < x:
 		add = x
 	else:
+		var xd := x
 		if x == 0:
-			w.fault = "debrief restock: a record with restock 0 (the game divides by it)"
-			return
-		add = crt.next() % x + 1
+			if not w.safe_hit("D2", "debrief restock: restock 0 (the game divides by zero): taken as 1"):
+				w.fault = "debrief restock: a record with restock 0 (the game divides by it)"
+				return
+			xd = 1
+		add = crt.next() % xd + 1
 	if 0xFF - st < add:
 		add = 0xFF - st
 	w.stock[o] = (st + add) & 0xFF
@@ -376,8 +379,13 @@ static func _dissolve(w: Pd2World, step: int, dash: bool, hooks: Hooks) -> int:
 					Action.group_drop_player(w, g, m)
 					w.setb(m, 0, w.ub(m, 0) & 0xFB)
 			if w.groups.slice(G + 5, G + 22) == before:
-				w.fault = "debrief: a member its unit does not match (the game loops)"
-				return 0
+				if w.safe_hit("H7", "debrief: group %d's members do not leave it (the game loops): the group is emptied" % g):
+					w.groups[G + 5] = 0
+					for i in 16:
+						w.groups[G + 6 + i] = 0xFF
+				else:
+					w.fault = "debrief: a member its unit does not match (the game loops)"
+					return 0
 	for c in 64:
 		if w.cb(c, 4) <= step and w.cb(c, 2) < 3:
 			var g := w.cb(c, 5)

@@ -288,6 +288,8 @@ static func new_campaign(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 	if not pd2:
 		while count < 6:
 			if w.crew_pool_n == 0:
+				if w.safe_hit("H1", "new_campaign: an empty free-pilot list (the game divides by zero): no more drafted"):
+					break
 				w.fault = "new_campaign: an empty free-pilot list (the game divides by it)"
 				return 0
 			var left := {}
@@ -296,6 +298,10 @@ static func new_campaign(w: Pd2World, crt: CrtRand, hooks: Hooks) -> int:
 				if q != 1 and _crew(w, q, 4) == 0 and _crew(w, q, 3) == 0:
 					left[q] = true
 			if left.size() < 6 - count:            # the game draws on for ever
+				if w.safe_hit("H1", "new_campaign: too few ground pilots to draw (the game hangs): the rest drafted"):
+					for q in left:
+						_set_crew(w, q, 4, 3)
+					break
 				w.fault = "new_campaign: too few ground pilots to draw (the game hangs)"
 				return 0
 			var b: int = w.ds[2 + crt.next() % w.crew_pool_n]

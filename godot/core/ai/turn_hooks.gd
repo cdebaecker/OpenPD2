@@ -5,6 +5,7 @@ extends AiHooks
 
 var w: Pd2World
 var easy := false
+var follow := false             # option DS:0x551D29 bit 3: the view follows the computer's units
 var rng: Pd2Random
 
 
