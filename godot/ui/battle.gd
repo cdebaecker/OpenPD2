@@ -670,6 +670,18 @@ func _plan_view_open() -> void:
 	plan_view.chunk = Debrief.chunk(w)
 	plan_view.title = SaveFiles.mission_name(script_no)
 	plan_view.pressed.connect(_plan_region)
+	plan_view.maps_nav.connect(func(k: int):
+		# 0x444500's loop: next and the one before wrap over the four maps; close
+		match k:
+			0:
+				plan_view.maps_i = 0 if plan_view.maps_i == 3 else plan_view.maps_i + 1
+			1:
+				plan_view.maps_i = 3 if plan_view.maps_i == 0 else plan_view.maps_i - 1
+			2:
+				plan_view.maps_i = -1
+				plan_st.mode = "page"
+		plan_st.i = maxi(plan_view.maps_i, 0)
+		plan_view.queue_redraw())
 	plan_view.advanced.connect(func(): plan_st.j += 1; _plan_draw())
 	hud_layer.add_child(plan_view)
 	var vs := get_viewport().get_visible_rect().size
@@ -695,20 +707,81 @@ func _plan_region(i: int) -> void:
 			plan_st.ask = null
 		5:
 			plan_st.mode = "list"
+			if plan_view:
+				_plan_list_show()
+				return
 		6:
 			_plan_done()
 			return
 		7:
 			plan_st.mode = "maps"
 			plan_st.i = 0
+			if plan_view:
+				plan_view.maps_i = 0
 		8:
 			plan_view.note = plan_exe(0x514A98 if w.mem8(0x50CBE4) else 0x514AA4)
 	_plan_draw()
 
 
+func _plan_list_show() -> void:
+	## 0x4442C0: the title DS:0x50E060 in an unframed window at (0x188, 0x18) (28 x 1, 12 px),
+	## then a window at (0x188, 0x38) (28 x 11 of 16 px, flags 1, no pattern) printing each
+	## listed group's MES 0xF1 + type (0x0C, then the time 0x453900(+0x1D,
+	## DS:0x506651), the call signs DS:0x50C881[+0] and DS:0x50C7E5[+1], the target), each
+	## clearing the window and waiting for a click
+	plan_view.page_title = ""
+	plan_view.lines = []
+	plan_view.blink = null
+	plan_view.views = []
+	plan_view.queue_redraw()
+	for c in plan_view.get_children():
+		c.queue_free()
+	var mk := func(x: int, y: int, c: int, r: int, h: int) -> GameWindow:
+		var gw := GameWindow.new()
+		gw.cols = c
+		gw.rows = r
+		gw.lh = h
+		gw.framed = false
+		gw.black = true
+		gw.code = 0x75
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gw.position = Vector2(x, y)
+		gw._layout()
+		plan_view.add_child(gw)
+		return gw
+	var tw: GameWindow = mk.call(0x188, 0x18, 0x1C, 1, 12)
+	tw.waits = false
+	tw.print_text(plan_exe(0x50E060))
+	var lw: GameWindow = mk.call(0x188, 0x38, 0x1C, 0xB, 16)
+	lw.waits = not _headless()
+	plan_view.list_win = lw
+	for g in Plan.list_rows(w):
+		var t := Flight.gb(w, g, 0x21) & 15
+		var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
+		var tgt := plan_target(g)
+		if Plan.kind(w, g) == 0:                  # (here wsprintfA "%d-%d", DS:0x514AB0)
+			tgt = "%d-%d" % [Flight.s8(Flight.gb(w, g, 0x1A)), Flight.s8(Flight.gb(w, g, 0x1B))]
+		var text := GameData.base_text(campaign, 0xF1 + t, [plan_time(time), GameData.call_sign(campaign, 39 + Flight.gb(w, g, 0)),
+				GameData.call_sign(campaign, Flight.gb(w, g, 1)), tgt, 5 * Flight.s8(Flight.gb(w, g, 0x20))], mission_index)   # (its 0x0C and '@' kept)
+		if GameWindow.translated(text):
+			text = GameWindow.fit(text, 0x1C)
+			if not text.begins_with(char(0x0C)):
+				text = char(0x0C) + text        # (the translations leave out the clear the Japanese starts with)
+		await lw.print_text(text)
+		if not is_instance_valid(lw):
+			return
+	plan_view.list_win = null
+
+
 func _plan_view_update() -> void:
 	if plan_view == null:
 		return
+	if plan_st.mode != "list":
+		plan_view.list_win = null
+		for c in plan_view.get_children():
+			c.queue_free()                    # (the plans' list's windows)
+	if plan_st.mode != "maps":
+		plan_view.maps_i = -1
 	if plan_st.mode == "orders":
 		plan_view.orders = "open"
 	elif plan_view.orders == "open":
@@ -792,6 +865,7 @@ func _plan_draw() -> void:
 		box.add_child(title)
 	var buttons := HBoxContainer.new()            # the screen's nine regions (0x438210(9))
 	box.add_child(buttons)
+	buttons.visible = plan_view == null           # (the plan's window takes its own clicks)
 	var orders_open: bool = plan_st.mode == "orders"
 	for k in 4:
 		buttons.add_child(_plan_button(plan_exe(Plan.PAGE_TITLES[k]), func(): plan_st.mode = "page"; plan_st.k = k; plan_st.j = 0, orders_open))
@@ -810,10 +884,13 @@ func _plan_draw() -> void:
 		"orders":
 			_plan_orders_ui(box)
 		"list":
-			_plan_list_ui(box)
+			if plan_view == null:
+				_plan_list_ui(box)
 		"maps":
-			_plan_maps_ui(box)
+			if plan_view == null:
+				_plan_maps_ui(box)
 	hud_layer.add_child(plan_panel)
+	plan_panel.visible = plan_view == null or plan_st.mode == "orders"
 
 
 func _plan_button(text: String, f: Callable, disabled := false) -> Button:

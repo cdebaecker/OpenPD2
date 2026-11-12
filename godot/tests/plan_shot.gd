@@ -1,8 +1,9 @@
 extends SceneTree
 ## Render the operation plan before a battle and save it: godot --path engine/godot -s
-## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders|xms]
+## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders|xms|list|maps]
 ## page: 0-3 (A-D, default 1), clicks: the page's waits clicked through (default 0: the
-## first blink shown lit); "orders" opens the orders (plan_gb.pac), "xms" the XMS box.
+## first blink shown lit); "orders" opens the orders (plan_gb.pac), "xms" the XMS box,
+## "list" the plans' list (0x4442C0), "maps" the area maps (0x444500).
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -21,7 +22,12 @@ func _init() -> void:
 			b._plan_region(4)
 		"xms":
 			b._plan_region(8)
-	b._plan_draw()
+		"list":
+			b._plan_region(5)                 # the plans' list: its first group's text
+		"maps":
+			b._plan_region(7)                 # the area maps: the first
+	if not (args.size() > 5 and args[5] in ["list", "maps"]):
+		b._plan_draw()
 	if b.plan_view:
 		b.plan_view._on = true                # the blink lit
 		b.plan_view.set_process(false)

@@ -20,6 +20,7 @@ extends Control
 
 signal pressed(region: int)
 signal advanced
+signal maps_nav(k: int)          # the area maps' regions: 0 next, 1 the one before, 2 close
 
 const W := 640
 const H := 400
@@ -38,6 +39,10 @@ var views: Array = []           # Plan.view_step's windows and pictures
 var blink: Variant = null       # the blink waiting for a click
 var orders := ""                # "" none, "open" (plan_gb), "closed" (plan_gc put back)
 var note := ""                  # the XMS box's text, until a click
+var maps_i := -1                # the area map shown (0x444500), -1 none
+var list_win: Variant = null    # the plans' list's text window (0x4442C0) while it prints
+## 0x444500's regions (type 2): next, the one before, close
+const MAPS_REGIONS := [Rect2i(0x188, 0x120, 0x2F, 0xF), Rect2i(0x1B8, 0x120, 0x2F, 0xF), Rect2i(0x188, 0x130, 0x5F, 0xF)]
 var _on := false
 var _t := 0.0
 var _tex := {}
@@ -90,6 +95,16 @@ func _gui_input(ev: InputEvent) -> void:
 		advanced.emit()
 		return
 	var p := Vector2i(ev.position)
+	if list_win != null and is_instance_valid(list_win) and list_win._waiting:
+		list_win.outside(ev.button_index)
+		return
+	if maps_i >= 0:
+		for i in MAPS_REGIONS.size():
+			var r: Rect2i = MAPS_REGIONS[i]
+			if p.x >= r.position.x and p.x <= r.end.x and p.y >= r.position.y and p.y <= r.end.y:
+				maps_nav.emit(i)
+				return
+		return
 	for i in REGIONS.size():
 		var r: Rect2i = REGIONS[i]
 		if p.x >= r.position.x and p.x <= r.end.x and p.y >= r.position.y and p.y <= r.end.y:
@@ -161,6 +176,11 @@ func _draw() -> void:
 			var sz := f.get_multiline_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, 28 * 8, fs)
 			draw_multiline_string(f, Vector2(0x188 + 8, y + fs), part, HORIZONTAL_ALIGNMENT_LEFT, 28 * 8, fs, -1, Color.WHITE)
 			y += maxf(sz.y, fs + 2)
+	if maps_i >= 0:
+		# 0x444500: AMAP.pac entry DS:0x50663D x 4 - 4 + i at (0x30, 0x48)
+		var am := tex("%s/%s/images/amap/%02d.bmp" % [root, camp, (chunk - 1) * 4 + maps_i])
+		if am:
+			draw_texture(am, Vector2(0x30, 0x48))
 	if blink != null and _on:
 		_draw_blink(blink)
 	if note != "":
