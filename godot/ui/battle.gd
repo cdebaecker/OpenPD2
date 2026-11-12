@@ -4033,7 +4033,7 @@ class BattleDebriefHooks extends Debrief.Hooks:
 	var screens := []           # the screens the game shows (DebriefView replays them)
 
 	func screen(kind: String, data: Variant = null) -> int:
-		if kind in ["clear", "fail", "gameover", "single", "results"]:
+		if kind in ["clear", "fail", "gameover", "single", "results", "ending"]:
 			screens.append([kind, data.duplicate() if data is Array else data])
 		match kind:
 			"clear", "fail", "gameover", "ending", "single":

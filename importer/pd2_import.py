@@ -412,11 +412,15 @@ def export_messages(game, out):
 # machine pictures datau.pac (by machine +0x19).
 # The battle's info panel (0x4830E0): hex_g.pac (208 x 400).
 SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac',
-                 'hidan.pac', 'dface.pac', 'hex_g.pac')
+                 'hidan.pac', 'dface.pac', 'hex_g.pac',
+                 # the debrief's score cards (0x468490): the marks, the characters
+                 'score_p.pac', 'chara.pac')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
                    # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
                    # the game over, a single mission's end
-                   'm_clr.pac', 'm_fail.pac', 'gameover.pac', 'single.pac')    # (amap: the operation plan's area maps, 0x444500)
+                   'm_clr.pac', 'm_fail.pac', 'gameover.pac', 'single.pac',
+                   # the score cards' background and the pilots' names
+                   'score_g.pac', 'score_n.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 
 def export_images(game, out):
