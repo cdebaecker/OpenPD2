@@ -223,7 +223,7 @@ func _run(entry: String) -> void:
 
 func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 	## game_mode_loop after 0x46D780: below 1 the title again; bit 0x80 a battle's save
-	## (0x436530 at once: not ported); bit 0x40 a single mission; the new campaign
+	## (0x436530 at once: the battle resumes, Title.mission_resume); bit 0x40 a single mission; the new campaign
 	## (0x421B90) for button 0's entries returning 1 but the single mission; past 20 the
 	## title; else the mission start with savedata.tmp
 	worker.wait_to_finish()
@@ -236,9 +236,8 @@ func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 		return
 	if ret < 1:
 		return
-	if ret & 0x80:
-		_show(ui("UI_TITLE_NO_RESUME"), [[ui("UI_OK"), 0]], func(_a): pass)
-		return
+	var resume := ret & 0x80 != 0
+	ret &= 0x7F
 	var single := ret & 0x40 != 0
 	ret &= 0x3F
 	var new_campaign := ret == 1 and entry != "1" and not single
@@ -249,7 +248,7 @@ func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 	battle.campaign = "pd2" if w.campaign else "dash"
 	battle.mission_index = Debrief.chunk(w) - 1
 	battle.title_carry = {"image": Debrief.save_image(w), "script": w.script_no, "stash": w.stash,
-		"new_campaign": new_campaign}
+		"new_campaign": new_campaign and not resume, "resume": resume}
 	get_tree().root.add_child(battle)
 	get_tree().current_scene = battle
 	queue_free()

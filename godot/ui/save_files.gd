@@ -53,22 +53,17 @@ static func mission_name(m: int) -> String:
 	return names[m] if m >= 0 and m < names.size() else "#%d" % m
 
 
-## 0x498070's line for slot s: the save's mode (Campaign / One Shot / Rescue), its name
-## (DS:0x50663E) and the verb (0x519ED8 overwrite, 0x519EE8 load), format 0x519EF0. The
-## date the game prints for a save made in a battle (0x453900) is not ported: left blank.
+## 0x498070's line for slot s (Title.slot_line): the save's mode (Campaign / One Shot /
+## Rescue), its name (DS:0x50663E), the time (0x453900: the mission turn from DS:0x506651,
+## for a save made in a battle; else 0x50CBD1's 編成) and the verb (0x519ED8 overwrite,
+## 0x519EE8 load), format 0x519EF0.
 static func slot_line(s: int, verb: int) -> String:
-	var d: Variant = read("PD2REC%02d.BIN" % s)
-	var data: PackedByteArray = d if d != null else PackedByteArray()
-	if data.size() < 8 + 0x1C or data.slice(0, 8) != Title.magic():
+	var line: Variant = Title.slot_line(read("PD2REC%02d.BIN" % s), 0xFF, false)
+	if not line is Array:
 		return "%02d  %s" % [s + 1, GameData.ui_text("UI_SLOT_EMPTY")]
-	var mode := data[8] | data[9] << 8
-	var kind := exe(0x50CBF2 if mode == 1 else (0x50CBFB if mode == 2 else 0x50CC04))
-	var name := data.slice(8 + 6, 8 + 0x1C)
-	var z := name.find(0)
-	if z != -1:
-		name = name.slice(0, z)
-	# wsprintfA's format (%8s right-aligned, %-18s left-aligned)
-	return "%02d  %s" % [s + 1, GameData.exe_raw("dash", 0x519EF0) % [kind, saved_name(name), "", exe(verb)]]
+	var when: String = line[2] if line[2] != null else exe(Title.SLOT_SORTIE_TIME)
+	# wsprintfA's format (%8s right-aligned, %-18s left-aligned, %-5s)
+	return "%02d  %s" % [s + 1, GameData.exe_raw("dash", 0x519EF0) % [exe(line[0]), saved_name(line[1]), when, exe(verb)]]
 
 
 ## The save's name (Shift-JIS): the mission name it was copied from, found in the exe's

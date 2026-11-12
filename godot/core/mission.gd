@@ -40,7 +40,8 @@ static func build(tables: Dictionary, doc: Dictionary, campaign: String, save: A
 		w.n_units = 254
 		if pick != null and crt != null:
 			Campaign.new_campaign(w, crt, pick)
-		Campaign.mission_load(w, int(doc.get("mission", 0)) + 1, doc.init, doc.npc)
+		if w.ds8(0x50AD94) == 0:       # 0x416CF0 loads INIT / NPC only for a new mission (a save's units are its own)
+			Campaign.mission_load(w, int(doc.get("mission", 0)) + 1, doc.init, doc.npc)
 		w.mode_663a = 0                # 0x416CF0 leaves DS:0x50663A = 0 for the briefing and the sortie
 	else:
 		var init: PackedByteArray = doc.init

@@ -597,3 +597,351 @@ static func sortie_save(w: Pd2World, hooks: SaveHooks) -> int:
 		return 1
 	hooks.write("MEMBER%02d.DAT" % (s - 1), member_write(w))
 	return s
+
+
+# --- the battle's saves (the system menu 0x4847C0, emulated by verify_battle_save) ------
+
+const KEMURI_PD2 := 0xA98                 # KEMURInn.DAT's size by the campaign flag (DASH 0xD20)
+const KEMURI_DASH := 0xD20
+const BATTLE_ABORTS := [0x10000, 0x20000, 0x40000]
+const SYSTEM_TOGGLES := {2: 0x10, 3: 0x100, 4: 0x1000, 5: 0x2000, 6: 0x4000, 7: 0x8000}   # DS:0x551D29 by entry
+const SYSTEM_TEXTS := {2: [0x1F9, 0x1FA], 3: [0x209, 0x20A], 4: [0x20D, 0x20C], 5: [0x20E, 0x20F],
+		6: [0x1CA, 0x210], 7: [0x214, 0x215]}     # the question by the bit: [set, clear]
+const SYSTEM_LABELS := [0x518224, 0x51823C, 0x518250, 0x518264, 0x518278, 0x51828C, 0x5182A0, 0x5182B0]
+const SLOT_SORTIE_TIME := 0x50CBD1        # "編成": the slot line's time for a save made outside a battle
+
+
+## mission_state's write (rules.kemuri_pack): each pair of F bytes (e, o) into one (e's
+## bits 0, 2, 3, 6 (PD2 5), then o's), the AI memory, DASH bit 7 of every F byte.
+static func kemuri_pack(w: Pd2World) -> PackedByteArray:
+	var hi := 5 if w.campaign else 6
+	var out := PackedByteArray()
+	for i in 0xA20:
+		var e := w.F[2 * i]
+		var o := w.F[2 * i + 1]
+		out.append((e & 1) | (e >> 2 & 1) << 1 | (e >> 3 & 1) << 2 | (e >> hi & 1) << 3
+				| (o & 1) << 4 | (o >> 2 & 1) << 5 | (o >> 3 & 1) << 6 | (o >> hi & 1) << 7)
+	var mem := w.memory.duplicate()
+	mem.resize(0x78)
+	out.append_array(mem)
+	if not w.campaign:
+		for j in 0x288:
+			var b := 0
+			for k in 8:
+				b = b << 1 | w.F[8 * j + k] >> 7
+			out.append(b)
+	return out
+
+
+## mission_state's read (rules.kemuri_unpack): 0x484680 back into F (the other bits stay;
+## e's bit 7 cleared, PD2 bit 5 and 6 both from bit 3), the AI memory, DASH 0x4845A0.
+static func kemuri_unpack(w: Pd2World, data: PackedByteArray) -> void:
+	for i in 0xA20:
+		var p := data[i]
+		var e := w.F[2 * i]
+		var o := w.F[2 * i + 1]
+		e = (e & 0xF2) | (p & 1) | (p & 2) << 1 | (p & 4) << 1
+		e = (p & 8) << 3 | (e & 0x3F)
+		if w.campaign:
+			e = (p & 8) << 2 | (e & 0xDF)
+		o = (o & 0xF2) | (p >> 4 & 1) | (p >> 3 & 4) | (p >> 3 & 8)
+		if w.campaign:
+			o = (p >> 2 & 0x20) | (o & 0xDF)
+		else:
+			o = (p >> 1 & 0x40) | (o & 0x3F)
+		w.F[2 * i] = e
+		w.F[2 * i + 1] = o
+	if w.memory.size() < 0x78:
+		w.memory.resize(0x78)
+	for i in 0x78:
+		w.memory[i] = data[0xA20 + i]
+	if not w.campaign:
+		for j in 0x288:
+			var b := data[0xA98 + j]
+			for k in 8:
+				w.F[8 * j + k] |= (b << k) & 0x80
+
+
+## The battle's windows and files (rules.BattleSaveHooks): menu() 0x40C090 (0-7, below 0
+## none, -12 / -11 an abort, NONE failed); box(msg) a question (1 yes, 0 no, or an abort);
+## slot(load) 0x477580 / 0x477770 (0-40, 0x29 none, or an abort); ask(line) the slot's
+## line and question (1 yes); note(text) (an exe address or a MES id; 0 or an abort);
+## error(text) 0x408B70; read / write the game folder's files; campaign_set(w); for the
+## load load_script(), deselect(), start_script(), redraw(), scroll(u).
+class BattleSaveHooks:
+	func menu() -> int:
+		return -2
+
+	func box(_msg: int) -> int:
+		return 0
+
+	func slot(_load: bool) -> int:
+		return 0x29
+
+	func ask(_line: Array) -> int:
+		return 1
+
+	func note(_text: int) -> int:
+		return 0
+
+	func error(_text: int) -> void:
+		pass
+
+	func read(_name: String) -> Variant:
+		return null
+
+	func write(_name: String, _data: PackedByteArray) -> bool:
+		return true
+
+	func campaign_set(_w: Pd2World) -> void:
+		pass
+
+	func load_script() -> void:
+		pass
+
+	func deselect() -> int:
+		return 0
+
+	func start_script() -> int:
+		return 0
+
+	func redraw() -> int:
+		return 0
+
+	func scroll(_u: int) -> int:
+		return 0
+
+
+## 0x453900's text (rules.slot_time): "HH:MM" of turn t from the start d, five minutes a turn.
+static func slot_time(t: int, d: int) -> String:
+	var v := (t + d) * 5
+	var h := v / 60
+	var m := v % 60
+	if h > 23:
+		h %= 24
+	return "%02d:%02d" % [h, m]
+
+
+## 0x498070 / 0x477EB0 on a save file's bytes (rules.slot_line): null (no file, no head, not
+## "PD2DATA": the answer is 1), "note" (loading another mode's save: DS:0x50663A differs,
+## mode not 0xFF), or [mode text's address, name bytes, time (null: 0x50CBD1's), load].
+static func slot_line(data: Variant, mode: int, load: bool) -> Variant:
+	if data == null:
+		return null
+	var d: PackedByteArray = data
+	if d.size() < 8 + 0x1C:
+		return null
+	var z := d.slice(0, 8).find(0)
+	if d.slice(0, 7 if z == -1 else z) != "PD2DATA".to_ascii_buffer() or z != 7:
+		return null
+	var h := d.slice(8, 8 + 0x1C)
+	if not (mode == 0xFF or mode == h[2] or not load):
+		return "note"
+	var word := h[0] | h[1] << 8
+	var kind := 0x50CBF2 if word == 1 else (0x50CBFB if word == 2 else 0x50CC04)
+	var name := h.slice(6)
+	var nz := name.find(0)
+	if nz != -1:
+		name = name.slice(0, nz)
+	var when: Variant = null if h[2] == 0 else slot_time(h[3] | h[4] << 8, h[0x19] | h[0x1A] << 8)
+	return [kind, name, when, load]
+
+
+## 0x477EB0 (rules.slot_confirm): 1 without a header; the note for another mode's save when
+## loading (then 0 or its abort); else ask(line).
+static func slot_confirm(w: Pd2World, hooks: BattleSaveHooks, name: String, load: bool, note_text: int) -> int:
+	var line: Variant = slot_line(hooks.read(name), w.mode_663a & 0xFF, load)
+	if line == null:
+		return 1
+	if line is String:
+		var r := hooks.note(note_text)
+		return r if r in BATTLE_ABORTS else 0
+	return hooks.ask(line)
+
+
+## The file names' two digits ('0' + slot / 10, '0' + slot % 10, C division).
+static func digits(s: int) -> String:
+	var q := absi(s) / 10 * (1 if s >= 0 else -1)
+	var r := s - 10 * q
+	return String.chr(0x30 + q) + String.chr(0x30 + r)
+
+
+static func rec_name(s: int) -> String:
+	return "PD2REC%s.BIN" % digits(s)
+
+
+## mission_state 0x484160 (rules.battle_state): KEMURInn.DAT (slot -1: KEMURI__.DAT)
+## written (not written: the note 0x518154, -3 0x20000, -2 0x40000, -1 0x10000, else 0;
+## written 1) or read (no file or short: the error and 0x10000; else unpacked, 1).
+static func battle_state(w: Pd2World, s: int, write: bool, hooks: BattleSaveHooks) -> int:
+	var name := "KEMURI%s.DAT" % ("__" if s == -1 else digits(s))
+	var size := KEMURI_PD2 if w.campaign else KEMURI_DASH
+	if write:
+		if not hooks.write(name, kemuri_pack(w).slice(0, size)):
+			var r := hooks.note(0x518154)
+			return {-3: 0x20000, -2: 0x40000, -1: 0x10000}.get(r, 0)
+		return 1
+	var data: Variant = hooks.read(name)
+	if data == null or (data as PackedByteArray).size() < size:
+		hooks.error(0x5181A8 if data == null else 0x5181AC)
+		return 0x10000
+	kemuri_unpack(w, (data as PackedByteArray).slice(0, size))
+	return 1
+
+
+## 0x477220 (rules.battle_save): a slot, confirmed; the mission's name by DS:0x50CE72 at
+## DS:0x50663E; PD2RECnn.BIN written, the note 0x5178E0. Returns slot + 1, 0 or an abort.
+static func battle_save(w: Pd2World, hooks: BattleSaveHooks) -> int:
+	var s := hooks.slot(false)
+	if s in BATTLE_ABORTS:
+		return s
+	if s == 0x29:
+		return 0
+	var c := slot_confirm(w, hooks, rec_name(s), false, 0x5179AC)
+	if c != 1:
+		return c
+	var at := MISSION_NAMES + 4 * Pd2World.s8(w.script_no & 0xFF)
+	var p := w.mem8(at) | w.mem8(at + 1) << 8 | w.mem8(at + 2) << 16 | w.mem8(at + 3) << 24
+	var i := 0
+	while true:
+		var v := w.mem8(p + i)
+		w.mem_write(0x50663E + i, v)
+		if v == 0:
+			break
+		i += 1
+	if hooks.write(rec_name(s), write_save(w)):
+		var r := hooks.note(0x5178E0)
+		if r in BATTLE_ABORTS:
+			return r
+	return s + 1
+
+
+## 0x477370 (rules.battle_load): the slot list until a battle save is confirmed; read
+## (1-3 MES 6, 4 MES 0xC: 0; 5 MES 9, 100 0x5178EC: 0x10000), MEMBERnn.DAT (-1),
+## DS:0x50AD94 = slot + 1. Returns slot + 1, 0, -1 or an abort.
+static func battle_load(w: Pd2World, hooks: BattleSaveHooks) -> int:
+	while true:
+		var s := hooks.slot(true)
+		if s in BATTLE_ABORTS:
+			return s
+		if s == 0x29:
+			return 0
+		var c := slot_confirm(w, hooks, rec_name(s), true, 0x5179AC)
+		if c in BATTLE_ABORTS:
+			return c
+		if c != 1:
+			continue
+		var code := read_save(w, hooks.read(rec_name(s)))
+		if code == 5 or code == 100:
+			var r := hooks.note(9 if code == 5 else 0x5178EC)
+			return r if r in BATTLE_ABORTS else 0x10000
+		if code:
+			var r := hooks.note(0xC if code == 4 else 6)
+			return r if r in BATTLE_ABORTS else 0
+		if member_read(w, hooks.read("MEMBER%s.DAT" % digits(s))) == -1:
+			return -1
+		w.set_ds8(0x50AD94, s + 1)
+		return s + 1
+	return 0
+
+
+## mission_loop on a battle save (rules.mission_resume; DS:0x50AD94 = slot + 1): the load
+## script, DS:0x50ADF2 = 0, the layers reset, KEMURI read (0x10000 without it); an end
+## code ends the mission; else the occupancy, the start script, the map, DS:0x50AD94's
+## byte 0, refresh_strikes(0). Returns 0 (the player's phase goes on), an end code or an
+## abort. (rng: the start script's.)
+static func mission_resume(w: Pd2World, rng: Pd2Random, hooks: BattleSaveHooks) -> int:
+	hooks.load_script()
+	w.set_ds8(0x50ADF2, 0)
+	Mission.layers_reset(w)
+	var r := battle_state(w, (w.ds8(0x50AD94) & 0xFF) - 1, false, hooks)
+	if r in BATTLE_ABORTS:
+		return r
+	if w.ds8(0x50ADF2):
+		return Debrief.mission_exit(w, w.ds8(0x50ADF2) & 0xFF)
+	Mission.rebuild_occupancy(w)
+	r = hooks.start_script()
+	if r in BATTLE_ABORTS:
+		return r
+	r = hooks.redraw()
+	if r in BATTLE_ABORTS:
+		return r
+	w.set_ds8(0x50AD94, 0)
+	AiTurn.refresh_strikes(w, 0)
+	return 0
+
+
+## 0x4847C0, the battle's system menu (rules.battle_menu): 0 save (PD2RECnn.BIN, KEMURInn.DAT,
+## MEMBERnn.DAT), 1 load (and the mission set up again from it), 2-7 SYSTEM_TOGGLES after
+## their question. Returns 0 or an abort (0x10000 also a failed load: the game ends).
+static func battle_menu(w: Pd2World, hooks: BattleSaveHooks) -> int:
+	var m := hooks.menu()
+	if m == NONE:
+		return 0x10000
+	if m == -12:
+		return 0x20000
+	if m == -11:
+		return 0x40000
+	if m == 0:
+		var s := battle_save(w, hooks)
+		if s in BATTLE_ABORTS or s == 0:
+			return s
+		var r := battle_state(w, s - 1, true, hooks)
+		if r in BATTLE_ABORTS:
+			return r
+		if not hooks.write("MEMBER%s.DAT" % digits(s - 1), member_write(w)):
+			return 0x10000
+		return 0
+	if m == 1:
+		var s := battle_load(w, hooks)
+		if s in BATTLE_ABORTS or s == 0:
+			return s
+		hooks.load_script()
+		var r := hooks.deselect()
+		if r in BATTLE_ABORTS:
+			return r
+		if member_read(w, hooks.read("MEMBER%s.DAT" % digits(s - 1))) == -1:
+			return 0x10000
+		if Pd2World.s8(w.script_no & 0xFF) < 11:
+			_from_stash(w)
+			Debrief.set_head_byte(w, 5, w.script_no & 0xFF)
+			if w.ds16(0x50AD8E) > 0x11:
+				w.set_ds16(0x50AD8E, w.ds16(0x50AD8E) - 10)
+			w.campaign = 1
+		else:
+			Debrief.set_head_byte(w, 5, (w.script_no - 10) & 0xFF)
+			w.campaign = 0
+		w.set_ds16(0x50AD92, w.ds16(0x50AD8E))
+		hooks.campaign_set(w)
+		Mission.layers_reset(w)
+		r = battle_state(w, s - 1, false, hooks)
+		if r in BATTLE_ABORTS:
+			return r
+		r = hooks.start_script()
+		if r in BATTLE_ABORTS:
+			return r
+		Mission.rebuild_occupancy(w)
+		AiTurn.refresh_strikes(w, 0)
+		r = hooks.redraw()
+		if r in BATTLE_ABORTS:
+			return r
+		for u in mini(w.units.size() / 55, 0xFE):
+			if w.active(u) and w.ub(u, 0x36) == 0:
+				r = hooks.scroll(u)
+				if r in BATTLE_ABORTS:
+					return r
+				break
+		return 0
+	if SYSTEM_TOGGLES.has(m):
+		var bit: int = SYSTEM_TOGGLES[m]
+		var a := hooks.box(SYSTEM_TEXTS[m][0 if w.options & bit else 1])
+		if a in BATTLE_ABORTS:
+			return a
+		if (a == 1) if m in [2, 3, 4] else (a != 0):
+			w.options ^= bit
+			if m in [4, 7]:
+				var r := hooks.redraw()
+				if r in [0x10000, 0x20000]:
+					return r
+		return 0
+	return 0

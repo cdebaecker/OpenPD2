@@ -391,6 +391,34 @@ class SortieHooks:
 	func bulk(which: String, n: int) -> int:
 		return -2
 
+	## 0x4875D0(0), the fade before the screen ends: 0, or -3 / -2 / -1
+	func fade() -> int:
+		return 0
+
+	## region 0x45's list (DS:0x50D70D: 作戦中止, ＳＡＶＥ, ＬＯＡＤ): 0-2, -2 none, -12 / -11,
+	## -1, Title.NONE the window failed
+	func system() -> int:
+		return -2
+
+	## 0x497F60 (Title.save_game): slot + 1, 0, or -3 / -2 / -1
+	func save_game(_w: Pd2World) -> int:
+		return 0
+
+	## 0x4983A0 (Title.load_pick with rescue): slot + 1, 0, or -3 / -2 / -1
+	func load_game(_w: Pd2World) -> int:
+		return 0
+
+	## a file written: 1, 0 when it cannot be made, -1 when it cannot be written
+	func write(_name: String, _data: PackedByteArray) -> int:
+		return 1
+
+	func read(_name: String) -> Variant:
+		return null
+
+	## load_campaign_set (0x409240)
+	func campaign_set(_w: Pd2World) -> void:
+		pass
+
 
 ## 0x46A6D0: the roster's rows -- crews 0-63 with +4 <= DS:0x50AD92, +2 < 3 and +6 bits
 ## 0-1 clear, in crew order.
@@ -831,7 +859,7 @@ static func sortie_screen(w: Pd2World, hooks: SortieHooks, actions: Array) -> Ar
 		var r: Variant = sortie_action(w, hooks, st, a, log)
 		if r != null:
 			return [r, log]
-	return [2, log]
+	return [sortie_back(hooks) & 0xFFFFFFFF, log]
 
 
 ## The screen's state between buttons: the selected group (DS:0x50D745) and the two
@@ -913,6 +941,73 @@ static func sortie_action(w: Pd2World, hooks: SortieHooks, st: Dictionary, a: Ar
 				sortie_start(w, yes == 1)
 				if yes == 1:
 					return 0
+		"system":
+			var r: Variant = sortie_system(w, hooks)
+			log.append(["system", r])
+			if r != null:
+				return int(r) & 0xFFFFFFFF
 		_:
-			return 2
+			var r := sortie_back(hooks)
+			log.append(["back", r])
+			return r & 0xFFFFFFFF
+	return null
+
+
+const SORTIE_FADE := {-3: 0x20000, -2: 0x40000, -1: -1}
+
+
+## Region 0x46, back (rules.sortie_back): the fade (an abort, -1), then 2 -- the mission
+## start's loop (0x416CF0) runs the briefing and the plan again.
+static func sortie_back(hooks: SortieHooks) -> int:
+	var f := hooks.fade()
+	return SORTIE_FADE.get(f, 2)
+
+
+## Region 0x45, the system menu (rules.sortie_system; emulated by verify_sortie): 0 abort
+## the operation (MES 0x1D9 yes, the fade: 1, the title), 1 save (0x497F60, then
+## KEMURInn.DAT = the image's first 0xD20 B and MEMBERnn.DAT), 2 load (0x4983A0, the fade,
+## MEMBERnn.DAT, the record set: 2, or 3 when DS:0x50663A changed). Returns null (the
+## screen goes on) or its result.
+static func sortie_system(w: Pd2World, hooks: SortieHooks) -> Variant:
+	var a := hooks.system()
+	if a == Title.NONE:
+		return -1
+	var old := w.mode_663a & 0xFF
+	match a:
+		0:
+			var r := hooks.ask(0x1D9)
+			if SORTIE_FADE.has(r):
+				return SORTIE_FADE[r]
+			if r != 0:
+				return SORTIE_FADE.get(hooks.fade(), 1)
+		1:
+			var s := hooks.save_game(w)
+			if SORTIE_FADE.has(s):
+				return SORTIE_FADE[s]
+			if s != 0:
+				var ok := hooks.write("KEMURI%s.DAT" % Title.digits(s - 1), Debrief.save_image(w).slice(0, 0xD20))
+				if ok == 0:
+					return 1
+				if ok == -1:
+					return -1
+				if hooks.write("MEMBER%s.DAT" % Title.digits(s - 1), Title.member_write(w)) != 1:
+					return -1
+		2:
+			var s := hooks.load_game(w)
+			if SORTIE_FADE.has(s):
+				return SORTIE_FADE[s]
+			if s != 0:
+				var f := hooks.fade()
+				if SORTIE_FADE.has(f):
+					return SORTIE_FADE[f]
+				if Title.member_read(w, hooks.read("MEMBER%s.DAT" % Title.digits(s - 1))) == -1:
+					return -1
+				hooks.campaign_set(w)
+				return 2 + int(old != (w.mode_663a & 0xFF))
+		-12:
+			return 0x20000
+		-11:
+			return 0x40000
+		-1:
+			return -1
 	return null

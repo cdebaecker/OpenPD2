@@ -110,6 +110,18 @@ static func _sized(b: PackedByteArray, n: int) -> PackedByteArray:
 	return r
 
 
+## DS:0x50AD95: the fire point (two int16, x then y) lies in the DS block the image saves;
+## the world keeps it apart (Pd2World.fire_point): copied in before a battle's save and
+## out after a battle's save is read (the system menu, the title's resume).
+static func fire_point_to_ds(w: Pd2World) -> void:
+	w.set_ds16(0x50AD95, w.fire_point.x)
+	w.set_ds16(0x50AD97, w.fire_point.y)
+
+
+static func fire_point_from_ds(w: Pd2World) -> void:
+	w.fire_point = Vector2i(w.ds16(0x50AD95), w.ds16(0x50AD97))
+
+
 ## 0x4987C0's effect on the world: every saved part from an image.
 static func load_image(w: Pd2World, img: PackedByteArray) -> void:
 	var at := func(a: int, n: int) -> PackedByteArray:

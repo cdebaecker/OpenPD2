@@ -1,0 +1,33 @@
+extends SceneTree
+## Render the operation plan before a battle and save it: godot --path engine/godot -s
+## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders|xms]
+## page: 0-3 (A-D, default 1), clicks: the page's waits clicked through (default 0: the
+## first blink shown lit); "orders" opens the orders (plan_gb.pac), "xms" the XMS box.
+
+func _init() -> void:
+	var args := OS.get_cmdline_user_args()
+	await process_frame
+	var b = load("res://ui/battle.tscn").instantiate()
+	b.campaign = args[0]
+	b.mission_index = int(args[1])
+	root.add_child(b)
+	for i in 5:
+		await process_frame
+	var k := int(args[3]) if args.size() > 3 else 1
+	b._plan_region(k)
+	b.plan_st.j = int(args[4]) if args.size() > 4 else 0
+	match args[5] if args.size() > 5 else "":
+		"orders":
+			b._plan_region(4)
+		"xms":
+			b._plan_region(8)
+	b._plan_draw()
+	if b.plan_view:
+		b.plan_view._on = true                # the blink lit
+		b.plan_view.set_process(false)
+		b.plan_view.queue_redraw()
+	for i in 5:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_viewport().get_texture().get_image().save_png(args[2])
+	quit(0)

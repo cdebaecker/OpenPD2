@@ -2450,6 +2450,28 @@ buttons (`verify_sortie`).
   3–6 and their support order, and take status 0 once their crew is available (+4 ≤
   DS:0x50AD92); the alert is reset. With no the screen goes on.
 
+- **Back** (region 0x46): a fade (−3 / −2 / −1 give 0x20000 / 0x40000 / −1), then the
+  screen's result 2: the mission start's loop (0x416CF0, §5.22) runs the briefing, the
+  mission's init and the plan again, then the sortie.
+- **The system menu** (region 0x45, its list DS:0x50D70D; −12 / −11 end the screen with
+  0x20000 / 0x40000, −1 or a failed window with −1):
+  - 作戦中止, abort the operation: "abort?" (MES 0x1D9) answered yes, a fade, and the
+    result 1 (0x416CF0's 0x81: the title);
+  - ＳＡＶＥ: 0x497F60 (§5.20), then for a slot KEMURInn.DAT, the image's first 0xD20 B (a
+    file that cannot be made ends the screen with 1, one that cannot be written with −1)
+    and MEMBERnn.DAT (not written: −1);
+  - ＬＯＡＤ: 0x4983A0 (the load list without MEMBERnn.DAT, §5.20), then for a slot a fade,
+    MEMBERnn.DAT (0x40D7A0 with 1; −1 ends the screen with −1) and the record set; the
+    result 2, or 3 when the load changed DS:0x50663A. It cannot: 0x498070 lets the sortie
+    (DS:0x50663A = 0) confirm only a save with 0 there (a battle's save gets the note
+    0x519F0C), so a load always goes round the loop, on the loaded state (another
+    mission's save: that mission's briefing and plan; INIT / NPC are not loaded again, the
+    save holds the units).
+  Emulated with the rest of the screen: `verify_sortie` 400 / 400 with these regions
+  (0x497F60 and 0x4983A0 answering a script; 0x40D7A0, the files and the record set
+  real or logged). `rules.sortie_system` / `sortie_back`, `Campaign.sortie_system` /
+  `sortie_back`; fixtures (suite `sortie`) 300 / 300.
+
 The combat records (DS:0x506B39) are read and written by index (crew +15): an index of
 26 or more runs past the 26 records into the 8 bytes before the unit table and on into
 unit 0, as the game does (the save holds such crews).
@@ -3030,8 +3052,15 @@ campaign's hand-over, a continued save, the scenario select or the rescue missio
 (0x471990: message_text reads it at the title).
 - **"0"** is the new game (§5.18). It returns 1.
 - **"1", the continue.** The load list 0x4985A0 shows the 41 slots (0x498290). A slot is
-  confirmed with its header line (0x498070: the mode — Campaign, One Shot or Rescue — the
-  save's name and the date, then "ロードします"). Then PD2RECnn.BIN is read (0x4987C0):
+  confirmed with its header line (0x498070, wsprintfA "%8s %-18s %-5sを%sします": the
+  mode word's text — Campaign (1), One Shot (2), else Rescue —, the save's name (head +6,
+  to its NUL), the time and the verb). The time is 0x453900's "HH:MM" of the mission turn
+  (head +3, u16) from the start (head +0x19, u16), five minutes a turn, the hour mod 24,
+  for a save made in a battle (head +2 set); else 0x50CBD1's 編成. With the "load" verb
+  (its second argument 1) a save whose head +2 is not DS:0x50663A (unless that is −1, as
+  at the title) is refused with the note 0x519F0C and the answer 0. A file that does not
+  open, or has no 8 + 0x1C byte head or no "PD2DATA" is taken as confirmed (1).
+  Then PD2RECnn.BIN is read (0x4987C0):
   - 1–3 (no file, no header, not "PD2DATA\0"): note MES0 6, the result is 0;
   - 4 (not 0x47C5 B): note MES0 0xC, 0;
   - else the image is loaded and its CRC is left at DS:0x50ADF3; not 0 is code 5: note
@@ -3042,7 +3071,7 @@ campaign's hand-over, a continued save, the scenario select or the rescue missio
   chunk is the mission, the step loses 10 past 17, and the flag is 1. Otherwise the
   result loses 10 and becomes the chunk, and the flag is 0. DS:0x50AD92 = the step. The
   result gets bit 0x80 when the save's DS:0x50663A is set (a save made in a battle).
-  game_mode_loop then goes straight to the battle (0x436530); that resume is not ported.
+  game_mode_loop then goes straight to the battle (0x436530, below: **the resume**).
 - **"2", the scenario select.** The list holds the missions of steps 1–22 (DS:0x50CC0D)
   whose byte at DS:0x5173C0 is set: PD2's 3, 2, 5, 7, 8, 6, 4, 9 and DASH's 12, 15, 16,
   18, 19, 11, 13. It is kept at DS:0x523EE0 and stays there after the title. With no
@@ -3121,6 +3150,69 @@ over 20 goes back to the title; anything else starts the mission (§5.18).
 The sortie runs with DS:0x50663A = 0 (the mission start 0x416CF0 leaves it there), so its
 saves continue as saves made outside a battle.
 
+**The battle's saves** (the command menu's entry 0x10: the system menu 0x4847C0, labels
+DS:0x518224..: ＳＡＶＥ, ＬＯＡＤ, アニメ, ローダー, HP・AP, 範囲内表, 命中率, 地雷; its
+list's −12 / −11 give 0x20000 / 0x40000, a failed window 0x10000, other answers nothing):
+- **ＳＡＶＥ** (0x477220): a slot (0x477580: the saves and, while there are at most 0x27
+  and the disk has room, a new one numbered the saves' count + 1), confirmed (0x477EB0 =
+  0x498070's line with the format 0x517990 and the verbs 0x517978 / 0x517988; a file with
+  no head is taken as confirmed); the mission's name **by DS:0x50CE72** (table 0x50CB4E;
+  the sortie's takes the chunk) to DS:0x50663E; PD2RECnn.BIN written (0x4778D0: "PD2DATA"
+  and the image with its CRC; a file that cannot be written gets no note), the note
+  セーブ完了 0x5178E0. Then mission_state (0x484160) writes **KEMURInn.DAT**: 0x484470 packs
+  each pair of F‑layer bytes (e, o) into one — bits 0–3 e's bits 0, 2, 3 and 6, bits 4–7
+  o's bits 0, 2, 3 and 6 (PD2: bit 5 instead of 6) — 0xA20 B, the AI memory DS:0x551DA0
+  (0x78 B), and in DASH 0x484560's 0x288 B, bit 7 of every F byte (eight to a byte, the
+  first in bit 7): 0xD20 B (PD2 0xA98). A file that cannot be written: the note "KEMURI
+  open error" (−3 / −2 / −1 give 0x20000 / 0x40000 / 0x10000, else the save goes on).
+  Then MEMBERnn.DAT (0x40D7A0 with 0; not written: 0x10000).
+- **ＬＯＡＤ** (0x477370): the saves' list (0x477770; none: MES 0xD) until a slot is
+  confirmed (0x477EB0 with 1: only a save made in a battle; another gets the note
+  0x5179AC and the list again); 0x477970 = 0x4987C0's codes: 1–3 MES 6, 4 MES 0xC (then
+  nothing), 5 MES 9 and 100 0x5178EC (then 0x10000: the game ends); MEMBERnn.DAT (−1:
+  the menu goes on with slot −2, "MEMBER0..DAT", and ends the game); DS:0x50AD94 = slot +
+  1. Then the mission's load script (0x51F1B8), the unit panel reset (0x466790(0, −1)),
+  MEMBERnn.DAT read again, in PD2 (DS:0x50CE72 below 11) crews and units 0–26 back from
+  the kept ones, the chunk DS:0x50663D, DS:0x50AD8E less 10 past 0x11, the campaign flag,
+  DS:0x50AD92 = DS:0x50AD8E, the record set, the map loader's reset (0x482910: the
+  occupancy emptied, F cleared but bit 5), **KEMURInn.DAT read** (0x484680: per pair e's
+  bits 0, 2, 3 from bits 0–2 and bit 6 from bit 3 with bit 7 cleared — PD2 then bit 5
+  from bit 3 as well —, o's bits 0, 2, 3 from bits 4–6 and bit 6 (PD2: 5) from bit 7,
+  DASH clearing o's bit 7; the other bits stay; the AI memory; DASH ORs bit 7 back in,
+  0x4845A0; a missing or short file: 0x408B70's error and 0x10000), the start script
+  (0x51F0F8), the occupancy (0x483030), refresh_strikes(0), the map and the date, and the
+  view on the first active unit of status 0. The player's phase goes on; DS:0x50AD94
+  stays slot + 1 (nothing reads it before the next save or load).
+- **2–7, the options** (DS:0x551D29 bits 4, 8, 12, 13, 14, 15): a question by the bit's
+  state (set / clear: MES 0x1F9 / 0x1FA, 0x209 / 0x20A, 0x20D / 0x20C, 0x20E / 0x20F,
+  0x1CA / 0x210, 0x214 / 0x215); entries 2–4 flip the bit on 1, 5–7 on any answer but 0;
+  4 and 7 redraw the map (0x46F9A0 / 0x46F880). Bit 4 is the explosions' animation
+  (explosion_clear reads it, §5.15); the others only change what is drawn: ローダー the
+  unit panel (0x466790 with DS:0x50DE06), HP・AP the units on the map (0x46F9A0 redraws
+  them), 範囲内表(示) cmd_fire's question 0x1EE, 命中率 its hit-chance window
+  (cmd_fire 0x425AF0, ui_show_hit_estimate), 地雷 the marks of F bit 7 and the strikes
+  (0x46F880).
+
+**The resume** (game_mode_loop with the title's bit 0x80): no mission start (0x416CF0),
+DS:0x50663A = 1, then 0x436530 reads savedata.tmp (0x477970; an error: back to the title)
+and runs mission_loop (0x436690) with DS:0x50AD94 = slot + 1: the load script, DS:0x50ADF2
+= 0, the map loader's reset, **no start_units nor the turn script's stage 2**, KEMURInn.DAT
+read (slot DS:0x50AD94 − 1; no file: 0x10000, the game ends), an end code then ends the
+mission (it cannot be set there), else the occupancy, the start script, the map, the phase
+3, the byte DS:0x50AD94 cleared (only that byte of the dword), refresh_strikes(0), and the
+loop's top: the date window, the flyers' list, the phase 0 — the player's phase goes on
+**without the turn start nor the upkeep**. The battle then ends as any other (§5.18).
+
+`rules.battle_menu` / `battle_save` / `battle_load` / `battle_state` / `kemuri_pack` /
+`kemuri_unpack` / `slot_line` / `mission_resume`; GDScript `Title.*` of the same names.
+Emulated: `verify_battle_save` — KEMURI both ways (mission_state run) 400 / 400, the
+title's line 0x498070 with its wsprintfA arguments 361 / 361 (39 skipped: a name with no
+NUL in the head, below), the whole menu 0x4847C0 (0x477220 / 0x477370 / 0x477EB0 /
+0x477970 / 0x4778D0 / mission_state / 0x40D7A0 / refresh_strikes / the occupancy real,
+the scripts and windows logged) 400 / 400; `verify_battle_resume` — mission_loop on a
+battle save until the first command (answered 0x81, so mission_end follows) 300 / 300.
+Fixtures (suite `battle_save`) 300 / 300.
+
 `rules.title_start` / `Title.title_start` (with `load_pick`, `member_read` /
 `member_write`, `read_save` / `write_save`, `save_crc`, `save_game`, `sortie_save`).
 Emulation: `verify_title` 299 / 299 over the four entries, with the pickers, the file
@@ -3139,7 +3231,10 @@ Undefined:
   save). Within the list the port reads it as the game does; past it, the game reads other
   memory and the port refuses;
 - the group drop takes crew +5 as a group number unchecked: 64–254 reach past the group
-  table. The port refuses.
+  table. The port refuses;
+- the slot line prints the save's name with %-18s from a 0x1C-byte copy of the head: a
+  name with no NUL in its 22 bytes runs on into the stack. The port cuts it at the head's
+  end (display only; the game's names are lstrcpyA copies of at most 21 bytes).
 
 ### 5.21 Pocket actions: magazine swaps and handing over: Emulated
 
@@ -3295,6 +3390,29 @@ the questions answer a script).
   1 a direction 0–7 (+0x1F, if it differs); 2 / 3 a site, confirmed with
   the site question (0x514BB8, 0x451E30: yes sets +0x1F; −3 / −2 / −1 abort).
 The lists answer −12 / −11 for the window closed / quit (0x20000 / 0x40000).
+
+**The plan's window** (display only; `ui/plan_view.gd`): plan_g.pac (640 × 400) at (0, 0)
+with the window palette 0x487120 sets from DS:0x50D6A1 (16 entries B, G, R, pad; the
+drawing codes 0–15 are palette entries 10–25), the mission's name (DS:0x50CB4E by
+DS:0x50CE72) in the window at (0x38, 10), SMAP.pac (entry chunk − 1) at (8, 0x20). The nine
+buttons are the regions DS:0x514968 (18 B each: left, top, right, bottom, style): A
+(0x180, 0x158)–(0x1C6, 0x16A), B (0x1C8, 0x158)–(0x20F, 0x16A), C (0x180, 0x16C)–(0x1C6,
+0x17E), D (0x1C8, 0x16C)–(0x20F, 0x17E), the orders (0x1BC, 0x10C)–(0x203, 0x11F), the
+plans (0x1C8, 0x144)–(0x20F, 0x156), done (0x230, 0x164)–(0x26F, 0x177), the area maps
+(0x228, 0x118)–(0x277, 0x12B), and XMS the 8 × 1 spot (0x278, 0x18F): its box says "XMS :
+USE" or "XMS : unUSE" by DS:0x50CBE4. The orders draw plan_gb.pac (264 × 160) at (0x178,
+0xF0) and their title (0x50E053) at (0x188, 0x18), and put plan_gc.pac there when they
+close. Every page opens the title window (0x188, 0x18; 28 × 1) and the text window
+(0x188, 0x38; 28 × 11, 16 px lines); some frame the mission's mini-map — mmap.pac
+(144 × 144, entry chunk − 1) at (0xB0, 0x50) in the window at (0xA8, 0x48) — and then
+**blink, each blink waiting for a click**: 0x4DD5C0 points (the colour DS:0x51EAE0 the
+page sets, 7 × 7 at (0xAE + 2x, 0x4E + 2y) for hex (x, y), by turns with colour 0 every
+0x85 ms), 0x4DD7E0 a frame (x1, y1)–(x2, y2) at (0xB0 + 2x, 0x50 + 2y), 0x4DD9D0 a SMAP
+cell (8 + 24 cx, 0x20 + 24 cy), 0x4C7DD0 two frames by turns. The n‑th blink is the
+page's n‑th wait in its lines; a page may blink once more after its last line. Each
+page's windows, pictures and blinks, in order: `rules.PLAN_VIEWS` / `Plan.VIEWS`,
+`verify_plan_pages` 88 / 88 (every page hook run, the windows, pictures and blinks
+logged).
 
 ### 5.23 Undefined behaviours: what the game really does, and the play‑safe paths
 

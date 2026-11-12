@@ -45,7 +45,13 @@ var script_no := 0          # DS:0x50CE72
 var mission_hooks: BattleMissionHooks
 var flight_hooks: BattleFlightHooks
 var mission_over := false
-var options := 0            # DS:0x551D29 (bit 1 easy, bit 5 training, bit 7 see all): none in the sandbox
+## DS:0x551D29 (bit 1 easy, bit 5 training, bit 7 see all; the system menu's bits 4, 8, 12-15):
+## the world's (Pd2World.options, saved with nothing: the game keeps it across battles)
+var options: int:
+	get: return w.options if w else 0
+	set(v):
+		if w:
+			w.options = v
 var busy := false
 ## The computer's turn runs on a worker thread so that the player's reaction menu can
 ## pause it; auto_react answers the menu without asking (tests, headless runs).
@@ -185,6 +191,7 @@ class SandboxHooks extends AiTurnHooks:
 func _ready() -> void:
 	var tables := GameData.tables(campaign)
 	var doc := GameData.mission(campaign, mission_index)
+	mission_record = doc.get("record", PackedByteArray())
 	# a campaign's first mission starts a new campaign (0x421B90): the pilot choice answered
 	# with its "fill at random" (rand() seeded from the clock, as 0x48F7A0 does)
 	var save := GameData.save_image(campaign)
@@ -192,6 +199,9 @@ func _ready() -> void:
 	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
 	var carried := carry if title_carry.is_empty() else title_carry
 	carry = {}
+	if carried.has("world"):
+		_ready_loaded(carried)
+		return
 	if not carried.is_empty():
 		save = [Debrief.SAVE_BASE, carried.image]     # the debrief's (or the title's) save
 		pick = Campaign.Hooks.new() if carried.get("new_campaign", false) else null
@@ -214,10 +224,14 @@ func _ready() -> void:
 	mission_hooks.flight = flight_hooks
 	mission_hooks.options = options
 	w.map_chg = GameData.tables(campaign).get("map_chg", []) if campaign == "dash" else []   # (DASH mission 6's tide)
-	# the mission start's loop (0x416CF0, Plan): DS:0x50663A and the mission turn 0, the
-	# briefing (0x4DD2F0: the SCN_MIS record, the mission's init), the plan, the sortie
-	Plan.pre_battle_begin(w)
-	brief_code = Plan.briefing(w, doc.get("record", PackedByteArray()), mission_hooks)
+	var resume: bool = carried.get("resume", false)
+	if not resume and not carried.get("loop", false):
+		# the mission start's loop (0x416CF0, Plan): DS:0x50663A and the mission turn 0, the
+		# briefing (0x4DD2F0: the SCN_MIS record, the mission's init), the plan, the sortie
+		Plan.pre_battle_begin(w)
+	if not resume:
+		brief_code = Plan.briefing(w, doc.get("record", PackedByteArray()), mission_hooks)
+		pre_battle_rounds += 1
 	if script_no == 1:
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
 			w.exits.append(Vector2i(int(p[0]), int(p[1])))
@@ -243,7 +257,109 @@ func _ready() -> void:
 	cam.limit_bottom = MAP * TILE_H
 	add_child(cam)
 	_build_hud()
-	_plan()
+	if resume:
+		_resume_battle()
+	else:
+		_plan()
+
+
+func _scene_setup() -> void:
+	## the map, the overlay, the camera and the command bar (a battle carried from a load)
+	var tex := GameData.map_texture(campaign, mission_index)
+	if tex:
+		var s := Sprite2D.new()
+		s.texture = tex
+		s.centered = false
+		add_child(s)
+	overlay = Node2D.new()
+	overlay.draw.connect(_draw_overlay)
+	add_child(overlay)
+	cam = Camera2D.new()
+	cam.zoom = Vector2(0.5, 0.5)
+	cam.limit_left = 0
+	cam.limit_top = 0
+	cam.limit_right = MAP * TILE_W + TILE_W / 2
+	cam.limit_bottom = MAP * TILE_H
+	add_child(cam)
+	_build_hud()
+
+
+func _ready_loaded(carried: Dictionary) -> void:
+	## The system menu's load (Title.battle_menu entry 1) has set the mission up again from
+	## the save (possibly another mission: the scene is the loaded chunk's); the player's
+	## phase goes on with that world, as 0x4847C0 returns to the command loop.
+	w = carried.world
+	rng = carried.rng
+	script_no = w.script_no
+	_battle_hooks()
+	_scene_setup()
+	_resumed_phase()
+
+
+func _battle_hooks() -> void:
+	mission_hooks = BattleMissionHooks.new()
+	mission_hooks.battle = self
+	flight_hooks = BattleFlightHooks.new()
+	flight_hooks.battle = self
+	flight_hooks.easy = options & 2 != 0
+	mission_hooks.flight = flight_hooks
+	mission_hooks.options = options
+	hooks = SandboxHooks.new(w, false, rng)
+	hooks.battle = self
+	names = {"crew": GameData.tables(campaign).crew_names, "machine": GameData.tables(campaign).machine_names}
+	w.map_chg = GameData.tables(campaign).get("map_chg", []) if campaign == "dash" else []
+
+
+func _resume_battle() -> void:
+	## game_mode_loop with the title's bit 0x80 (a save made in a battle): no mission start
+	## (0x416CF0), DS:0x50663A = 1, then 0x436530: mission_loop on the save
+	## (Title.mission_resume: the load script, KEMURInn.DAT, the start script; no
+	## start_units nor upkeep), and the player's phase goes on.
+	w.mode_663a = 1
+	Debrief.fire_point_from_ds(w)
+	var rh := ResumeHooks.new()
+	rh.battle = self
+	var r := Title.mission_resume(w, rng, rh)
+	if r in Title.BATTLE_ABORTS:
+		_game_closed(r)
+		return
+	if r:
+		_end_mission(r, true)
+		return
+	_resumed_phase()
+
+
+func _resumed_phase() -> void:
+	## the loop's top: the date window, the flyers' list, the player's phase
+	w.phase = 0
+	squad = Mission.player_units(w)
+	sandbox = squad.is_empty()
+	_begin_done()
+
+
+func _game_closed(code: int) -> void:
+	## 0x10000 (a save that cannot be read back, a window gone): the game itself ends
+	## there; the engine says so and goes back to the title
+	mission_over = true
+	say("[color=red]%s[/color]" % uif("UI_GAME_CLOSED", ["0x%X" % code]))
+	_show_debrief([], [])
+
+
+class ResumeHooks extends Title.BattleSaveHooks:
+	## mission_resume's files (user://saves) and the mission's scripts
+	var battle
+
+	func read(name: String) -> Variant:
+		return SaveFiles.read(name)
+
+	func error(text: int) -> void:
+		battle.say("[color=red]%s[/color]" % battle.menu_text(text))
+
+	func load_script() -> void:
+		MissionScripts.run_load(battle.w)
+
+	func start_script() -> int:
+		return MissionScripts.run_start(battle.w, battle.rng, battle.mission_hooks)
 
 
 func _begin_battle() -> void:
@@ -546,8 +662,76 @@ func _plan() -> void:
 		return
 	if hud_panel:
 		hud_panel.visible = false
-	plan_st = {"mode": "page", "k": 0, "g": 0, "ask": null, "i": 0}
+	plan_st = {"mode": "page", "k": 0, "g": 0, "ask": null, "i": 0, "j": 0}
+	_plan_view_open()
 	_plan_draw()
+
+
+var plan_view: PlanView = null
+
+
+func _plan_view_open() -> void:
+	## the plan's window drawn from the import (ui/plan_view.gd), scaled to the screen; its
+	## regions and clicks drive the same state as the button row
+	plan_view = PlanView.new()
+	plan_view.battle = self
+	plan_view.chunk = Debrief.chunk(w)
+	plan_view.title = SaveFiles.mission_name(script_no)
+	plan_view.pressed.connect(_plan_region)
+	plan_view.advanced.connect(func(): plan_st.j += 1; _plan_draw())
+	hud_layer.add_child(plan_view)
+	var vs := get_viewport().get_visible_rect().size
+	var sc := minf(vs.x / PlanView.W, vs.y / PlanView.H) * 0.96
+	plan_view.scale = Vector2(sc, sc)
+	plan_view.position = (vs - Vector2(PlanView.W, PlanView.H) * sc) / 2
+
+
+func _plan_region(i: int) -> void:
+	## the screen's regions (0x438210(9), DS:0x514968): pages A-D, the orders, the plans'
+	## list, done, the area maps, XMS (a note: DS:0x50CBE4 0x514A98 "XMS : USE", else
+	## 0x514AA4 "XMS : unUSE")
+	if plan_st.mode == "orders":
+		return
+	match i:
+		0, 1, 2, 3:
+			plan_st.mode = "page"
+			plan_st.k = i
+			plan_st.j = 0
+		4:
+			plan_st.mode = "orders"
+			plan_st.g = 0
+			plan_st.ask = null
+		5:
+			plan_st.mode = "list"
+		6:
+			_plan_done()
+			return
+		7:
+			plan_st.mode = "maps"
+			plan_st.i = 0
+		8:
+			plan_view.note = plan_exe(0x514A98 if w.mem8(0x50CBE4) else 0x514AA4)
+	_plan_draw()
+
+
+func _plan_view_update() -> void:
+	if plan_view == null:
+		return
+	if plan_st.mode == "orders":
+		plan_view.orders = "open"
+	elif plan_view.orders == "open":
+		plan_view.orders = "closed"           # plan_gc.pac put back (0x444730's end)
+	if plan_st.mode == "page":
+		var st := Plan.view_step(w, plan_st.k, plan_st.j)
+		plan_view.page_title = plan_exe(Plan.PAGE_TITLES[plan_st.k])
+		plan_view.lines = st.lines.map(func(it): return plan_line(it).replace("@", "\n"))
+		plan_view.views = st.views
+		plan_view.blink = st.blink
+	else:
+		plan_view.page_title = ""
+		plan_view.lines = []
+		plan_view.blink = null
+	plan_view.queue_redraw()
 
 
 func plan_exe(va: int) -> String:
@@ -596,6 +780,7 @@ func plan_target(g: int) -> String:
 
 
 func _plan_draw() -> void:
+	_plan_view_update()
 	if plan_panel:
 		plan_panel.queue_free()
 	plan_panel = PanelContainer.new()
@@ -606,17 +791,18 @@ func _plan_draw() -> void:
 	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
 	bg.set_content_margin_all(8)
 	plan_panel.add_theme_stylebox_override("panel", bg)
-	plan_panel.position = Vector2(16, 16)
+	plan_panel.position = Vector2(4, 4)
 	var box := VBoxContainer.new()
 	plan_panel.add_child(box)
-	var title := Label.new()
-	title.text = "%s  %s" % [ui("UI_PLAN"), SaveFiles.mission_name(script_no)]
-	box.add_child(title)
+	if plan_view == null:
+		var title := Label.new()
+		title.text = "%s  %s" % [ui("UI_PLAN"), SaveFiles.mission_name(script_no)]
+		box.add_child(title)
 	var buttons := HBoxContainer.new()            # the screen's nine regions (0x438210(9))
 	box.add_child(buttons)
 	var orders_open: bool = plan_st.mode == "orders"
 	for k in 4:
-		buttons.add_child(_plan_button(plan_exe(Plan.PAGE_TITLES[k]), func(): plan_st.mode = "page"; plan_st.k = k, orders_open))
+		buttons.add_child(_plan_button(plan_exe(Plan.PAGE_TITLES[k]), func(): plan_st.mode = "page"; plan_st.k = k; plan_st.j = 0, orders_open))
 	buttons.add_child(_plan_button(plan_exe(Plan.ORDERS_TITLE), func(): plan_st.mode = "orders"; plan_st.g = 0; plan_st.ask = null, orders_open))
 	buttons.add_child(_plan_button(plan_exe(Plan.LIST_TITLE), func(): plan_st.mode = "list", orders_open))
 	buttons.add_child(_plan_button(ui("UI_PLAN_MAPS"), func(): plan_st.mode = "maps"; plan_st.i = 0, orders_open))
@@ -627,7 +813,8 @@ func _plan_draw() -> void:
 	buttons.add_child(done)
 	match plan_st.mode:
 		"page":
-			_plan_page_ui(box)
+			if plan_view == null:
+				_plan_page_ui(box)
 		"orders":
 			_plan_orders_ui(box)
 		"list":
@@ -649,6 +836,9 @@ func _plan_done() -> void:
 	plan_code = 0
 	plan_panel.queue_free()
 	plan_panel = null
+	if plan_view:
+		plan_view.queue_free()
+		plan_view = null
 	_sortie()
 
 
@@ -1014,6 +1204,17 @@ func _sortie_draw(confirm := false) -> void:
 			buttons.add_child(b)
 	elif sortie_saving >= 0:
 		_sortie_save_ui(box)
+	elif sortie_loading >= 0:
+		_sortie_load_ui(box)
+	elif sortie_aborting:
+		var q := Label.new()
+		q.text = mes(0x1D9)
+		buttons.add_child(q)
+		for yes in [1, 0]:
+			var b := Button.new()
+			b.text = ui("UI_YES") if yes else ui("UI_NO")
+			b.pressed.connect(_sortie_system_run.bind(0, yes))
+			buttons.add_child(b)
 	else:
 		var st := Button.new()
 		st.text = ui("UI_START")
@@ -1022,18 +1223,177 @@ func _sortie_draw(confirm := false) -> void:
 			var r := Campaign.sortie_check(w, sortie_hooks)
 			_sortie_draw(r[0] == "start"))
 		buttons.add_child(st)
-		var sv := Button.new()                   # region 0x45's list (DS:0x50D70D), entry 1
+		# region 0x45's list (DS:0x50D70D): 作戦中止, ＳＡＶＥ, ＬＯＡＤ; region 0x46, back
 		var sys := SaveFiles.choice_texts(0x50D70D)
-		sv.text = sys[1] if sys.size() > 1 else "SAVE"
-		sv.pressed.connect(func():
-			sortie_saving = 0x29
-			sortie_text = ""
-			_sortie_draw())
-		buttons.add_child(sv)
+		for i in 3:
+			var sv := Button.new()
+			sv.text = sys[i] if sys.size() > i else ["ABORT", "SAVE", "LOAD"][i]
+			sv.pressed.connect(_sortie_system_press.bind(i))
+			buttons.add_child(sv)
+		var bk := Button.new()
+		bk.text = ui("UI_BACK")
+		bk.pressed.connect(_sortie_back_press)
+		buttons.add_child(bk)
 	hud_layer.add_child(sortie_panel)
 
 
 var sortie_saving := -1          # the sortie's save: 0x29 the slot list open, else the slot asked
+var sortie_loading := -1         # the sortie's load: 0x29 the slot list open, else the slot asked
+var sortie_aborting := false     # "abort the operation?" (MES 0x1D9) asked
+var mission_record := PackedByteArray()     # the mission's SCN_MIS record (the briefing's, again in the loop)
+var pre_battle_rounds := 0                  # 0x416CF0's rounds: briefing, plan, sortie
+
+
+class SortieSystemHooks extends BattleSortieHooks:
+	## Region 0x45's entries once the player has answered their windows (Campaign.
+	## sortie_system): the list's entry, the abort question's answer, the save's slot and
+	## answer (Title.save_game: PD2RECnn.BIN), the load's slot (Title.load_pick with rescue:
+	## 0x4983A0, its confirm the slot line 0x498070 with 1); the files in user://saves.
+	var entry := -2
+	var answer := 0
+	var pick := 0x29
+	var notes: Array = []
+
+	func system() -> int:
+		return entry
+
+	func ask(_msg: int) -> int:
+		return answer
+
+	func save_game(w: Pd2World) -> int:
+		var wr := SaveFiles.Writer.new()
+		wr.pick = pick
+		wr.answer = answer
+		var r := Title.save_game(w, wr)
+		notes.append_array(wr.notes)
+		return r
+
+	func load_game(w: Pd2World) -> int:
+		var lh := SortieLoadHooks.new()
+		lh.chosen = pick
+		lh.mode = w.mode_663a & 0xFF
+		var r := Title.load_pick(w, lh, true)
+		notes.append_array(lh.notes)
+		return r
+
+	func write(name: String, data: PackedByteArray) -> int:
+		return 1 if SaveFiles.write(name, data) else 0
+
+	func read(name: String) -> Variant:
+		return SaveFiles.read(name)
+
+	func campaign_set(w: Pd2World) -> void:
+		var t := GameData.tables("pd2" if w.campaign else "dash")
+		w.records = Pd2World.new(t.machines, t.launchers, t.ammo, PackedByteArray(), 1).records
+
+
+class SortieLoadHooks extends Title.Hooks:
+	## 0x4983A0's windows: the slot the player picked (then none), 0x498070 with 1 (its
+	## question answered yes when the list was picked; another mode's save: the note
+	## 0x519F0C and 0, back to the list, which then has nothing), the notes collected
+	var chosen := 0x29
+	var mode := 0
+	var notes: Array = []
+
+	func slot() -> int:
+		var s := chosen
+		chosen = 0x29
+		return s
+
+	func confirm(s: int) -> int:
+		var line: Variant = Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % s), mode, true)
+		if line is String:
+			notes.append(0x519F0C)
+			return 0
+		return 1
+
+	func box(text: Variant) -> int:
+		notes.append(text)
+		return 0
+
+	func save_file(s: int) -> Variant:
+		return SaveFiles.read("PD2REC%02d.BIN" % s)
+
+
+func _sortie_system_press(entry: int) -> void:
+	sortie_text = ""
+	match entry:
+		0:
+			sortie_aborting = true
+		1:
+			sortie_saving = 0x29
+		2:
+			sortie_loading = 0x29
+	_sortie_draw()
+
+
+func _sortie_system_run(entry: int, answer: int, pick := 0x29) -> void:
+	## Campaign.sortie_system with the player's answers; a result ends the screen
+	var hk := SortieSystemHooks.new()
+	hk.battle = self
+	hk.entry = entry
+	hk.answer = answer
+	hk.pick = pick
+	var r: Variant = Campaign.sortie_system(w, hk)
+	sortie_text = "\n".join(hk.notes.map(func(t): return mes(int(t)) if int(t) < 0x500000 else SaveFiles.exe(int(t))))
+	sortie_saving = -1
+	sortie_loading = -1
+	sortie_aborting = false
+	if r == null:
+		_sortie_draw()
+		return
+	_sortie_end(int(r))
+
+
+func _sortie_back_press() -> void:
+	_sortie_end(Campaign.sortie_back(sortie_hooks))
+
+
+func _sortie_end(result: int) -> void:
+	## the sortie's result into 0x416CF0's loop (Plan.pre_battle_round): 0 goes round again
+	## (the briefing, the plan, the sortie), 0x80 the battle, the rest leave for the title
+	if result >= 0x80000000:
+		result -= 0x100000000
+	var code: Array = Plan.pre_battle_round(w, brief_code, plan_code, result)
+	if sortie_panel:
+		sortie_panel.queue_free()
+		sortie_panel = null
+	if code[0] == 0:
+		_pre_battle_again()
+		return
+	if code[0] == 0x80:
+		# (the sortie's 3: a load that changed DS:0x50663A; savedata.tmp written, then the
+		# battle on that save, as the title's bit 0x80)
+		_reload_from_save(true)
+		return
+	say(uif("UI_SORTIE_LEFT", ["0x%X" % code[0]]))
+	mission_over = true
+	get_tree().change_scene_to_file("res://ui/boot.tscn")
+
+
+func _pre_battle_again() -> void:
+	## 0x416CF0's loop goes round: the briefing (0x4DD2F0, the mission's init) and the plan,
+	## then the sortie again; a load of another mission's save gives that mission's scene
+	if Debrief.chunk(w) - 1 != mission_index or ("pd2" if w.campaign else "dash") != campaign:
+		_reload_from_save(false)
+		return
+	brief_code = Plan.briefing(w, mission_record, mission_hooks)
+	pre_battle_rounds += 1
+	_plan()
+
+
+func _reload_from_save(resume: bool) -> void:
+	var b: Node = load("res://ui/battle.tscn").instantiate()
+	b.campaign = "pd2" if w.campaign else "dash"
+	b.mission_index = Debrief.chunk(w) - 1
+	b.title_carry = {"image": Debrief.save_image(w), "script": w.script_no, "stash": w.stash,
+		"loop": not resume, "resume": resume}
+	b.auto_react = auto_react
+	b.sortie_window = sortie_window
+	b.plan_window = plan_window
+	get_tree().root.add_child(b)
+	get_tree().current_scene = b
+	queue_free()
 
 
 func _sortie_save_ui(box: VBoxContainer) -> void:
@@ -1061,14 +1421,48 @@ func _sortie_save_ui(box: VBoxContainer) -> void:
 	for yes in [1, 0]:
 		var b := Button.new()
 		b.text = ui("UI_YES") if yes else ui("UI_NO")
+		b.pressed.connect(_sortie_system_run.bind(1, yes, sortie_saving))
+		row.add_child(b)
+
+
+func _sortie_load_ui(box: VBoxContainer) -> void:
+	## The sortie's load (0x4983A0): the slot list (0x498290: the saves there are), then
+	## the slot's line and the load question (0x498070 with 1)
+	if sortie_loading == 0x29:
+		var v := list_box(box)
+		for sl in Title.SLOTS:
+			if not Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sl), 0xFF, true) is Array:
+				continue
+			var b := Button.new()
+			b.text = SaveFiles.slot_line(sl, 0x519EE8)
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.pressed.connect(func(): sortie_loading = sl; _sortie_draw())
+			v.add_child(b)
+		var c := Button.new()
+		c.text = ui("UI_CANCEL")
+		c.pressed.connect(func(): sortie_loading = -1; _sortie_draw())
+		box.add_child(c)
+		return
+	var line: Variant = Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sortie_loading), w.mode_663a & 0xFF, true)
+	if line is String:                       # a save made in a battle: 0x498070's note 0x519F0C
+		sortie_text = SaveFiles.exe(0x519F0C)
+		sortie_loading = 0x29
+		call_deferred("_sortie_draw")
+		return
+	var q := Label.new()
+	q.text = SaveFiles.slot_line(sortie_loading, 0x519EE8)
+	box.add_child(q)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	for yes in [1, 0]:
+		var b := Button.new()
+		b.text = ui("UI_YES") if yes else ui("UI_NO")
 		b.pressed.connect(func():
-			var wr := SaveFiles.Writer.new()
-			wr.pick = sortie_saving
-			wr.answer = yes
-			Title.sortie_save(w, wr)
-			sortie_text = SaveFiles.exe(wr.notes[0]) if not wr.notes.is_empty() else ""
-			sortie_saving = -1
-			_sortie_draw())
+			if yes:
+				_sortie_system_run(2, 1, sortie_loading)
+			else:
+				sortie_loading = 0x29
+				_sortie_draw())
 		row.add_child(b)
 
 
@@ -1382,6 +1776,7 @@ func _build_hud() -> void:
 	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
 	cmds.append([ui("UI_SLOT_MENU") + " [G]", _cmd_slot_menu])
 	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])
+	cmds.append([ui("UI_SYSTEM") + " [Esc]", _cmd_system])     # the command menu's entry 0x10 (0x4847C0)
 	for b in cmds:
 		var btn := Button.new()
 		btn.text = b[0]
@@ -1471,6 +1866,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_X: _cmd_explosives()
 			KEY_G: _cmd_slot_menu()
 			KEY_P: _cmd_pocket_menu()
+			KEY_ESCAPE: _cmd_system()
 			KEY_TAB: _next_unit()
 			KEY_R:                                    # the last flight window, to look at again
 				if radar_view and not radar_view.snap.is_empty():
@@ -2191,6 +2587,224 @@ func _after_command() -> void:
 	_update_move_map()
 	_check_end()
 
+
+
+# --- the battle's system menu (0x4847C0: Title.battle_menu) ------------------------------
+
+class MenuDriveHooks extends Title.BattleSaveHooks:
+	## The system menu's lists and questions answered from a queue (as SortieDriveHooks);
+	## past its end the request is recorded and cancelled. A dry run (on a copy of the
+	## world) writes no file and runs no script: it finds the next question; the real run
+	## writes to user://saves and runs the mission's load and start scripts.
+	var battle
+	var answers: Array
+	var request: Variant = null
+	var dry := true
+	var out := {}
+	var notes: Array = []
+	var loaded := false
+
+	func _init(a: Array, b, d: bool) -> void:
+		answers = a.duplicate()
+		battle = b
+		dry = d
+
+	func _next(req: Array, d: int) -> int:
+		if not answers.is_empty():
+			return answers.pop_front()
+		if request == null:
+			request = req
+		return d
+
+	func menu() -> int:
+		return _next(["menu"], -2)
+
+	func box(msg: int) -> int:
+		return _next(["box", msg], 0)
+
+	func slot(load: bool) -> int:
+		return _next(["slot", load], 0x29)
+
+	func ask(line: Array) -> int:
+		return _next(["ask", line], 0)
+
+	func note(text: int) -> int:
+		notes.append(text)
+		return 0
+
+	func error(text: int) -> void:
+		notes.append(text)
+
+	func read(name: String) -> Variant:
+		return out[name] if out.has(name) else SaveFiles.read(name)
+
+	func write(name: String, data: PackedByteArray) -> bool:
+		if dry:
+			out[name] = data
+			return true
+		return SaveFiles.write(name, data)
+
+	func campaign_set(w: Pd2World) -> void:
+		var t := GameData.tables("pd2" if w.campaign else "dash")
+		w.records = Pd2World.new(t.machines, t.launchers, t.ammo, PackedByteArray(), 1).records
+
+	func load_script() -> void:
+		loaded = true
+		if not dry:
+			MissionScripts.run_load(battle.w)
+
+	func start_script() -> int:
+		return 0 if dry else MissionScripts.run_start(battle.w, battle.rng, battle.mission_hooks)
+
+
+var menu_answers: Array = []
+var sysmenu_panel: PanelContainer = null
+var menu_answers_scripted: Array = []      # tests: the system menu's answers, taken in turn
+
+
+func _cmd_system() -> void:
+	## the command menu's entry 0x10: the system menu (SAVE, LOAD and the six options)
+	if busy or mission_over or sysmenu_panel != null:
+		return
+	menu_answers = []
+	_menu_advance()
+
+
+func _menu_advance() -> void:
+	var dry := MenuDriveHooks.new(menu_answers, self, true)
+	Debrief.fire_point_to_ds(w)
+	Title.battle_menu(w.duplicate_world(), dry)
+	if dry.request != null:
+		if not menu_answers_scripted.is_empty():
+			menu_answers.append(menu_answers_scripted.pop_front())
+			_menu_advance()
+			return
+		_menu_ask(dry.request)
+		return
+	_menu_close()
+	var real := MenuDriveHooks.new(menu_answers, self, false)
+	var r := Title.battle_menu(w, real)
+	for t in real.notes:
+		say(menu_text(t))
+	if r in Title.BATTLE_ABORTS:
+		_game_closed(r)
+		return
+	mission_hooks.options = w.options
+	if real.loaded:
+		Debrief.fire_point_from_ds(w)
+		_reload_scene()
+		return
+	_update_move_map()
+	overlay.queue_redraw()
+
+
+func menu_text(t: int) -> String:
+	## a note's text: a battle message (WMES) below 0x500000, else Pd2.exe's
+	## (0x408B70 prints 0x5181A8, "%s", with "KEMURI open error")
+	return msg(t) if t < 0x500000 else SaveFiles.exe(0x518154 if t == 0x5181A8 else t)
+
+
+func _reload_scene() -> void:
+	## after the system menu's load: the battle scene of the loaded mission, with the world
+	## as 0x4847C0 left it (the player's phase goes on)
+	var b: Node = load("res://ui/battle.tscn").instantiate()
+	b.campaign = "pd2" if w.campaign else "dash"
+	b.mission_index = Debrief.chunk(w) - 1
+	b.title_carry = {"world": w, "rng": rng}
+	b.auto_react = auto_react
+	b.sortie_window = sortie_window
+	b.plan_window = plan_window
+	get_tree().root.add_child(b)
+	get_tree().current_scene = b
+	queue_free()
+
+
+func _menu_close() -> void:
+	if sysmenu_panel:
+		sysmenu_panel.queue_free()
+		sysmenu_panel = null
+
+
+func _sysmenu_pick(v: int) -> void:
+	menu_answers.append(v)
+	_menu_close()
+	_menu_advance()
+
+
+func _menu_cancel() -> void:
+	menu_answers = []
+	_menu_close()
+
+
+func menu_slot_line(line: Array) -> String:
+	## 0x477EB0's line: wsprintfA's format 0x517990 with the mode, the name, the time
+	## (0x453900; 0x50CBD1 for a save made outside a battle) and the verb
+	var when: String = line[2] if line[2] != null else SaveFiles.exe(Title.SLOT_SORTIE_TIME)
+	return GameData.exe_raw("dash", 0x517990) % [SaveFiles.exe(line[0]), SaveFiles.saved_name(line[1]),
+		when, SaveFiles.exe(0x517988 if line[3] else 0x517978)]
+
+
+func _menu_ask(req: Array) -> void:
+	_menu_close()
+	sysmenu_panel = PanelContainer.new()
+	var theme := Theme.new()
+	theme.default_font_size = 8
+	sysmenu_panel.theme = theme
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
+	bg.set_content_margin_all(8)
+	sysmenu_panel.add_theme_stylebox_override("panel", bg)
+	sysmenu_panel.position = Vector2(240, 40)
+	hud_layer.add_child(sysmenu_panel)
+	var box := VBoxContainer.new()
+	sysmenu_panel.add_child(box)
+	var add := func(text: String, v: int) -> void:
+		var b := Button.new()
+		b.text = text
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.pressed.connect(_sysmenu_pick.bind(v))
+		box.add_child(b)
+	match req[0]:
+		"menu":
+			for i in Title.SYSTEM_LABELS.size():
+				var t := SaveFiles.exe(Title.SYSTEM_LABELS[i])
+				if Title.SYSTEM_TOGGLES.has(i):
+					t += "  " + (ui("UI_ON") if w.options & Title.SYSTEM_TOGGLES[i] else ui("UI_OFF"))
+				add.call(t, i)
+			var c := Button.new()
+			c.text = ui("UI_CANCEL")
+			c.pressed.connect(_menu_cancel)
+			box.add_child(c)
+		"box":
+			var l := Label.new()
+			l.text = msg(req[1]).replace("@", "
+").strip_edges()
+			box.add_child(l)
+			add.call(ui("UI_YES"), 1)
+			add.call(ui("UI_NO"), 0)
+		"slot":
+			## 0x477770 (load): the saves there are; 0x477580 (save): a new slot first (the
+			## saves' count + 1, while there are at most 0x27) and the saves
+			var saved := []
+			for s in Title.SLOTS:
+				var d: Variant = SaveFiles.read(Title.rec_name(s))
+				if d != null and (d as PackedByteArray).size() >= 8 and (d as PackedByteArray).slice(0, 8) == Title.magic():
+					saved.append(s)
+			if not req[1] and saved.size() <= 0x27:
+				add.call(ui("UI_SLOT_NEW"), saved.size() + 1)
+			for s in saved:
+				add.call(SaveFiles.slot_line(s, 0x519EE8 if req[1] else 0x519ED8), s)
+			if saved.is_empty() and req[1]:
+				var l := Label.new()
+				l.text = msg(0xD)
+				box.add_child(l)
+			add.call(ui("UI_CANCEL"), 0x29)
+		"ask":
+			var l := Label.new()
+			l.text = menu_slot_line(req[1])
+			box.add_child(l)
+			add.call(ui("UI_YES"), 1)
+			add.call(ui("UI_NO"), 0)
 
 # --- the turn --------------------------------------------------------------------
 

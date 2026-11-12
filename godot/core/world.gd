@@ -60,6 +60,7 @@ var stock := PackedByteArray()       # DS:0x506654: the base's stock (machines, 
 var head := PackedByteArray()        # DS:0x506638-0x506653: the save's head (campaign mode, chunk ..; Debrief)
 var reg_unit := PackedByteArray()    # DS:0x50CCEA: reg_unit.dat, the armament screen's ten registers (Equipment)
 var exp0 := PackedByteArray()        # DS:0x506B34-0x506B38: record 0's experience counters
+var options := 0                     # DS:0x551D29 (u16): the battle's options (the system menu 0x4847C0)
 var script_no := 0                   # DS:0x50CE72: the mission number (the scripts' tables; the debrief sets it)
 var stash: Array = []                # DS:0x50CE73 / 0x50D023: PD2's 27 crews and units while DASH plays
 var title_list := PackedByteArray()  # DS:0x523EE0: the title's scenario list (24 B, kept between visits; Title)
@@ -130,6 +131,7 @@ func duplicate_world() -> Pd2World:
 	c.drop_saved = drop_saved.duplicate()
 	c.ds = ds.duplicate()
 	c.mode_663a = mode_663a
+	c.options = options
 	c.phase = phase
 	c.bombs = bombs.duplicate()
 	c.mission_turn = mission_turn

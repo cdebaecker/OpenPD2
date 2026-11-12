@@ -199,7 +199,11 @@ PLAN_TEXTS = {0x50E029, 0x50E032, 0x50E03B, 0x50E046, 0x50E053, 0x50E060, 0x514B
 TITLE_TEXTS = {0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517474, 0x517458,
                0x517508, 0x517534, 0x517560, 0x51759C, 0x517574, 0x5175C8, 0x517644, 0x517664,
                0x519EB0, 0x519F24, 0x519F44, 0x519ED8, 0x519EE8, 0x519EF0, 0x519F0C,
-               0x50CBF2, 0x50CBFB, 0x50CC04}
+               0x50CBF2, 0x50CBFB, 0x50CC04, 0x50CBD1,
+               # the battle's system menu 0x4847C0: its entries (DS:0x518224..), the save's and load's
+               # notes (0x477220 / 0x477370 / 0x477EB0: format and verbs) and KEMURI's (0x484160)
+               0x518224, 0x51823C, 0x518250, 0x518264, 0x518278, 0x51828C, 0x5182A0, 0x5182B0,
+               0x5178E0, 0x5178EC, 0x5179AC, 0x517990, 0x517978, 0x517988, 0x518154, 0x5181AC}
 
 # The radio's call signs: load_campaign_set (0x409240) copies 39 string pointers to
 # DS:0x50C7E5 and the 34 that follow (DS:0x50C881) from the campaign's set; the radio reads
@@ -376,8 +380,11 @@ def export_messages(game, out):
 # campaign's mission maps smap.pac (one per chunk, 360 x 360: the 15 x 15 grid of 24 px),
 # the counters KOMA.DAT (26 tiles of 8 x 8, four bit planes, 0x43FB20); the radio's talk
 # windows (0x488DE0): portraits Evkao.pac (128 x 128) and Event.pac (256 x 128).
-SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac')
-CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac')    # (amap: the operation plan's area maps, 0x444500)
+# The operation plan (0x443F60): its background plan_g.pac (640 x 400), the orders' panel
+# plan_gb.pac and the panel it puts back plan_gc.pac (264 x 160 at (0x178, 0xF0)), each
+# campaign's mini-maps mmap.pac (144 x 144, by chunk: the pages' blinks).
+SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac')
+CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 
 def export_images(game, out):
