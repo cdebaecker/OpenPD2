@@ -1,11 +1,12 @@
 extends SceneTree
 ## The game's windows over a battle, saved as a picture: godot --path engine/godot -s
-## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction [ja|en|fr]
+## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction|command [ja|en|fr]
 ##   prompt: the move's question 0x1DC at the cursor (0x47EBE0); box: the mine's 0x1A3
 ##   (ui_message_box, kind 0); line: 0x1AE (ui_message_line) with its click wait lit;
 ##   select: a select window with 12 items (the scroll bar), the second outlined;
 ##   weapon: the first DoLL's weapon picker in mode 0 (0x4E7EE0) with 3 AP;
 ##   reaction: the reaction menu (0x4730E0) for three DoLLs;
+##   command: the first DoLL's command menu (0x4EE8D0);
 ##   menu: the first DoLL's slot menu at the cursor (0x427530);
 ##   status: the machine status window (0x4E8930 / 0x467880) of the first active DoLL.
 
@@ -69,6 +70,11 @@ func _init() -> void:
 			b._show_reaction_units(b.squad.slice(0, 3), e, 5)
 			gw = b.react_panel.get_child(0)
 			gw._hover = 2
+		"command":
+			var u: int = b.squad[0]
+			b.open_command_menu(u)
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+			gw._hover = 3
 		"select":
 			var labels := []
 			for i in 12:

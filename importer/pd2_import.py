@@ -196,6 +196,8 @@ SCRIPT_CHOICES.update({0x50D86C: 3, 0x5173A0: 2, 0x50CB4E: 23, 0x50D70D: 3})
 # the directions (0x50E009), the sites (0x50E075) and the plan types' names (0x50C965, the
 # record entries' +0: 18 in use); its titles, the site question and the XMS box's lines.
 SCRIPT_CHOICES.update({0x50E06D: 2, 0x50E009: 8, 0x50E075: 8, 0x50C965: 18})
+# The command menu's entries 0-10 (DS:0x517EF0, unit_command_menu 0x4EE8D0).
+SCRIPT_CHOICES.update({0x517EF0: 11})
 PLAN_TEXTS = {0x50E029, 0x50E032, 0x50E03B, 0x50E046, 0x50E053, 0x50E060, 0x514BB8, 0x514AA4, 0x514A98}
 # ... and its notes (0x46D780, the pickers 0x4985A0 / 0x4983A0, the save 0x497F60 and the
 # slot's header line 0x498070).
@@ -241,7 +243,11 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # held or not, a hidden name)
              0x51F6C0, 0x50CBB3, 0x50CBB6, 0x50CBE0,
              # the reaction menu (0x472ED0): its two entries and a unit's row
-             0x517838, 0x517850, 0x517860) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
+             0x517838, 0x517850, 0x517860,
+             # the command menu (unit_command_menu 0x4EE8D0): carry / release (0x4DDF70 picks one)
+             0x517F20, 0x517F2E,
+             # the info panel's weapon list (0x466DF0): blank, "--------", COVER UP, STACK, CARRY
+             0x516F48, 0x516F30, 0x516F54, 0x516F60, 0x516F6C) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -283,6 +289,8 @@ def export_tables(game, out):
             'machine_names': [m['name'] for m in info['sets'][TABLE_SET[camp]]['machines']],
             # (the machines' codes, DS:0x50C2E5: the reaction menu's rows, 0x472ED0)
             'machine_codes': [m['code'] for m in info['sets'][TABLE_SET[camp]]['machines']],
+            # (the launchers' codes, DS:0x50C0E5: the info panel's weapon list, 0x466DF0)
+            'launcher_codes': {l['id']: l['code'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
             'launcher_names': {l['id']: l['name'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
             'ammo_names': {a['id']: a['name'] for a in info['sets'][TABLE_SET[camp]]['ammunition']},
             'crew_names': info['crew_names'],
@@ -396,8 +404,9 @@ def export_messages(game, out):
 # The battle's machine status window (0x467880): the damage diagrams hidan.pac (by machine
 # +0x19, 0-7); its info panel (0x466790): the pilots' faces dface.pac and each campaign's
 # machine pictures datau.pac (by machine +0x19).
+# The battle's info panel (0x4830E0): hex_g.pac (208 x 400).
 SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac',
-                 'hidan.pac', 'dface.pac')
+                 'hidan.pac', 'dface.pac', 'hex_g.pac')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 

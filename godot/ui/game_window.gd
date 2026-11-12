@@ -53,6 +53,8 @@ var _waiting := false
 var _t := 0.0
 var _hover := -1
 var _buf := PackedByteArray()
+var _raw := PackedByteArray()     # a picture's own colour index (0: the window's colour in _buf)
+static var _pal256: Array = []
 var _w := 0
 var _h := 0
 var _hh := 0                  # the header window's height
@@ -114,6 +116,8 @@ func _layout() -> void:
 	size = Vector2(_w, _h)
 	_buf.resize(_w * _h)
 	_buf.fill(0)
+	_raw.resize(_w * _h)
+	_raw.fill(0)
 	if header:
 		_draw_window(0, 0, cols, rows, lh, framed)
 	if not items.is_empty():
@@ -147,6 +151,7 @@ static func ui_data() -> Dictionary:
 func _px(x: int, y: int, c: int) -> void:
 	if x >= 0 and y >= 0 and x < _w and y < _h:
 		_buf[y * _w + x] = c & 15
+		_raw[y * _w + x] = 0
 
 
 func _ix(x: int, y: int) -> int:
@@ -238,6 +243,12 @@ static func bmp(path: String) -> Array:
 		var row := y if top else bh - 1 - y
 		for x in bw:
 			px[y * bw + x] = d[off + row * stride + x]
+	if _pal256.is_empty():
+		# the DIB's palette past the window's colours: Pd2.exe's fixed table DS:0x518478 (entries
+		# 26-245, 0x487120), which the pictures carry as they are
+		var po := 14 + d.decode_u32(14)
+		for i in 256:
+			_pal256.append(Color8(d[po + 4 * i + 2], d[po + 4 * i + 1], d[po + 4 * i]) if po + 4 * i + 2 < d.size() else Color.BLACK)
 	return [bw, bh, px]
 
 
@@ -250,7 +261,12 @@ func blit(path: String, x: int, y: int) -> Vector2i:
 	var px: PackedByteArray = b[2]
 	for yy in int(b[1]):
 		for xx in int(b[0]):
-			_px(x + xx, y + yy, (px[yy * int(b[0]) + xx] - 10) & 15)
+			var v := px[yy * int(b[0]) + xx]
+			if v >= 10 and v <= 25:
+				_px(x + xx, y + yy, v - 10)
+			elif x + xx >= 0 and y + yy >= 0 and x + xx < _w and y + yy < _h:
+				_buf[(y + yy) * _w + x + xx] = 0
+				_raw[(y + yy) * _w + x + xx] = v          # a picture colour (DS:0x518478)
 	_dirty = true
 	queue_redraw()
 	return Vector2i(b[0], b[1])
@@ -560,7 +576,8 @@ func _texture(buf: PackedByteArray) -> ImageTexture:
 		cols_rgb.append(color(i))
 	for y in _h:
 		for x in _w:
-			img.set_pixel(x, y, cols_rgb[buf[y * _w + x]])
+			var r := _raw[y * _w + x]
+			img.set_pixel(x, y, _pal256[r] if r != 0 and r < _pal256.size() else cols_rgb[buf[y * _w + x]])
 	return ImageTexture.create_from_image(img)
 
 
@@ -568,12 +585,14 @@ func _draw() -> void:
 	if _w == 0:
 		return
 	var buf := _buf
-	var xor_on := (_hover >= 0 and _hover < _all_regions.size() and int(_all_regions[_hover][4]) == 1) or (_bar and _waiting)
+	var lit := _hover >= 0 and _hover < _all_regions.size() and int(_all_regions[_hover][4]) in [1, 2]
+	var xor_on := lit or (_bar and _waiting)
 	if xor_on:
 		var keep := _buf.duplicate()
-		if _hover >= 0 and _hover < _all_regions.size() and int(_all_regions[_hover][4]) == 1:
+		if lit:
+			# 0x409010: the region outlined (type 1) or filled (type 2) in XOR 15
 			var r: Array = _all_regions[_hover]
-			_rect(r[0], r[1], r[2] - 1, r[3] - 1, 4, 0xF, 1)
+			_rect(r[0], r[1], r[2] - 1, r[3] - 1, 4, 0xF, int(r[4]))
 		if _bar and _waiting:
 			var o := _origin()
 			var top := (mini(_row, rows - 1) + 1) * lh + o.y - 2     # (the line the wait is on)
@@ -590,7 +609,9 @@ func _draw() -> void:
 		draw_texture(_tex, Vector2.ZERO)
 	var o := _origin()
 	for c in _cells:
-		_draw_char(o.x + c[0] * (lh / 2), o.y + c[1] * lh, c[2], c[3])
+		# (the 8 px font's half-width characters, FONT_ANK, step 8 px a column; TextOut's lh / 2)
+		var ank: bool = ((int(c[3]) >> 2) & 3) >= 2 and half_width(c[2]) and str(c[2]).unicode_at(0) < 256
+		_draw_char(o.x + c[0] * (8 if ank else lh / 2), o.y + c[1] * lh, c[2], c[3])
 	if not items.is_empty():
 		# the items printed in turn into the item window ("%0Ns": cut and padded to the item
 		# columns, colour codes kept and carried from one item to the next; flags 1: 12 px)

@@ -1189,7 +1189,7 @@ func _sortie_draw(confirm := false) -> void:
 					Plan.pre_battle_round(w, brief_code, plan_code, 0)
 					sortie_panel.queue_free()
 					sortie_panel = null
-					hud_panel.visible = true
+					hud_panel.visible = hud_bar          # (the engine's bar stays as it was: H)
 					_begin_battle()
 				else:
 					_sortie_draw())
@@ -1783,6 +1783,16 @@ func _build_hud() -> void:
 	log_box.scroll_following = true
 	log_box.custom_minimum_size = Vector2(200, 110)
 	box.add_child(log_box)
+	# the game's own screen: the info panel (hex_g.pac) at the main window's right edge
+	# (Pd2.exe places its window at x 0x1B2 with Windows' caption; the engine draws no
+	# caption and puts the 208 px client at 640 - 208 so it stays on the screen); the
+	# command bar above is the engine's own and stays hidden (H shows it)
+	panel.visible = false
+	info_panel = InfoPanel.make(self)
+	info_panel.position.x = MAIN_W - 0xD0
+	info_panel.region.connect(_panel_region)
+	_win_root().add_child(info_panel)
+	panel_refresh()
 
 
 func say(t: String) -> void:
@@ -1806,6 +1816,7 @@ func unit_name(u: int) -> String:
 
 
 func _refresh_info() -> void:
+	panel_refresh()
 	if selected == -1:
 		info.text = "No unit selected"
 		return
@@ -1825,12 +1836,22 @@ func _refresh_info() -> void:
 
 # --- input -----------------------------------------------------------------------
 
+var _rpress := Vector2(-100, -100)
+var hud_bar := false              # the engine's own command bar and log shown (H)
+
+
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseMotion:
 		if ev.button_mask & MOUSE_BUTTON_MASK_RIGHT or ev.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 			cam.position = (cam.position - ev.relative / cam.zoom).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
 		hover = hex_at(get_global_mouse_position())
 		overlay.queue_redraw()
+	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT:
+		# a right click (not a drag): the selected unit's command menu (0x4EF600's -2)
+		if ev.pressed:
+			_rpress = ev.position
+		elif ev.position.distance_to(_rpress) < 4 and selected != -1 and not busy and react_look.is_empty() 				and w.active(selected) and not w.is_enemy(selected) and hex_pick.is_empty():
+			open_command_menu(selected)
 	elif ev is InputEventMouseButton and ev.pressed:
 		if ev.button_index == MOUSE_BUTTON_WHEEL_UP:
 			cam.zoom = (cam.zoom * 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
@@ -1864,10 +1885,147 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_P: _cmd_pocket_menu()
 			KEY_ESCAPE: _cmd_system()
 			KEY_TAB: _next_unit()
+			KEY_H:                                    # the engine's own command bar and log (debugging)
+				hud_bar = not hud_bar
+				if hud_panel:
+					hud_panel.visible = hud_bar
 			KEY_R:                                    # the last flight window, to look at again
 				if radar_view and not radar_view.snap.is_empty():
 					radar_view.visible = not radar_view.visible
 			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
+
+
+# --- the command menu (unit_command_menu 0x4EE8D0) and the info panel ---------------
+
+var info_panel: InfoPanel = null
+
+
+func command_menu_labels(u: int) -> Array:
+	## 0x4DDF70: the entries DS:0x517EF0 0-10 (their %aHH codes as the printer's), the AP
+	## digits written into them by the crew's skills (bit 1 search 4 / 8, bit 4 support 6 /
+	## 12, bit 8 conceal 3 / 6, bit 2 carry 4 / 8), entry 10 carry (0x517F20) or release
+	## (0x517F2E) by +0x34; the mission's own entry 11 (the menu hook of table 0x51EF18)
+	var adds: Array = GameData.tables(campaign).get("script_choices", {}).get("517EF0", [])
+	var sk := w.ucrew(u, 8)
+	var digits := {6: (" 6" if sk & 4 else "12"), 8: (" 4" if sk & 1 else " 8"), 9: (" 3" if sk & 8 else " 6"),
+		10: (" 4" if sk & 2 else " 8")}
+	var out := []
+	for i in 11:
+		var va: int = (0x517F20 if w.ub(u, 0x34) == 0xFF else 0x517F2E) if i == 10 else str(adds[i]).hex_to_int() if i < adds.size() else 0
+		var raw := GameData.exe_raw(campaign, va)
+		if digits.has(i) and not (i == 10 and va == 0x517F2E):
+			if raw.find("%") != -1 and raw.find("%a") == -1:
+				raw = raw.replace("%2d", digits[i])            # (a translation: the number's place)
+			else:
+				raw = _patch_bytes(raw, 9, digits[i])         # bytes 9-10 (Shift-JIS) as the game writes them
+		out.append(_codes(raw))
+	var e11 := MissionScripts.run_menu(w, u)
+	if e11[0] == 1:
+		out.append(mission_label(e11[1]))
+	return out
+
+
+func _patch_bytes(t: String, at: int, two: String) -> String:
+	## t with its Shift-JIS bytes at..at+1 replaced by two half-width characters
+	var n := 0
+	for i in t.length():
+		if n == at and i + 1 < t.length():
+			return t.substr(0, i) + two + t.substr(i + 2)
+		n += 1 if GameWindow.half_width(t[i]) else 2
+	return t
+
+
+func _codes(t: String) -> String:
+	## %aHH as the printer's colour codes (format_text's %s copies them so)
+	var re := RegEx.create_from_string("%a([0-9A-Fa-f]{2})")
+	var out := ""
+	var last := 0
+	for m in re.search_all(t):
+		out += t.substr(last, m.get_start() - last) + "\u0001" + char(m.get_string(1).hex_to_int())
+		last = m.get_end()
+	return out + t.substr(last)
+
+
+func open_command_menu(u: int) -> void:
+	## unit_command_menu (0x4EE8D0): a select window of 13 columns at the cursor ((x & ~7) -
+	## 0x10, y; kept inside by 0x452450's size), a right click closing it; the entries:
+	## 0-2 move high speed / normal / careful, 3-5 fire normal / aimed / anti-air (the
+	## picker first), 6 the support request, 7 the machine status (with its pilot, damage
+	## and machine windows), 8 search, 9 conceal, 10 carry / release, 11 the mission's own
+	if busy or mission_over or auto_react:
+		return
+	var labels := command_menu_labels(u)
+	var n := labels.size()
+	var ww := (13 + (3 if n > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var hh := (mini(n, GameWindow.SCROLL_SHOWN) + 1) * 16
+	var m := _mouse_main()
+	var x := (int(m.x) & 0xFFF8) - 0x10
+	var y := int(m.y)
+	if ww - 1 + x > MAIN_W:
+		x = MAIN_W - ww
+	if y - 1 + hh > MAIN_H:
+		y = MAIN_H - hh
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), 13, 0, 0, labels, 13, [], true)
+	gw.role = "command"
+	_hold([gw])
+	react_panel = null                  # (not a question of a waiting thread)
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		_command(u, v))
+
+
+func _command(u: int, v: int) -> void:
+	_select(u)
+	match v:
+		0, 1, 2:
+			_set_move_mode(v)
+			_set_mode("move")
+		3:
+			_fire_command("fire")
+		4:
+			_fire_command("aimed")
+		5:
+			_fire_command("aa")
+		6:
+			say(ui("UI_NOT_PORTED"))          # cmd_support_request (0x4E4560): not ported yet
+		7:
+			_cmd_pocket_menu()
+		8:
+			_cmd_search()
+		9:
+			_cmd_conceal()
+		10:
+			_cmd_carry_mode()
+		11:
+			_cmd_mission()
+
+
+func _panel_region(k: int) -> void:
+	## the info panel's regions, as the player phase (0x4EF600) and ui_map_click (0x47AC70)
+	## answer them
+	if busy or mission_over:
+		return
+	match k:
+		4:
+			_next_unit()                         # the face: the next DoLL (scroll_to)
+		11:
+			_cmd_withdraw()                      # 撤退: 0x1DE
+		14:
+			_confirm(msg(0x1E0), _end_turn, 1)  # 終了: 0x1E0, a message box of kind 1
+		16:
+			_cmd_system()                        # システム: 0x4847C0
+		22:
+			if selected != -1:
+				_cmd_pocket_menu()               # the weapons' box: ui_machine_status
+		_:
+			say(ui("UI_NOT_PORTED"))             # 部隊 0x4EFC60, 武装 0x4E9D90, マップ 0x43A3E0,
+			                                     # 作戦中止 0x1DF, 一斉 0x429540, 指令書 0x43BA20, 23
+
+
+func panel_refresh() -> void:
+	if info_panel and is_instance_valid(info_panel):
+		info_panel.unit = selected
+		info_panel.refresh()
 
 
 func _set_mode(m: String) -> void:
@@ -1947,6 +2105,8 @@ func _click(h: Vector2i) -> void:
 	var o := w.O[h.x + MAP * h.y] - 1
 	if o != -1 and o in squad and (mode == "move" or o == selected):
 		_select(o)
+		if w.active(o) and not w.is_enemy(o):
+			open_command_menu(o)                 # 0x4EF600: an own unit's command menu
 		return
 	if selected == -1 or not w.active(selected):
 		return
@@ -3712,7 +3872,7 @@ func _cmd_withdraw() -> void:
 	if auto_react:
 		_withdraw()
 		return
-	_confirm(msg(0x1DE), _withdraw)
+	_confirm(msg(0x1DE), _withdraw, 0)          # 0x4EF600: a message box of kind 0
 
 
 func _withdraw() -> void:
