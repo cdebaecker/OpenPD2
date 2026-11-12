@@ -3382,7 +3382,18 @@ func radar_face(a: int, code: int, b: int) -> void:
 
 
 func radar_say(t: String, code: int) -> void:
-	_radar().radio_say(t, code)
+	var r := _radar()
+	var gw = r.radio_say(t, code)
+	gw.print_text(str(r.lines[(code >> 4) & 0xF][0]))
+
+
+func radar_say_wait(t: String, code: int) -> void:
+	var r := _radar()
+	r.visible = true                       # (the radio's windows are the flight window's)
+	var gw = r.radio_say(t, code)
+	gw.waits = true
+	await gw.print_text(str(r.lines[(code >> 4) & 0xF][0]))
+	react_sem.post()
 
 
 func radar_close(n: int) -> void:
@@ -3604,7 +3615,13 @@ class BattleFlightHooks extends Flight.Hooks:
 		var t: String = battle.msg(msg, battle.radio_args(args))
 		battle.say_msg(msg, battle.radio_args(args))
 		if code is int:
-			battle.call_deferred("radar_say", t, code)
+			if battle.auto_react or battle._headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+				battle.call_deferred("radar_say", t, code)
+			else:
+				# the line's window waits for its clicks ('@', a full window), as the game's
+				# printer does, before the flight engine goes on
+				battle.call_deferred("radar_say_wait", t, code)
+				battle.react_sem.wait()
 		return 0
 
 	func radio_close(n: int) -> int:

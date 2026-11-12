@@ -25,13 +25,16 @@ var snap := {}                 # the world's state when last drawn (copied on th
 var faces := {}                # talk window slot -> [pac, index, x, y]
 var codes := {}                # window group (code >> 4) -> the code shown
 var lines := {}                # window group -> [text, x, y, width (chars)]
+var wins := {}                 # window group -> its GameWindow (0x489140)
+var _label_wins: Array = []
+var _label_texts: Array = []
 var _tex := {}
 var _koma: Array = []
 
 
 func _init() -> void:
 	size = Vector2(W, H)
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func tex(path: String) -> Texture2D:
@@ -110,8 +113,7 @@ func _draw() -> void:
 		draw_texture(sm, Vector2(8, 0x20))
 	if snap.is_empty():
 		return
-	_text(_time(snap.turn, snap.d), 0xF0, 10)
-	_text(_time(snap.turn, 0), 0x140, 10)
+	_labels()
 	_draw_grid()
 	_draw_list()
 	for slot in faces:
@@ -119,14 +121,53 @@ func _draw() -> void:
 		var t := tex("%s/images/%s/%02d.bmp" % [root, f[0], f[1]])
 		if t:
 			draw_texture(t, Vector2(f[2], f[3]))
-	for k in lines:
-		var l: Array = lines[k]
-		var wpx: float = l[3] * 8 + 16
-		draw_rect(Rect2(l[1], l[2], wpx, 7 * 16 + 8), Color(0, 0, 0, 0.85))
-		var y: float = l[2] + 4
-		for part in str(l[0]).split("\n"):
-			_text(part, l[1] + 8, y, 0xF0, 14)
-			y += 16
+
+
+func _labels() -> void:
+	## 0x43E510's unframed windows (flags 1: 12 px, no pattern): the mission's name
+	## (DS:0x50CB4E by DS:0x50CE72) at (0x38, 10), 18 columns; the times (0x453900) at
+	## (0xF0, 10) and (0x140, 10), 5 columns
+	var want := [SaveFiles.mission_name(battle.script_no) if battle else "", _time(snap.turn, snap.d), _time(snap.turn, 0)]
+	if want == _label_texts:
+		return
+	_label_texts = want
+	for l in _label_wins:
+		l.queue_free()
+	_label_wins = []
+	var at := [[0x38, 18], [0xF0, 5], [0x140, 5]]
+	for i in 3:
+		var gw := GameWindow.new()
+		gw.cols = at[i][1]
+		gw.rows = 1
+		gw.lh = 12
+		gw.framed = false
+		gw.black = true
+		gw.code = 0x75
+		gw.waits = false
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gw.position = Vector2(at[i][0], 10)
+		gw._layout()
+		add_child(gw)
+		move_child(gw, 0)
+		_label_wins.append(gw)
+		gw.print_text(str(want[i]))
+
+
+func waiting() -> Variant:
+	## a radio window waiting for a click, or null
+	for g in wins:
+		if is_instance_valid(wins[g]) and wins[g]._waiting:
+			return wins[g]
+	return null
+
+
+func _gui_input(ev: InputEvent) -> void:
+	## the radio's click waits (ui_wait_click): a left or right click anywhere goes on
+	if ev is InputEventMouseButton and ev.pressed:
+		var gw: Variant = waiting()
+		if gw:
+			accept_event()
+			gw.outside(ev.button_index)
 
 
 func _time(t: int, d: int) -> String:
@@ -335,7 +376,7 @@ func radio_face(a: int, code: int, b: int) -> void:
 	queue_redraw()
 
 
-func radio_say(text: String, code: int) -> void:
+func radio_say(text: String, code: int) -> Variant:
 	## 0x489140: the line's window for the code's group (width 14 or 30 characters, 7 lines)
 	var grp := (code >> 4) & 0xF
 	var kind := code & 0xF0
@@ -359,8 +400,19 @@ func radio_say(text: String, code: int) -> void:
 				x = 0x178; y = 0x88; wd = 0x1E
 			elif n == 0xB:
 				x = 0x178; y = 0x108; wd = 0x1E
-	lines[grp] = [text.replace("@", "").strip_edges(), x, y, wd]
+	lines[grp] = [text, x, y, wd]
+	if GameWindow.translated(text):
+		lines[grp][0] = GameWindow.fit(text, wd)        # (engine-side: a translation wraps at its words)
+	# the window (ui_window_create(1, .., x, y, wd, 7, 0x10, flags 1)) is kept for its group
+	# and printed into: its 0x0C clears, its '@' waits for a click
+	var gw: Variant = wins.get(grp)
+	if gw == null or not is_instance_valid(gw):
+		gw = GameWindow.text_window(x, y, wd, 7, 1)
+		gw.waits = false
+		add_child(gw)
+		wins[grp] = gw
 	queue_redraw()
+	return gw
 
 
 func radio_close(n: int) -> void:
@@ -371,4 +423,8 @@ func radio_close(n: int) -> void:
 		faces.erase(2 * g + 1)
 		lines.erase(g)
 		codes.erase(g)
+		if wins.has(g):
+			if is_instance_valid(wins[g]):
+				wins[g].queue_free()
+			wins.erase(g)
 	queue_redraw()
