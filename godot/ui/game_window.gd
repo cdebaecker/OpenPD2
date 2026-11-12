@@ -42,6 +42,7 @@ var regions: Array = []       # [x0, y0, x1, y1, type (1 outline, 2 fill)] in wi
 var right_cancel := false
 var waits := true             # false: '@' and full windows do not wait (tests)
 var black := false            # the inside cleared to colour 0 (no background pattern: DS:0x50C9F0)
+var role := ""                # what the window asks (tests): "reaction", "weapon", ...
 var scroll := 0
 
 var _cells: Array = []        # [x, y, char, code]

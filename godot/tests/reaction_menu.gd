@@ -1,7 +1,7 @@
 extends SceneTree
 ## The reaction menu on the threaded computer turn. Mission dash 1 with the squad moved
 ## next to active enemies; fixed seeds.
-## 1. The menu answered "Done" through its buttons must leave the world exactly as the
+## 1. The menu answered "wait and see" through its window must leave the world exactly as the
 ##    synchronous run whose policy answers "Done" (1).
 ## 2. Clicking the first unit and its first weapon each time must finish the turn.
 
@@ -54,26 +54,36 @@ func _battle(auto: bool):
 
 
 func _run_threaded(b, how: String) -> int:
+	## answers the game's windows as they come: the reaction menu (role "reaction") with
+	## "wait and see" (1) or its first unit (2); the weapon picker (role "weapon") with its
+	## first slot it takes, else a right click (back to the menu); any other question with
+	## its first answer
 	b._end_turn()
 	var menus := 0
 	var frames := 0
+	var tried := {}
 	while b.busy and frames < 20000:
 		await process_frame
 		frames += 1
-		if b.react_panel != null and b.react_panel.is_inside_tree():
-			menus += 1
-			var buttons: Array = b.react_panel.find_children("*", "Button", true, false)
-			var pick: Button = null
-			for btn in buttons:
-				if how == "done" and btn.text == "Done":
-					pick = btn
-				elif how == "fire" and pick == null and not btn.text in ["Done", "Ignore this unit", "Back"]:
-					pick = btn
-			if pick == null:
-				for btn in buttons:
-					if btn.text in ["Back", "Done"]:
-						pick = btn
-						break
-			pick.pressed.emit()
-			await process_frame
+		var hold = b.react_panel
+		if hold == null or not is_instance_valid(hold) or hold.is_queued_for_deletion():
+			continue
+		var wins: Array = hold.get_children().filter(func(n): return n.has_method("answer"))
+		if wins.is_empty():
+			continue
+		var gw = wins[-1]
+		match gw.role:
+			"reaction":
+				menus += 1
+				gw.answer(1 if how == "done" else 2)
+			"weapon":
+				var k: int = tried.get(gw.get_instance_id(), 0)
+				if k < 4:
+					tried[gw.get_instance_id()] = k + 1
+					gw.answer(k)                  # a refused slot leaves the picker up
+				else:
+					gw.answer(-2)
+			_:
+				gw.answer(0)
+		await process_frame
 	return menus

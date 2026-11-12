@@ -47,6 +47,7 @@ func tables(campaign: String) -> Dictionary:
 			"launchers": _join(doc.get("launchers", [])),
 			"ammo": _join(doc.get("ammo", [])),
 			"machine_names": doc.get("machine_names", []),
+			"machine_codes": doc.get("machine_codes", []),
 			"launcher_names": doc.get("launcher_names", {}),
 			"ammo_names": doc.get("ammo_names", {}),
 			"crew_names": doc.get("crew_names", []),

@@ -239,7 +239,9 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078,
              # the machine status window (0x4E8930: a slot's count -1; 0x467880: a skill
              # held or not, a hidden name)
-             0x51F6C0, 0x50CBB3, 0x50CBB6, 0x50CBE0) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
+             0x51F6C0, 0x50CBB3, 0x50CBB6, 0x50CBE0,
+             # the reaction menu (0x472ED0): its two entries and a unit's row
+             0x517838, 0x517850, 0x517860) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -279,6 +281,8 @@ def export_tables(game, out):
             'launchers': [b64(exe[base + 0x3E0 + 17 * i: base + 0x3E0 + 17 * (i + 1)]) for i in range(96)],
             'ammo': [b64(exe[base + 0x3E0 + 0x660 + 12 * i: base + 0x3E0 + 0x660 + 12 * (i + 1)]) for i in range(96)],
             'machine_names': [m['name'] for m in info['sets'][TABLE_SET[camp]]['machines']],
+            # (the machines' codes, DS:0x50C2E5: the reaction menu's rows, 0x472ED0)
+            'machine_codes': [m['code'] for m in info['sets'][TABLE_SET[camp]]['machines']],
             'launcher_names': {l['id']: l['name'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
             'ammo_names': {a['id']: a['name'] for a in info['sets'][TABLE_SET[camp]]['ammunition']},
             'crew_names': info['crew_names'],

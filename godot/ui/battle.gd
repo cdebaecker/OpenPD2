@@ -142,13 +142,13 @@ class SandboxHooks extends AiTurnHooks:
 			return best
 		if not battle.ask_prompt(battle.msg(0x1E5, battle.intercept_names(t)), false):
 			return -1
-		var opts := []
-		for s in Action.weapon_choices(w, t, 7, 0):
-			if s < 4:
-				opts.append([battle.ui("UI_SLOT_ROUNDS") % [s + 1, w.slot_count(t, s)], s])
-		opts.append([battle.ui("UI_CANCEL"), -2])
-		var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
-		return -1 if pick == -2 else pick
+		while true:
+			var pick: int = battle.ask_weapon(t, 7, 0)       # the picker in mode 7
+			if pick == -2:
+				return -1
+			if pick < 4:
+				return pick
+		return -1
 
 	# the player's move command and its mine dialogs; they run on the move's worker
 	# thread and wait for the answer (auto_react: the defaults, without asking)
@@ -170,15 +170,7 @@ class SandboxHooks extends AiTurnHooks:
 		while true:
 			# the weapon picker (mode 3): a slot shoots the mine; a magazine item (4 + slot)
 			# runs the slot menu (0x427530) and asks again (step_mine_found 0x4756A0)
-			var opts := []
-			for s in Action.weapon_choices(w, u, 3, 0):
-				if s < 4:
-					opts.append([battle.ui("UI_SLOT_ROUNDS_AP") % [s + 1, w.slot_count(u, s),
-						Move.launcher_ap(w, w.launcher_id(u, s))], s])
-				else:
-					opts.append([battle.ui("UI_SLOT_MAGAZINE") % (s - 3), s])
-			opts.append([battle.ui("UI_CANCEL"), -2])
-			var pick: int = battle.ask_choice(battle.ui("UI_PICK_WEAPON"), opts, -2)
+			var pick: int = battle.ask_weapon(u, 3, 0)       # the picker in mode 3
 			if pick >= 4:
 				battle.slot_menu_flow(u, pick - 4, true)
 				continue
@@ -1748,7 +1740,7 @@ func _build_hud() -> void:
 	for b in [["Move [M]", "move"], ["Fire [F]", "fire"], ["Aimed [A]", "aimed"], ["Anti-air [Q]", "aa"]]:
 		var btn := Button.new()
 		btn.text = b[0]
-		btn.pressed.connect(_set_mode.bind(b[1]))
+		btn.pressed.connect(_fire_command.bind(b[1]))
 		row.add_child(btn)
 	var row2 := HBoxContainer.new()
 	box.add_child(row2)
@@ -1844,6 +1836,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			cam.zoom = (cam.zoom * 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
 		elif ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			cam.zoom = (cam.zoom / 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
+		elif ev.button_index == MOUSE_BUTTON_LEFT and not react_look.is_empty():
+			var rl := react_look
+			react_look = []
+			_show_reaction_units(rl[0], rl[1], rl[2])
 		elif ev.button_index == MOUSE_BUTTON_LEFT and not hex_pick.is_empty():
 			var h := hex_at(get_global_mouse_position())
 			if h in hex_pick or hex_pick == ["any"]:
@@ -1853,9 +1849,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 	elif ev is InputEventKey and ev.pressed and not ev.echo and not busy:
 		match ev.keycode:
 			KEY_M: _set_mode("move")
-			KEY_F: _set_mode("fire")
-			KEY_A: _set_mode("aimed")
-			KEY_Q: _set_mode("aa")
+			KEY_F: _fire_command("fire")
+			KEY_A: _fire_command("aimed")
+			KEY_Q: _fire_command("aa")
 			KEY_S: _cmd_search()
 			KEY_C: _cmd_conceal()
 			KEY_K: _cmd_carry_mode()
@@ -1877,6 +1873,27 @@ func _unhandled_input(ev: InputEvent) -> void:
 func _set_mode(m: String) -> void:
 	mode = m
 	_update_move_map()
+
+
+func _fire_command(m: String) -> void:
+	## the fire commands' own start (cmd_fire 0x425AF0): the weapon picker in the command's
+	## mode (0 normal, 1 aimed, 6 anti-air); a slot goes to its target map, a magazine to
+	## the slot menu as the picker's column (both arms broken: 0x1B9), a right click back
+	## to moving. Without a window (auto_react), as before: the mode with the current slot.
+	if selected == -1 or busy or mission_over or auto_react or not FIRE_MODES.has(m):
+		_set_mode(m)
+		return
+	var u := selected
+	_open_weapon(u, FIRE_MODES[m], 0, func(v: int):
+		if v == -2:
+			_set_mode("move")
+		elif v < 4:
+			slot = v
+			_set_mode(m)
+		else:
+			_set_mode(m)
+			slot = v - 4
+			_cmd_slot_menu())
 
 
 func _set_move_mode(i: int) -> void:
@@ -4291,46 +4308,217 @@ func _reaction_panel(title: String) -> VBoxContainer:
 
 
 func _show_reaction_units(menu: Array, t: int, mode: int) -> void:
-	var box := _reaction_panel("%s in reach. React with:" % unit_name(t))
-	var tp := w.pos(t)
+	## reaction_menu_list (0x472ED0) and ui_reaction_menu (0x4730E0): a select window of 32
+	## columns at the cursor (x & ~7 - 0x50, y - 0x30; 640 - 0x128 when x & ~7 + 0xD7 passes
+	## 640, 400 - min(n, 12) x 16 - 16 when the list would pass 400; not below 0): "ignore
+	## this unit" (DS:0x517838), "wait and see" (0x517850), then the units that have not
+	## reacted (+0 bit 0x40), each "%b%12s　%8s %8s" (DS:0x517860: 0x7F, the machine's code
+	## DS:0x50C2E5, the pilot's names); a unit goes on to the weapon picker (mode 5 / 10, the
+	## distance to the target), a right click looks at the map until a click (ui_map_click
+	## mode 6)
+	var listed := []
+	var labels := [GameData.exe_text(campaign, 0x517838), GameData.exe_text(campaign, 0x517850)]
+	var codes: Array = GameData.tables(campaign).get("machine_codes", [])
 	for b in menu:
-		var bp := w.pos(b)
-		var btn := Button.new()
-		btn.text = "%s  (%d hexes, condition %d)" % [unit_name(b), Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y), w.ub(b, 0xD)]
-		btn.pressed.connect(_show_reaction_weapons.bind(menu, t, mode, b))
-		box.add_child(btn)
-	var ignore := Button.new()
-	ignore.text = "Ignore this unit"
-	ignore.pressed.connect(_answer_reaction.bind(0))
-	box.add_child(ignore)
-	var done := Button.new()
-	done.text = "Done"
-	done.pressed.connect(_answer_reaction.bind(1))
-	box.add_child(done)
+		if w.ub(b, 0) & 0x40:
+			continue
+		listed.append(b)
+		var nm := intercept_names(b)
+		var m := Pd2World.s8(w.ub(b, 0xC))
+		labels.append(GameWindow.coded(text_cells(GameData.exe_raw(campaign, 0x517860),
+				[0x7F, str(codes[m]) if m >= 0 and m < codes.size() else "", nm[0], nm[1]])))
+	var n := mini(labels.size(), 12)
+	var mp := _mouse_main()
+	var x := (int(mp.x) & 0xFFF8) - 0x50
+	var y := int(mp.y) - 0x30
+	if (int(mp.x) & 0xFFF8) + 0xD7 > MAIN_W:
+		x = MAIN_W - 0x128
+	if int(mp.y) - 0x21 + n * 16 > MAIN_H:
+		y = MAIN_H - n * 16 - 16
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), 0x20, 0, 0, labels, 0x20, [], true)
+	gw.role = "reaction"
+	_hold([gw])
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v == -2:
+			react_look = [menu, t, mode]
+		elif v == 0 or v == 1:
+			_answer_reaction(v)
+		else:
+			_show_reaction_weapons(menu, t, mode, listed[v - 2]))
+
+
+var react_look: Array = []      # the reaction menu put away to look at the map (a click brings it back)
 
 
 func _show_reaction_weapons(menu: Array, t: int, mode: int, b: int) -> void:
-	var box := _reaction_panel("%s: weapon" % unit_name(b))
+	## 0x472920: the weapon picker (0x4E7EE0) for b until a slot fires (reaction_shot) or a
+	## right click goes back to the menu; a magazine answer shows the picker again
 	var bp := w.pos(b)
 	var tp := w.pos(t)
-	var any := false
-	for s in Action.weapon_choices(w, b, mode, Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y)):
-		if s >= 4:
-			continue                # magazine swaps do nothing in this menu (0x472920)
-		any = true
-		var btn := Button.new()
-		btn.text = "Slot %d: range %d, rounds %d, attack %d" % [s + 1, w.weapon_range(b, s), w.slot_count(b, s),
-			Move.final_attack(w, b, s, mode == 10)]
-		btn.pressed.connect(_answer_reaction.bind([b, [s]]))
-		box.add_child(btn)
-	if not any:
-		var none := Label.new()
-		none.text = "No weapon can fire."
-		box.add_child(none)
-	var back := Button.new()
-	back.text = "Back"
-	back.pressed.connect(_show_reaction_units.bind(menu, t, mode))
-	box.add_child(back)
+	_open_weapon(b, mode, Pd2World.hexdist(bp.x, bp.y, tp.x, tp.y), func(v: int):
+		if v == -2:
+			_show_reaction_units(menu, t, mode)
+		elif v >= 4:
+			_show_reaction_weapons(menu, t, mode, b)
+		else:
+			_answer_reaction([b, [v]]))
+
+
+
+# --- the weapon picker (ui_reaction_weapon_picker 0x4E7EE0) --------------------------
+
+func weapon_picker_rows(u: int, mode: int, dist: int) -> Array:
+	## 0x4E7EE0's four rows (WMES 0x1D1 then the round 0x1CE / 0x1CF / 0x1D0, a slot without
+	## a launcher 0x1D0): each column red (0x4F) where the mode refuses it, the row's name
+	## 0x40 when any is; [text, refused] per slot (display: the answers are
+	## Action.weapon_choices', emulated)
+	var ln: Dictionary = GameData.tables(campaign).get("launcher_names", {})
+	var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	var out := []
+	for k in 4:
+		var lid := w.launcher_id(u, k)
+		if lid == -1:
+			out.append([GameWindow.coded(text_cells(msg_raw(0x1D0), [0x40])), true])
+			continue
+		var bad := false
+		var rng_ := w.weapon_range(u, k) & 0xFF
+		var rc := 0xFF
+		if rng_ == 0:
+			rc = 0x4F
+			bad = true
+		if (mode == 5 or mode == 10) and rng_ < dist:
+			rc = 0x4F
+			bad = true
+		if k > 1 and both_arms_broken(u):
+			rc = 0x4F
+			bad = true
+		var acs := ""
+		var ac := 0xFF
+		var tc := 0xFF
+		var atk := 0
+		var radius := w.launcher(lid, 9) & 7
+		var dc := 0xFF
+		if mode == 6 or mode == 7 or mode == 10:
+			var acc := w.launcher(lid, 5)
+			if acc == 0xFF:
+				acs = GameData.exe_text(campaign, 0x50CBE1)
+			elif acc != 0:
+				acs = "%d%d" % [(acc / 10) % 10, acc % 10]
+			else:
+				acs = " 0"
+				ac = 0x4F
+				bad = true
+			atk = Move.final_attack(w, u, k, true) & 0xFF
+			if atk == 0:
+				tc = 0x4F
+				bad = true
+		else:
+			var acc := w.launcher(lid, 2)
+			var wh := w.warhead(u, k)
+			if acc == 0xFF:
+				acs = GameData.exe_text(campaign, 0x50CBE1)
+			elif acc != 0 or wh == 8:
+				acs = "%d%d" % [(acc / 10) % 10, acc % 10]
+			else:
+				acs = " 0"
+				ac = 0x4F
+				bad = true
+			atk = Move.final_attack(w, u, k, false) & 0xFF
+			if atk == 0 and wh != 8:
+				tc = 0x4F
+				bad = true
+			if (mode == 1 and radius != 0) or (mode == 5 and radius != 1):
+				dc = 0x4F
+				bad = true
+		var ap := Move.launcher_ap(w, lid) * (2 if mode == 1 else 1)
+		var pc := 0xFF
+		if w.sb(u, 0xE) < ap and mode != 5 and mode != 10 and mode != 7:
+			pc = 0x4F
+			bad = true
+		var kind := w.launcher(lid, 8) >> 5
+		var kc := 0xFF
+		if kind == 3 or (kind != 0 and (mode == 1 or mode == 5)) or (mode == 7 and kind == 2):
+			kc = 0x4F
+			bad = true
+		var cnt := w.slot_count(u, k)
+		var magazine := (w.launcher(lid, 9) & 8) != 0
+		var tail := ""
+		var st := w.slot_state(u, k)
+		var sc := 0x4F if st == 2 else 0xFF
+		if st == 2:
+			bad = true
+		var stt: String = GameData.exe_text(campaign, [0x51F6B4, 0x51F6B8, 0x51F6BC][st]) if st >= 0 and st <= 2 else ""
+		if cnt == 0:
+			bad = true
+			if magazine:
+				tail = GameWindow.coded(text_cells(msg_raw(0x1CF), [0x4F, sc, stt]))
+			else:
+				tail = GameWindow.coded(text_cells(msg_raw(0x1D0), [0x4F]))
+		else:
+			var amc := 0xFF
+			var name := ""
+			if Pd2World.s8(w.launcher(lid, 11)) != -1:
+				name = str(an.get(str(w.ammo_id(u, k)), ""))
+				if (w.ub(u, 0x1C + 2 * (w.ub(u, 0x10 + 2 * k) & 15)) >> 6) & 3 == 2:
+					amc = 0x4F
+					bad = true
+			var cs := GameData.exe_text(campaign, 0x51F6C0) if cnt == -1 else "x%d%d" % [(cnt / 10) % 10, cnt % 10]
+			tail = GameWindow.coded(text_cells(msg_raw(0x1CE), [amc, name, 0xFF, cs, sc, stt]))
+		var head := text_cells(msg_raw(0x1D1), [0x40 if bad else 0xF0, str(ln.get(str(lid), "")), rc, rng_,
+				ac, acs, tc, atk, pc, ap, kc, _kind_char(kind), dc, radius])
+		out.append([GameWindow.coded(head) + tail, bad])
+	return out
+
+
+func open_weapon_picker(u: int, mode: int, dist: int) -> GameWindow:
+	## 0x4E7EE0: a select window with no items, its header 52 x 5 of 16 px ("%s\n%s\n%s\n%s\n%s",
+	## DS:0x51F6D0: 0x1CD and the four rows) centred on the screen, eight regions: the rows
+	## (8, 0x18 + 16 k)-(0xF7, 0x27 + 16 k) answer slot k, their right part (0xF8 ..)-(0x187
+	## ..) its magazine (4 + k); a right click cancels
+	var rs := weapon_picker_rows(u, mode, dist)
+	var t := GameWindow.coded(text_cells(msg_codes(0x1CD), []))
+	for r in rs:
+		t += "\n" + str(r[0])
+	var regs := []
+	for k in 4:
+		regs.append([8, 0x18 + 16 * k, 0xF7, 0x27 + 16 * k, 1])
+	for k in 4:
+		regs.append([0xF8, 0x18 + 16 * k, 0x187, 0x27 + 16 * k, 1])
+	var ww := 0x34 * 8 + 16
+	var hh := 5 * 16 + 16
+	var gw := GameWindow.select_window((MAIN_W - ww) >> 1, (MAIN_H - hh) >> 1, 0x34, 5, 0, [], 0, regs, true)
+	gw.role = "weapon"
+	gw.waits = false
+	_hold([gw])
+	gw.print_text(t)
+	return gw
+
+
+func ask_weapon(u: int, mode: int, dist: int) -> int:
+	## the weapon picker on a worker thread: a slot 0-3, its magazine 4-7, or -2; a choice
+	## the picker refuses (not in Action.weapon_choices) keeps it open, as its loop does.
+	## auto_react / scripted: as ask_choice.
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return -2
+	call_deferred("_open_weapon", u, mode, dist)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_weapon(u: int, mode: int, dist: int, then := Callable()) -> void:
+	var ok := Action.weapon_choices(w, u, mode, dist)
+	var gw := open_weapon_picker(u, mode, dist)
+	gw.chosen.connect(func(v: int):
+		if v >= 0 and not v in ok:
+			return                               # refused: the picker stays
+		if then.is_valid():
+			_close_window(gw)
+			then.call(v)
+		else:
+			_answer_reaction(v))
 
 
 func _answer_reaction(v: Variant) -> void:
