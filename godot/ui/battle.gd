@@ -1775,7 +1775,7 @@ func _build_hud() -> void:
 		cmds.append([mission_label(entry11[1]) + " [I]", _cmd_mission])
 	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
 	cmds.append([ui("UI_SLOT_MENU") + " [G]", _cmd_slot_menu])
-	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])
+	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])   # the machine status window (the menu's entry 7)
 	cmds.append([ui("UI_SYSTEM") + " [Esc]", _cmd_system])     # the command menu's entry 0x10 (0x4847C0)
 	for b in cmds:
 		var btn := Button.new()
@@ -2231,42 +2231,64 @@ func _kind_char(kind: int) -> String:
 	return t[kind] if kind < t.length() else " "
 
 
-func ask_table(title: String, header: Array, rows: Array, cancel: int) -> int:
+func ask_table(title: String, header: Array, rows: Array, cancel: int, cols := 0) -> int:
 	## a list window on a worker thread: a row's index, or cancel; refused rows keep the
-	## list open (0x4E3230 / 0x4E0450). auto_react / the main thread: cancel.
+	## list open (0x4E3230 / 0x4E0450). auto_react / the main thread: cancel. title is the
+	## engine's own hint (the game shows none); cols the game's width (0: the rows' widest).
 	if not scripted.is_empty():
 		return scripted.pop_front()
 	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return cancel
-	call_deferred("_open_table", title, header, rows, cancel)
+	call_deferred("_open_table", title, header, rows, cancel, cols)
 	react_sem.wait()
 	return react_answer
 
 
-func _open_table(title: String, header: Array, rows: Array, cancel: int) -> void:
-	var box := _reaction_panel(title)
-	react_panel.position.x = 16
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.06, 0.07, 0.1, 0.97)
-	bg.set_content_margin_all(8)
-	react_panel.add_theme_stylebox_override("panel", bg)
-	box.add_child(_cells_label(header))
-	for i in rows.size():
-		var r: Dictionary = rows[i]
-		var btn := Button.new()
-		btn.flat = true
-		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		var l := _cells_label(r.cells)
-		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.custom_minimum_size = Vector2(0, 14)
-		btn.add_child(l)
-		if not r.refused:
-			btn.pressed.connect(_answer_reaction.bind(i))
-		box.add_child(btn)
-	var cb := Button.new()
-	cb.text = ui("UI_CANCEL")
-	cb.pressed.connect(_answer_reaction.bind(cancel))
-	box.add_child(cb)
+func open_table(header: Array, rows: Array, cols: int) -> GameWindow:
+	## the pickers' windows: with a header (ui_pocket_picker 0x4E95C0, 45 columns; the slot
+	## picker 0x4E0450, 49) a one-line window (font 16 px) at ((640 - w) / 2, 400 / 2 - 0x20)
+	## and the rows' select window under it (+0x20); without (0x4E3230, 59) the rows
+	## centred both ways; w and h from 0x452450 (10 rows shown, 3 columns more scrolling),
+	## kept inside the main window
+	var n := rows.size()
+	var lw := (cols + (3 if n > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var lh := (mini(n, GameWindow.SCROLL_SHOWN) + 1) * 16
+	var x := (MAIN_W - lw) >> 1
+	if x + lw - 1 > MAIN_W:
+		x = MAIN_W - lw
+	x = maxi(x, 0)
+	var labels := rows.map(func(r): return GameWindow.coded(r.cells))
+	var wins := []
+	var y: int
+	if header.is_empty():
+		y = maxi(0, (MAIN_H - lh) >> 1)
+	else:
+		y = (MAIN_H >> 1) - 0x20
+		if lh + 0x1F + y > MAIN_H:
+			y = MAIN_H - (lh + 0x20)
+		y = maxi(y, 0)
+		var hd := GameWindow.text_window(x, y, cols, 1, 0)
+		hd.waits = false
+		hd.print_text(GameWindow.coded(header))
+		wins.append(hd)
+		y += 0x20
+	var lst := GameWindow.select_window(x, y, cols, 0, 0, labels, cols, [], true)
+	wins.append(lst)
+	_hold(wins)
+	return lst
+
+
+func _open_table(title: String, header: Array, rows: Array, cancel: int, cols := 0) -> void:
+	if cols <= 0:
+		for r in rows:
+			cols = maxi(cols, GameWindow.text_cols(GameWindow.coded(r.cells)))
+		cols = maxi(cols, GameWindow.text_cols(GameWindow.coded(header)))
+	var lst := open_table(header, rows, cols)
+	lst.chosen.connect(func(v: int):
+		if v == -2:
+			_answer_reaction(cancel)
+		elif v >= 0 and v < rows.size() and not rows[v].refused:
+			_answer_reaction(v))
 
 
 func _cells_label(cells: Array) -> RichTextLabel:
@@ -2333,6 +2355,13 @@ func _open_choice(text: String, options: Array, kind := "list") -> void:
 		"box":
 			gw = open_box(text, [options[0][0], options[1][0]])
 			gw.chosen.connect(func(v: int): _answer_reaction(options[0][1] if v == 0 else options[1][1]))
+		"menu":
+			var labels := []
+			for o in options:
+				if not (o[1] is int and o[1] == -2):
+					labels.append(o[0])
+			gw = open_menu(labels)
+			gw.chosen.connect(func(v: int): _answer_reaction(-2 if v < 0 else options[v][1]))
 		_:
 			var labels := []
 			var vals := []
@@ -2549,6 +2578,27 @@ func open_box(text: String, labels: Array) -> GameWindow:
 	_hold([mw, bw])
 	mw.print_text(t)
 	return bw
+
+
+func open_menu(labels: Array, cols := 0xE) -> GameWindow:
+	## the slot menu (0x427530) and the pocket menu (0x427FF0): a select window of 14
+	## columns at the cursor (x & ~7 - 0x28, y - n x 16 / 2; x 640 - 0x80 when x & ~7 + 0x57
+	## passes 640, y 400 - (n + 1) x 16 when the list would pass 400; not below 0), right
+	## click cancelling
+	var m := _mouse_main()
+	var n := labels.size()
+	var x := (int(m.x) & 0xFFF8) - 0x28
+	var y := int(m.y) - (n * 16) / 2
+	if (int(m.x) & 0xFFF8) + 0x57 > MAIN_W:
+		x = MAIN_W - 0x80
+	if y + 0xF + n * 16 > MAIN_H:
+		y = MAIN_H - (n + 1) * 16
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))     # (engine-side: a longer translation widens it)
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), ic, 0, 0, labels, ic, [], true)
+	_hold([gw])
+	return gw
 
 
 func open_select(title: String, labels: Array, cancel: bool) -> GameWindow:
@@ -3422,12 +3472,12 @@ class BattleStrikeHooks extends Strike.Hooks:
 		if rows.is_empty():                   # 0x4E3230: none listed, MES 0x1C3
 			battle.say_msg(0x1C3)
 			return -1
-		var i: int = battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], rows, -2)
+		var i: int = battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], rows, -2, 0x3B)
 		return -1 if i == -2 else units[i]
 
 	func cb_slot(u: int, g: int) -> int:
 		return battle.ask_table(battle.ui("UI_PICK_WEAPON"), battle.text_cells(battle.msg_raw(0x1C5), []),
-				battle.cb_slot_rows(u, g, cb_target), -2)
+				battle.cb_slot_rows(u, g, cb_target), -2, 0x31)
 
 	func mine_blast(x: int, y: int) -> void:
 		battle.hooks.mine_blast(x, y)
@@ -3944,7 +3994,7 @@ func magazine_table(u: int, s: int) -> int:
 		var args := [0xF0, str(an.get(str(r[1]), "")), r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9],
 				GameData.exe_text(campaign, r[10])]
 		cells.append({"cells": text_cells(msg_raw(0x1D8), args), "refused": false})
-	var i := ask_table(ui("UI_PICK_POCKET"), text_cells(msg_raw(0x1D7), []), cells, -2)
+	var i := ask_table(ui("UI_PICK_POCKET"), text_cells(msg_codes(0x1D7), []), cells, -2, 0x2D)
 	return -2 if i < 0 or i >= rows.size() else int(rows[i][0])
 
 
@@ -3953,7 +4003,7 @@ func _menu_pick(title: String, menu: Array) -> int:
 	for i in menu.size():
 		opts.append([pocket_action_text(menu[i][0], menu[i][1]), i])
 	opts.append([ui("UI_CANCEL"), -2])
-	return ask_choice(title, opts, -2)
+	return ask_choice(title, opts, -2, "menu")
 
 
 func hand_over_flow(u: int, item: int, ap: int) -> int:
@@ -4030,6 +4080,7 @@ func pocket_menu_flow(u: int, p: int) -> int:
 				return 1
 			return 0
 		Pockets.THROW:
+			_status_stop = true                  # (the item command's target click follows)
 			call_deferred("_item_pocket_mode", p)
 			return 0
 		Pockets.SEARCH:
@@ -4078,15 +4129,103 @@ func _cmd_slot_menu() -> void:
 			return
 		_pocket_run(func(): slot_menu_flow(u, s, true))
 		return
-	_pocket_run(func(): slot_menu_flow(u, s, false))
+	_pocket_run(func(): machine_status_flow(u))
 
 
 func _cmd_pocket_menu() -> void:
-	## the machine status window's pockets: one with a round is picked, then its menu
+	## the machine status window (the command menu's 機体状況, entry 7: ui_machine_status
+	## 0x4279F0 with its pilot, machine and damage windows)
 	if selected == -1 or busy or mission_over:
 		return
 	var u := selected
-	_pocket_run(func(): _pocket_pick(u))
+	_pocket_run(func(): machine_status_flow(u))
+
+
+var _status_stop := false
+
+
+func machine_status_flow(u: int) -> void:
+	## ui_machine_status (0x4279F0): the window (0x4E8930) until a right click; a slot's
+	## row runs the slot menu, a pocket's the pocket menu (their refusals, AP and actions:
+	## slot_menu_flow / pocket_menu_flow); none listed: 0x1D6
+	_status_stop = false
+	while not _status_stop:
+		var rs := MachineStatus.rows(self, u)
+		if rs.is_empty():
+			say_msg(0x1D6)
+			return
+		var v: int = ask_status(u, rs)
+		if v == -2:
+			return
+		if v < 4:
+			slot_menu_flow(u, v, false)
+		else:
+			pocket_menu_flow(u, v - 10)
+
+
+func ask_status(u: int, rs: Array) -> int:
+	## the status window on the main thread, waited for (auto_react / scripted: as ask_choice)
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return -2
+	call_deferred("_open_status", u, rs)
+	react_sem.wait()
+	return react_answer
+
+
+func msg_codes(id: int) -> String:
+	## a message's format with its %aHH codes as the printer's (byte 1 + HH): format_text
+	## turns them into the same
+	var t := msg_raw(id)
+	var re := RegEx.create_from_string("%a([0-9A-Fa-f]{2})")
+	var out := ""
+	var last := 0
+	for m in re.search_all(t):
+		out += t.substr(last, m.get_start() - last) + "" + char(m.get_string(1).hex_to_int())
+		last = m.get_end()
+	return out + t.substr(last)
+
+
+func open_status(u: int, rs: Array) -> GameWindow:
+	## 0x4E8930 / 0x467880 in the main window: the pilot's window (15 x 11) at (x, y - 0xC0),
+	## the damage diagram (14 x 10, black inside: hidan.pac by machine +0x19 at (8, 4), the
+	## broken parts XORed) at (x + 0x88, y - 0xB0), the machine's window (16 x 7) at
+	## (x + 0x108, y - 0x80), x = (640 - 0x260) / 2, y = max(400 / 2 - 0x20, 0xC0); the header
+	## 0x1D2 (74 columns, one line) and the rows' select window under it, centred on the
+	## screen's width (fonts 16 px)
+	var ux := maxi(0, (MAIN_W - 0x260) >> 1)
+	var py := maxi((MAIN_H >> 1) - 0x20, 0xC0)
+	var w1 := GameWindow.text_window(ux, py - 0xC0, 15, 11, 0)
+	w1.waits = false
+	var w0 := GameWindow.text_window(ux + 0x88, py - 0xB0, 14, 10, 0)
+	w0.black = true
+	w0.clear()
+	var m := Pd2World.s8(w.ub(u, 0xC))
+	var pic := w.umachine(u, 0x19) if m >= 0 else 0
+	if pic > 7:
+		pic = 0
+	w0.blit("%s/images/hidan/%02d.bmp" % [GameData.ROOT, pic], 8, 4)
+	MachineStatus.damage(w0, w, u)
+	var w2 := GameWindow.text_window(ux + 0x108, py - 0x80, 16, 7, 0)
+	w2.waits = false
+	var lw := (0x4A + (3 if rs.size() > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var x := maxi(0, (MAIN_W - lw) >> 1)
+	var y := py
+	var hd := GameWindow.text_window(x, y, 0x4A, 1, 0)
+	hd.waits = false
+	var labels := rs.map(func(r): return r[0])
+	var lst := GameWindow.select_window(x, y + 0x20, 0x4A, 0, 0, labels, 0x4A, [], true)
+	_hold([w1, w0, w2, hd, lst])
+	w1.print_text(MachineStatus.pilot_text(self, u))
+	w2.print_text(MachineStatus.machine_text(self, u))
+	hd.print_text(GameWindow.coded(text_cells(msg_codes(0x1D2), [])))
+	return lst
+
+
+func _open_status(u: int, rs: Array) -> void:
+	var lst := open_status(u, rs)
+	lst.chosen.connect(func(v: int): _answer_reaction(-2 if v < 0 or v >= rs.size() else int(rs[v][1])))
 
 
 func _pocket_pick(u: int) -> void:

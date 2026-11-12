@@ -236,7 +236,10 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0, 0x51F6B4, 0x51F6B8, 0x51F6BC, 0x50CBAA,
              0x50CBE1,
              # the slot menu's (0x427530) and the pocket menu's (0x427FF0) entries
-             0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
+             0x514008, 0x514018, 0x514028, 0x514038, 0x514048, 0x514058, 0x514068, 0x514078,
+             # the machine status window (0x4E8930: a slot's count -1; 0x467880: a skill
+             # held or not, a hidden name)
+             0x51F6C0, 0x50CBB3, 0x50CBB6, 0x50CBE0) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -386,8 +389,12 @@ def export_messages(game, out):
 # The operation plan (0x443F60): its background plan_g.pac (640 x 400), the orders' panel
 # plan_gb.pac and the panel it puts back plan_gc.pac (264 x 160 at (0x178, 0xF0)), each
 # campaign's mini-maps mmap.pac (144 x 144, by chunk: the pages' blinks).
-SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac')
-CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac')    # (amap: the operation plan's area maps, 0x444500)
+# The battle's machine status window (0x467880): the damage diagrams hidan.pac (by machine
+# +0x19, 0-7); its info panel (0x466790): the pilots' faces dface.pac and each campaign's
+# machine pictures datau.pac (by machine +0x19).
+SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac',
+                 'hidan.pac', 'dface.pac')
+CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 
 def export_images(game, out):

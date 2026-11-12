@@ -41,6 +41,7 @@ var item_cols := 0
 var regions: Array = []       # [x0, y0, x1, y1, type (1 outline, 2 fill)] in window pixels
 var right_cancel := false
 var waits := true             # false: '@' and full windows do not wait (tests)
+var black := false            # the inside cleared to colour 0 (no background pattern: DS:0x50C9F0)
 var scroll := 0
 
 var _cells: Array = []        # [x, y, char, code]
@@ -159,8 +160,9 @@ func _tile(name: String, x: int, y: int, n := 8) -> void:
 
 
 func _back(x: int, y: int, w: int, h: int) -> void:
-	## 0x4F0860 / 0x4F0C00: the two-row pattern, row 0 at each cell's top
-	var b: Array = ui_data().back
+	## 0x4F0860 / 0x4F0C00: the two-row pattern, row 0 at each cell's top (a window made
+	## without one: DS:0x50C9F0's zeros)
+	var b: Array = ui_data().back if not black else [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]]
 	for r in h:
 		for c in w:
 			_px(x + c, y + r, int(b[r & 1][c & 7]))
@@ -213,6 +215,50 @@ func _rect(x0: int, y0: int, x1: int, y1: int, mode: int, c: int, type: int) -> 
 				var t := float(i) / maxf(n, 1)
 				put.call(roundi(lerpf(x0, x1, t)), roundi(lerpf(y0, y1, t)))
 	_dirty = true
+
+
+static func bmp(path: String) -> Array:
+	## an 8-bit DIB of the import (a PAC entry as it is): [width, height, indices top row
+	## first], or [] when missing
+	if not FileAccess.file_exists(path):
+		return []
+	var d := FileAccess.get_file_as_bytes(path)
+	if d.size() < 54 or d.decode_u16(0) != 0x4D42 or d.decode_u16(28) != 8:
+		return []
+	var off := d.decode_u32(10)
+	var bw := d.decode_s32(18)
+	var bh := d.decode_s32(22)
+	var top := bh < 0
+	bh = absi(bh)
+	var stride := (bw + 3) & ~3
+	var px := PackedByteArray()
+	px.resize(bw * bh)
+	for y in bh:
+		var row := y if top else bh - 1 - y
+		for x in bw:
+			px[y * bw + x] = d[off + row * stride + x]
+	return [bw, bh, px]
+
+
+func blit(path: String, x: int, y: int) -> Vector2i:
+	## 0x40E410: a picture's pixels copied as they are into the window's DIB (its indices
+	## 10-25 are the window's colours 0-15); its size
+	var b := bmp(path)
+	if b.is_empty():
+		return Vector2i.ZERO
+	var px: PackedByteArray = b[2]
+	for yy in int(b[1]):
+		for xx in int(b[0]):
+			_px(x + xx, y + yy, (px[yy * int(b[0]) + xx] - 10) & 15)
+	_dirty = true
+	queue_redraw()
+	return Vector2i(b[0], b[1])
+
+
+func xor_rect(x0: int, y0: int, x1: int, y1: int, c: int, type: int) -> void:
+	## 0x46C370 mode 4 on the window (a damaged part, 0x467520)
+	_rect(x0, y0, x1, y1, 4, c, type)
+	queue_redraw()
 
 
 func _draw_scroll(x: int, y: int) -> void:
@@ -276,11 +322,27 @@ static func font(px: int, bold: bool) -> Font:
 static func text_cols(t: String) -> int:
 	## the text's width in columns (Shift-JIS bytes: lstrlenA)
 	var n := 0
+	var skip := false
 	for ch in t:
+		if skip:
+			skip = false
+			continue
 		if ch == "\u0001":
+			skip = true                 # a colour code: byte 1 and its value
 			continue
 		n += 1 if half_width(ch) else 2
 	return n
+
+
+static func coded(cells: Array) -> String:
+	## [[text, code]] (the battle's text_cells) as the printer's text: byte 1 + the code
+	## before each part (0xFF: none)
+	var t := ""
+	for c in cells:
+		if int(c[1]) != 0xFF:
+			t += "\u0001" + char(int(c[1]))
+		t += str(c[0])
+	return t
 
 
 static func translated(t: String) -> bool:
@@ -529,13 +591,28 @@ func _draw() -> void:
 	for c in _cells:
 		_draw_char(o.x + c[0] * (lh / 2), o.y + c[1] * lh, c[2], c[3])
 	if not items.is_empty():
+		# the items printed in turn into the item window ("%0Ns": cut and padded to the item
+		# columns, colour codes kept and carried from one item to the next; flags 1: 12 px)
+		var ic := 0x75
 		for i in mini(items.size(), SCROLL_SHOWN):
 			var t: String = str(items[scroll + i]) if scroll + i < items.size() else ""
 			var x := 8
-			for ch in t:
+			var k := 0
+			while k < t.length():
+				var ch := t[k]
+				k += 1
+				if ch == "\u0001":
+					if k < t.length():
+						var p := t.unicode_at(k)
+						k += 1
+						var nc := (ic & 0x0F) | (p & 0xF0)
+						if (p & 0xC) != 0xC:
+							nc = (nc & ~0xF) | (p & 0xF)
+						ic = nc
+					continue
 				if x + (8 if half_width(ch) else 16) > 8 + item_cols * 8:
-					break
-				_draw_char(x, _hh + 8 + 16 * i, ch, 0x75, 16)
+					continue
+				_draw_char(x, _hh + 8 + 16 * i, ch, ic, 16)
 				x += 8 if half_width(ch) else 16
 
 

@@ -1,9 +1,11 @@
 extends SceneTree
 ## The game's windows over a battle, saved as a picture: godot --path engine/godot -s
-## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select [ja|en|fr]
+## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu [ja|en|fr]
 ##   prompt: the move's question 0x1DC at the cursor (0x47EBE0); box: the mine's 0x1A3
 ##   (ui_message_box, kind 0); line: 0x1AE (ui_message_line) with its click wait lit;
-##   select: a select window with 12 items (the scroll bar), the second outlined.
+##   select: a select window with 12 items (the scroll bar), the second outlined;
+##   menu: the first DoLL's slot menu at the cursor (0x427530);
+##   status: the machine status window (0x4E8930 / 0x467880) of the first active DoLL.
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -35,6 +37,22 @@ func _init() -> void:
 			gw.print_text("\n")
 			gw._waiting = true
 			gw._bar = true
+		"status":
+			var u: int = b.squad[0]
+			for k in b.squad:
+				if b.w.active(k):
+					u = k
+					break
+			b.w.setb(u, 1, (b.w.ub(u, 1) & 0xF0) | 0x01 | 0x08)      # head outlined, a gear filled
+			gw = b.open_status(u, load("res://ui/status_view.gd").rows(b, u))
+			gw._hover = 0
+		"menu":
+			var u: int = b.squad[0]
+			var opts := []
+			for e in load("res://core/pockets.gd").slot_menu(b.w, u, 0, false):
+				opts.append(b.pocket_action_text(e[0], e[1]))
+			gw = b.open_menu(opts)
+			gw._hover = 0
 		"select":
 			var labels := []
 			for i in 12:

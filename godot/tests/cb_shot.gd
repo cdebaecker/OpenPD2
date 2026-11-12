@@ -23,7 +23,7 @@ func _init() -> void:
 	var rows: Array = b.cb_unit_rows(units)
 	for r in rows:
 		print("unit row%s: %s" % [" (refused)" if r.refused else "", "".join(r.cells.map(func(c): return c[0]))])
-	b._open_table(b.ui("UI_PICK_SUPPORT"), [], rows, -2)
+	b._open_table(b.ui("UI_PICK_SUPPORT"), [], rows, -2, 0x3B)
 	for i in 4:
 		await process_frame
 	await RenderingServer.frame_post_draw
@@ -34,7 +34,9 @@ func _init() -> void:
 		var srows: Array = b.cb_slot_rows(k, Ai.unit_group(w, k), -1)
 		for r in srows:
 			print("slot row%s: %s" % [" (refused)" if r.refused else "", "".join(r.cells.map(func(c): return c[0]))])
-		b._open_table(b.ui("UI_PICK_WEAPON"), b.text_cells(b.msg_raw(0x1C5), []), srows, -2)
+		if b.react_panel:
+			b.react_panel.free()                # (the first picker's windows)
+		b._open_table(b.ui("UI_PICK_WEAPON"), b.text_cells(b.msg_raw(0x1C5), []), srows, -2, 0x31)
 		for i in 4:
 			await process_frame
 		await RenderingServer.frame_post_draw

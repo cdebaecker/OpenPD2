@@ -2,7 +2,7 @@ extends SceneTree
 ## The pocket actions in the battle (Pockets, emulated): a DoLL with an empty magazine
 ## reloads it from a pocket through the fire command's magazine column (the slot menu
 ## 0x427530 with the picker's entries, the pocket picker 0x4E95C0, 0x427980), swaps a
-## half-used one from the machine status window's slot menu (0x427930), then hands a
+## half-used one from the machine status window's slot menu (0x4E8930's row, 0x427930), then hands a
 ## pocket's round to the squad member beside it (the pocket menu 0x427FF0, 0x4287A0 with
 ## its 0x1E8 question); a multi-sensor round searches (0x4285E0, the 0x1C8 prompt), a
 ## pocket is discarded (0x428400) and the slot unequipped (0x4284F0). The windows'
@@ -82,7 +82,7 @@ func _init() -> void:
 	ap0 = w.sb(u, 0xE)
 	var rows := Pockets.magazine_rows(w, u, 0)
 	var want_p: int = rows[0][0] if not rows.is_empty() else -1
-	b.scripted = [0, 0]
+	b.scripted = [0, 0, 0]                      # the status window's slot 0, the menu's entry, the row
 	b._cmd_slot_menu()
 	print("swap: slot 0 feeds pocket %d (want %d), pocket 1 ammo %d, AP %d -> %d" % [w.ub(u, 0x10) & 15, want_p,
 		w.pocket_ammo(u, 1), ap0, w.sb(u, 0xE)])
@@ -121,7 +121,7 @@ func _init() -> void:
 	var uap := w.sb(u, 0xE)
 	var vap := w.sb(v, 0xE)
 	print("unit %d at %s, capacity %d; pocket menu %s" % [v, str(spot), w.umachine(v, 0x17), str(pm)])
-	b.scripted = [3, hi, spot, true]          # the pocket, "hand over", the click, the 0x1E8 box
+	b.scripted = [13, hi, spot, true]         # the status window's pocket 3, "hand over", the click, the 0x1E8 box
 	b._cmd_pocket_menu()
 	var got := -1
 	for p in 12:
@@ -147,7 +147,7 @@ func _init() -> void:
 		if pm[i][0] == Pockets.SEARCH:
 			si = i
 	uap = w.sb(u, 0xE)
-	b.scripted = [4, si, 0]                    # the pocket, "recon", the prompt's "search"
+	b.scripted = [14, si, 0]                   # pocket 4, "recon", the prompt's "search"
 	b._cmd_pocket_menu()
 	print("recon with round %d: menu %s, rounds left %d, AP %d -> %d" % [sensor, str(pm), w.pocket_count(u, 4),
 		uap, w.sb(u, 0xE)])
@@ -156,7 +156,7 @@ func _init() -> void:
 	# 5. discard pocket 2's round (0x1B6), 6. unequip slot 0 (0x1B7)
 	pm = Pockets.pocket_menu(w, u, 2)
 	uap = w.sb(u, 0xE)
-	b.scripted = [2, pm.size() - 1, true]      # the pocket, "discard", yes
+	b.scripted = [12, pm.size() - 1, true]     # pocket 2, "discard", yes
 	b._cmd_pocket_menu()
 	print("discard: pocket 2 ammo %d, AP %d -> %d" % [w.pocket_ammo(u, 2), uap, w.sb(u, 0xE)])
 	ok = ok and pm[pm.size() - 1][0] == Pockets.DISCARD and w.pocket_ammo(u, 2) == -1 and w.sb(u, 0xE) == uap - 1
@@ -164,7 +164,7 @@ func _init() -> void:
 	var ui_ := menu.size() - 1
 	var fed := w.ub(u, 0x10) & 15
 	uap = w.sb(u, 0xE)
-	b.scripted = [ui_, true]                   # "unequip", yes
+	b.scripted = [0, ui_, true]                # slot 0, "unequip", yes
 	b._cmd_slot_menu()
 	print("unequip: menu %s, slot 0 launcher %d, pocket %d ammo %d, AP %d -> %d" % [str(menu), w.launcher_id(u, 0),
 		fed, w.pocket_ammo(u, fed), uap, w.sb(u, 0xE)])
