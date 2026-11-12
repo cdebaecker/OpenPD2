@@ -483,6 +483,33 @@ def export_ui(game, out):
         open(os.path.join(out, 'font_ank.dat'), 'wb').write(open(fs['font_ank.dat'], 'rb').read())
 
 
+# The map window's pieces (redraw_hex 0x4F2xxx): the unit sprites (get_unit_addr 0x4F1390:
+# MUNIT.PCK by machine kind < 8, TUNIT.PCK by kind - 8, HUNIT.SLD's blocks for the kinds
+# above; 0xC00 bytes each: six facings of 0x200, a mask plane and three colour planes of
+# 32 x 32), the smoke's pattern KIRI.SLD (36 x 48, a mask and three planes); and Pd2.exe's
+# bitmaps: the hex mark DS:0x518CE8 (47 x 48, 0x48EBA0), the small digits DS:0x518CA8 (4 x
+# 5, 0x48E640), the large DS:0x518C60 (8 x 7, 0x48E480), the cover / carry icons
+# DS:0x518CE0 (8 x 5, 0x48E800), the mine and strike marks DS:0x518E08 (two of 0x60: 12 x
+# 16, 0x48ECA0).
+def export_map_pieces(game, out):
+    exe = open(os.path.join(game, 'Pd2.exe'), 'rb').read()
+    doc = {'hexmark': b64(exe_va(exe, 0x518CE8, 47 * 6)), 'digits': b64(exe_va(exe, 0x518CA8, 50)),
+           'digits_large': b64(exe_va(exe, 0x518C60, 70)), 'icons': b64(exe_va(exe, 0x518CE0, 5)),
+           'marks': b64(exe_va(exe, 0x518E08, 0xC0))}
+    json.dump(doc, open(os.path.join(out, 'map_pieces.json'), 'w'))
+    for camp in CAMPAIGNS:
+        folder = os.path.join(game, camp)
+        fs = {f.upper(): os.path.join(folder, f) for f in os.listdir(folder)}
+        units = {}
+        for key, name in (('m', 'MUNIT.PCK'), ('t', 'TUNIT.PCK')):
+            units[key] = [b64(pd2dt.decode_chunk(c) or b'') for c in pd2dt.split_pck(open(fs[name], 'rb').read())] if name in fs else []
+        h = pd2dt.decode_chunk(open(fs['HUNIT.SLD'], 'rb').read()) if 'HUNIT.SLD' in fs else b''
+        units['h'] = [b64(h[i:i + 0xC00]) for i in range(0, len(h or b''), 0xC00)]
+        k = pd2dt.decode_chunk(open(fs['KIRI.SLD'], 'rb').read()) if 'KIRI.SLD' in fs else b''
+        units['kiri'] = b64(k or b'')
+        json.dump(units, open(os.path.join(out, camp, 'units.json'), 'w'))
+
+
 def default_out():
     if os.name == 'nt':
         base = os.path.join(os.environ['APPDATA'], 'Godot', 'app_userdata')
@@ -510,6 +537,7 @@ def main():
         export_messages(game, a.out)
         export_images(game, a.out)
         export_ui(game, a.out)
+        export_map_pieces(game, a.out)
         manifest = {'format': 1, 'version': version, 'pd2_exe_sha256': h, 'missions': count}
         json.dump(manifest, open(os.path.join(a.out, 'manifest.json'), 'w'), indent=1)
     print('imported %s: %s into %s' % (version, count, a.out))

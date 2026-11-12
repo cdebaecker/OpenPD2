@@ -4608,7 +4608,11 @@ func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
 		var v := Pd2World.s8(wd.crew[c * 16 + f])
 		t += ("%2X " % v) if v >= 0 else ("%2d " % v)
 	var sk := wd.crew[c * 16 + 8]
-	var yn := func(b: int) -> String: return GameData.exe_text(campaign, 0x50CBB3 if sk & b else 0x50CBB6)
+	var yn := func(b: int) -> String:
+		# (engine-side: a translation wider than the column's 2 keeps its first letters)
+		var yt := GameData.exe_text(campaign, 0x50CBB3 if sk & b else 0x50CBB6)
+		var wide := GameWindow.text_cols(GameData.exe_text(campaign, 0x50CBB3)) > 2 or GameWindow.text_cols(GameData.exe_text(campaign, 0x50CBB6)) > 2
+		return yt.substr(0, 1) + " " if wide else yt
 	t += "%s %s %s %s" % [yn.call(1), yn.call(2), yn.call(4), yn.call(8)] + "\u0001" + char(0xFF)
 	return t
 
@@ -4990,48 +4994,76 @@ func _check_end() -> void:
 # --- drawing ---------------------------------------------------------------------
 
 func _draw_overlay() -> void:
+	## redraw_hex's layers over the map (ui/map_pieces.gd): out of view striped, the marks
+	## (the F layer's and the engine's sets the game marks the same way: the move, fire,
+	## carry, pick and reaction hexes), smoke, the units with their numbers and icons, the
+	## mines and strikes (option 0x8000, DASH)
 	if w == null or ((ai_running or move_thread != null) and react_panel == null):
 		return
+	var inv := overlay.get_viewport().get_canvas_transform().affine_inverse()
+	var vr: Rect2 = inv * Rect2(Vector2.ZERO, overlay.get_viewport().get_visible_rect().size)
+	var y0 := maxi(0, int(vr.position.y / TILE_H) - 2)
+	var y1 := mini(MAP - 1, int(vr.end.y / TILE_H) + 1)
+	var x0 := maxi(0, int(vr.position.x / TILE_W) - 2)
+	var x1 := mini(MAP - 1, int(vr.end.x / TILE_W) + 1)
+	var marked := {}
 	if mode == "carry":
 		for hx in carry_hexes:
-			overlay.draw_circle(hex_center(hx), 14, Color(0.4, 1, 0.6, 0.35))
+			marked[hx] = true
 	for h in hex_pick:
 		if h is Vector2i:
-			overlay.draw_circle(hex_center(h), 11, Color(0.3, 1, 0.5, 0.35))
+			marked[h] = true
 	if fire_map != null and mode != "move" and mode != "carry":
 		for ly in fire_map.h:
 			for lx in fire_map.w:
 				if fire_map.at(lx, ly) == 1:
-					overlay.draw_circle(hex_center(Vector2i(fire_map.x0 + lx, fire_map.y0 + ly)), 10, Color(1, 0.8, 0.2, 0.25))
+					marked[Vector2i(fire_map.x0 + lx, fire_map.y0 + ly)] = true
 	if mm != null and mode == "move":
 		for hx in move_dests:
-			var o := w.O[hx.x + MAP * hx.y] - 1
-			var col := Color(1, 0.3, 0.2, 0.35) if o != -1 and w.ub(o, 0) & 0x10 else Color(0.3, 0.8, 1.0, 0.22)
-			overlay.draw_circle(hex_center(hx), 14, col)
-	for u in w.n_units:
-		if not w.active(u):
-			continue
-		var enemy := w.is_enemy(u)
-		if enemy and not (w.ub(u, 0) & 0x10):
-			continue
-		var p := hex_center(w.pos(u))
-		var col := Color(0.95, 0.25, 0.2) if enemy else (Color(0.3, 0.9, 0.4) if u in squad else Color(0.6, 0.7, 1.0))
-		var air := w.unit_class(u) >= 2
-		if air:
-			overlay.draw_colored_polygon(PackedVector2Array([p + Vector2(0, -14), p + Vector2(13, 10), p + Vector2(-13, 10)]), col)
-		else:
-			overlay.draw_circle(p, 13, col)
-		var f := w.ub(u, 5) & 7
-		var dirs := [Vector2(-0.5, -0.87), Vector2(0.5, -0.87), Vector2(1, 0), Vector2(0.5, 0.87), Vector2(-0.5, 0.87), Vector2(-1, 0)]
-		if f < 6:
-			overlay.draw_line(p, p + dirs[f] * 18, Color.BLACK, 3)
-		if w.ub(u, 0) & 0x20:
-			overlay.draw_arc(p, 16, 0, TAU, 24, Color(0.2, 0.2, 0.2), 2)
-		if u == selected:
-			overlay.draw_arc(p, 19, 0, TAU, 32, Color.YELLOW, 3)
+			marked[hx] = true
 	if react_target != -1:
-		overlay.draw_arc(hex_center(w.pos(react_target)), 22, 0, TAU, 32, Color.RED, 3)
+		marked[w.pos(react_target)] = true
 		for b in react_menu:
-			overlay.draw_arc(hex_center(w.pos(b)), 20, 0, TAU, 32, Color(0.3, 1, 0.5), 2)
-	if w.on_map(hover.x, hover.y):
-		overlay.draw_arc(hex_center(hover), 22, 0, TAU, 6, Color(1, 1, 1, 0.7), 2)
+			marked[w.pos(b)] = true
+	var see_all := (options & 0x40) != 0
+	var large := (options & 0x1000) != 0
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			if not w.on_map(x, y):
+				continue
+			var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
+			if not Ai.in_view(w, x, y, 0):
+				overlay.draw_texture(MapPieces.stripes(), o)
+			if MissionScripts.target_mark_at(w, x, y) or marked.has(Vector2i(x, y)):
+				overlay.draw_texture(MapPieces.hexmark(), o)
+			var f := w.layer(w.F, x, y)
+			if f & 1:
+				overlay.draw_texture(MapPieces.smoke(campaign), o)
+			var u := w.O[x + MAP * y] - 1
+			if u >= 0 and w.active(u):
+				_draw_unit(u, o, see_all, large)
+			if campaign == "dash" and options & 0x8000:
+				if f & 0x80:
+					overlay.draw_texture(MapPieces.mark(0), o + Vector2(24, 8))
+				if f & 0x10:
+					overlay.draw_texture(MapPieces.mark(1), o + Vector2(24, 10))
+
+
+func _draw_unit(u: int, o: Vector2, see_all: bool, large: bool) -> void:
+	## 0x4F17F0 at the cell's origin o
+	var enemy := w.is_enemy(u)
+	var spotted := (w.ub(u, 0) & 0x10) != 0
+	if enemy and not spotted and not see_all:
+		return
+	var t := MapPieces.sprite(campaign, w.umachine(u, 26), w.ub(u, 5) & 7)
+	if t:
+		overlay.draw_texture(t, o + Vector2(8, 4))
+	var dmg := 100 - w.ub(u, 0xD)
+	var cc := 7 if dmg < 0x32 else (4 if dmg > 0x4A else 15)
+	MapPieces.number(overlay, o + Vector2(8, 8), dmg, cc, large)
+	if enemy and not (options & 8):
+		return
+	MapPieces.number(overlay, o + Vector2(8, 28), w.sb(u, 0xE), 4 if spotted and options & 0x80 else 7, large)
+	var ic := (2 if w.ub(u, 0) & 0x20 else 0) | (1 if w.ub(u, 0x34) != 0xFF else 0)
+	if ic:
+		MapPieces.icons(overlay, o + Vector2(32, 28), ic)
