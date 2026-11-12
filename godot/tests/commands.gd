@@ -1,12 +1,16 @@
 extends SceneTree
-## The battle's search, conceal, carry and release flows, with their dialogs confirmed.
+## The battle's search, conceal, carry and release flows, with their questions answered (the game's windows).
 
 func _confirm_dialog(b) -> bool:
-	for c in b.get_children():
-		if c is ConfirmationDialog and not c.is_queued_for_deletion():
-			c.confirmed.emit()
-			return true
-	return false
+	## the question's game window (a prompt or a message box): its first answer
+	var hold = b.react_panel
+	if hold == null or not is_instance_valid(hold) or hold.is_queued_for_deletion():
+		return false
+	var wins: Array = hold.get_children().filter(func(n): return n.has_method("answer"))
+	if wins.is_empty():
+		return false
+	wins[-1].answer(0)
+	return true
 
 
 func _init() -> void:

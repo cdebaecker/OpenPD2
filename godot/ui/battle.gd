@@ -63,7 +63,7 @@ var react_sem := Semaphore.new()
 var react_answer: Variant = 1
 var scripted: Array = []      # tests: the answers ask_choice / ask_table / ask_hex give, in turn
 var hex_pick: Array = []         # the hexes a question on the worker thread waits a click on
-var react_panel: PanelContainer = null
+var react_panel: Control = null
 var react_target := -1
 var react_menu: Array = []
 var hover := Vector2i(-1, -1)
@@ -162,10 +162,10 @@ class SandboxHooks extends AiTurnHooks:
 		battle.say_msg(0x1A6)
 
 	func mine_clear(u: int, msg := 0x1A3) -> bool:
-		return battle.ask_box(battle.msg(msg), false)
+		return battle.ask_box(battle.msg(msg), false, 0)     # 0x475730 / 0x4737D2: kind 0
 
 	func mine_shoot(u: int) -> Variant:
-		if not battle.ask_box(battle.msg(0x1A4), false):
+		if not battle.ask_box(battle.msg(0x1A4), false, 0):
 			return null
 		while true:
 			# the weapon picker (mode 3): a slot shoots the mine; a magazine item (4 + slot)
@@ -1973,7 +1973,11 @@ func intercept_names(t: int) -> Array:
 
 
 func say_msg(id: int, args := []) -> void:
-	say(msg(id, args).replace("@", "\n").strip_edges())
+	## a message line (ui_message_line 0x452300), also in the log
+	var t := msg(id, args)
+	say(t.replace("@", "\n").strip_edges())
+	if not auto_react:
+		show_line(t)
 
 
 func ui(key: String) -> String:
@@ -2037,21 +2041,29 @@ func _move_done(u: int, h: Vector2i, res: Array) -> void:
 # --- the move command's questions --------------------------------------------------
 
 func ask_prompt(text: String, default: bool) -> bool:
-	## ui_prompt_at_cursor (0x47EBE0): the choices are written in the message; 0 = the first
+	## ui_prompt_at_cursor (0x47EBE0): the choices are written in the message; 0 = the first,
+	## a right click the second
 	var parts := GameData.prompt_parts(text)
 	var labels: Array = parts[1] if parts[1].size() >= 2 else [ui("UI_YES"), ui("UI_NO")]
-	return ask_choice(parts[0], [[labels[0], true], [labels[1], false]], default)
+	return ask_choice(text, [[labels[0], true], [labels[1], false]], default, "prompt")
 
 
-func ask_box(text: String, default: bool) -> bool:
-	## ui_message_box (0x451FB0): the game reads non-zero as yes (step_mine_found 0x4756A0);
-	## its button labels are not read yet
-	return ask_choice(text, [[ui("UI_YES"), true], [ui("UI_NO"), false]], default)
+## ui_message_box's buttons by caller (the kind each call site pushes): 0 了解 / 中止
+## (DS:0x510444 / 0x51044C), 1 実行 / 中止 (0x510454 / 0x51045C)
+const BOX_LABELS := [[0x510444, 0x51044C], [0x510454, 0x51045C]]
 
 
-func ask_choice(text: String, options: Array, default: Variant) -> Variant:
+func ask_box(text: String, default: bool, kind := 0) -> bool:
+	## ui_message_box (0x451FB0): the game reads non-zero as yes (step_mine_found 0x4756A0)
+	var l: Array = BOX_LABELS[kind]
+	return ask_choice(text, [[GameData.exe_text(campaign, l[0]), true], [GameData.exe_text(campaign, l[1]), false]],
+			default, "box")
+
+
+func ask_choice(text: String, options: Array, default: Variant, kind := "list") -> Variant:
 	## Called on a worker thread (the move, the computer's turn): shows the question on the
 	## main thread and waits for the answer. auto_react: the default, without asking.
+	## kind: "prompt" (0x47EBE0), "box" (0x451FB0) or "list" (a select window, 0x40C090)
 	if not scripted.is_empty():
 		return scripted.pop_front()
 	if auto_react:
@@ -2059,7 +2071,7 @@ func ask_choice(text: String, options: Array, default: Variant) -> Variant:
 	if OS.get_thread_caller_id() == OS.get_main_thread_id():
 		push_error("ask_choice on the main thread: %s" % text)   # would wait forever
 		return default
-	call_deferred("_open_choice", text, options)
+	call_deferred("_open_choice", text, options, kind)
 	react_sem.wait()
 	return react_answer
 
@@ -2311,13 +2323,28 @@ func _answer_hex(v: Variant) -> void:
 	_answer_reaction(v)
 
 
-func _open_choice(text: String, options: Array) -> void:
-	var box := _reaction_panel(text.replace("@", "\n").strip_edges())
-	for o in options:
-		var btn := Button.new()
-		btn.text = o[0]
-		btn.pressed.connect(_answer_reaction.bind(o[1]))
-		box.add_child(btn)
+func _open_choice(text: String, options: Array, kind := "list") -> void:
+	## the question's game window; its answer goes to the waiting thread
+	var gw: GameWindow
+	match kind:
+		"prompt":
+			gw = open_prompt(text)
+			gw.chosen.connect(func(v: int): _answer_reaction(options[0][1] if v == 0 else options[1][1]))
+		"box":
+			gw = open_box(text, [options[0][0], options[1][0]])
+			gw.chosen.connect(func(v: int): _answer_reaction(options[0][1] if v == 0 else options[1][1]))
+		_:
+			var labels := []
+			var vals := []
+			var cancel: Variant = null
+			for o in options:
+				if o[1] is int and o[1] == -2:
+					cancel = o[1]           # the select windows cancel with a right click
+				else:
+					labels.append(o[0])
+					vals.append(o[1])
+			gw = open_select(text, labels, cancel != null)
+			gw.chosen.connect(func(v: int): _answer_reaction(cancel if v == -2 else vals[v]))
 
 
 const FIRE_MODES := {"fire": 0, "aimed": 1, "aa": 6}
@@ -2384,19 +2411,208 @@ func _fire_done(u: int, before: Dictionary) -> void:
 	_after_command()
 
 
-func _confirm(text: String, then: Callable) -> void:
-	## a prompt on the main thread: its choices come from the message (0 = the first)
-	var parts := GameData.prompt_parts(text)
-	var dlg := ConfirmationDialog.new()
-	dlg.dialog_text = parts[0].replace("@", "\n").strip_edges()
-	if parts[1].size() >= 2:
-		dlg.ok_button_text = parts[1][0]
-		dlg.cancel_button_text = parts[1][1]
-	dlg.confirmed.connect(then)
-	dlg.confirmed.connect(dlg.queue_free)
-	dlg.canceled.connect(dlg.queue_free)
-	add_child(dlg)
-	dlg.popup_centered()
+func _confirm(text: String, then: Callable, box_kind := -1) -> void:
+	## a question on the main thread: the prompt at the cursor (its choices from the
+	## message, 0 = the first), or with box_kind a message box (BOX_LABELS); then runs on
+	## the first answer
+	var gw: GameWindow
+	if box_kind < 0:
+		gw = open_prompt(text)
+	else:
+		var l: Array = BOX_LABELS[box_kind]
+		gw = open_box(text, [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])])
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v == 0:
+			then.call())
+
+
+# --- the game's windows (ui/game_window.gd), in the main window's 640 x 400 ------------
+
+const MAIN_W := 640               # the main window's client (0x404AE0: 0x280 x 400)
+const MAIN_H := 400
+var win_root: Control
+var _lines: Array = []            # message lines waiting for the one shown to be clicked away
+var _line_open: Control = null
+
+
+func _win_root() -> Control:
+	if win_root == null or not is_instance_valid(win_root):
+		win_root = Control.new()
+		win_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		win_root.size = Vector2(MAIN_W, MAIN_H)
+		hud_layer.add_child(win_root)
+	var vs := get_viewport().get_visible_rect().size
+	var sc := minf(vs.x / MAIN_W, vs.y / MAIN_H)
+	win_root.scale = Vector2(sc, sc)
+	hud_layer.move_child(win_root, -1)
+	return win_root
+
+
+func _hold(wins: Array) -> Control:
+	## the windows' holder: modal over the main window (the game's windows run their own
+	## message loops); a click outside them goes to the last one (a wait goes on, a right
+	## click cancels where allowed)
+	var r := _win_root()
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	for gw in wins:
+		hold.add_child(gw)
+	var top: GameWindow = wins[-1]
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			top.outside(ev.button_index))
+	r.add_child(hold)
+	react_panel = hold
+	return hold
+
+
+func _close_window(gw: GameWindow) -> void:
+	var hold := gw.get_parent()
+	if hold and is_instance_valid(hold):
+		if react_panel == hold:
+			react_panel = null
+		hold.queue_free()
+
+
+var cursor_override := Vector2(-1, -1)      # tests: the cursor the prompts open at
+
+
+func _mouse_main() -> Vector2:
+	if cursor_override.x >= 0:
+		return cursor_override
+	return _win_root().get_local_mouse_position()
+
+
+func open_prompt(text: String) -> GameWindow:
+	## ui_prompt_at_cursor (0x47EBE0): a 20 x 4 window of 16 px lines (font 16 px) at the
+	## cursor (x & ~7 - 0x28, y - 0x40; kept 0xB0 x 0x50 inside the window, not below 0),
+	## the choices' regions (8, 0x38)-(0x48, 0x48) and (0x58, 0x38)-(0x98, 0x48); a right
+	## click answers the second. A translation is laid out by the engine: the question
+	## wrapped at its words, the choices centred in their regions on the last line (the
+	## window grows when the question needs more than three lines).
+	var m := _mouse_main()
+	var x := (int(m.x) & 0xFFF8) - 0x28
+	var y := int(m.y) - 0x40
+	if (int(m.x) & 0xFFF8) + 0x88 > MAIN_W:
+		x = MAIN_W - 0xB0
+	if int(m.y) + 0x10 > MAIN_H:
+		y = MAIN_H - 0x50
+	x = maxi(x, 0)
+	y = maxi(y, 0)
+	var body := text
+	var rows := 4
+	if GameWindow.translated(text):
+		var parts := GameData.prompt_parts(text)
+		var head := GameWindow.fit(str(parts[0]).replace("@", "\n").strip_edges(), 20)
+		var n := head.split("\n").size()
+		rows = maxi(4, n + 1)
+		body = head + "\n".repeat(rows - n)
+		if parts[1].size() >= 2:
+			body += GameWindow.centred(str(parts[1][0]), 8) + "・" + GameWindow.centred(str(parts[1][1]), 8)
+	var dy := (rows - 4) * 16
+	y = maxi(0, mini(y, MAIN_H - 0x50 - dy))
+	var gw := GameWindow.select_window(x, y, 20, rows, 0, [], 0,
+			[[8, 0x38 + dy, 0x48, 0x48 + dy, 1], [0x58, 0x38 + dy, 0x98, 0x48 + dy, 1]], true)
+	gw.waits = false
+	_hold([gw])
+	gw.print_text(body.replace("@", ""))
+	return gw
+
+
+func open_box(text: String, labels: Array) -> GameWindow:
+	## ui_message_box (0x451FB0): the message in a one-line window (font 12 px) centred,
+	## x ((80 - (len + 2)) / 2) * 8, y (400 - 32) / 2; its two buttons a select window of 4
+	## columns below it at its right ((.. + len + 2) * 8 - 0x30, y + 0x20); the first
+	## answers 0, the second or a right click 1. Engine-side fit: a text wider than the
+	## screen wraps (more lines), labels wider than 4 columns widen the buttons leftwards.
+	var t := text.replace("@", "").strip_edges()
+	var n := GameWindow.text_cols(t)
+	var rows := 1
+	if n > 76:
+		t = GameWindow.fit(t, 76)
+		rows = t.split("\n").size()
+		n = 0
+		for l in t.split("\n"):
+			n = maxi(n, GameWindow.text_cols(l))
+	var x := ((80 - (n + 2)) / 2) * 8
+	var y := (MAIN_H - 0x20) / 2
+	var mw := GameWindow.text_window(x, y, n, rows, 1)
+	var ic := 4
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var right := (((80 - (n + 2)) / 2) + n + 2) * 8
+	var bw := GameWindow.select_window(right - 16 - ic * 8, y + 0x20 + (rows - 1) * 16, 0, 0, 0, labels, ic, [], true)
+
+	mw.waits = false
+	_hold([mw, bw])
+	mw.print_text(t)
+	return bw
+
+
+func open_select(title: String, labels: Array, cancel: bool) -> GameWindow:
+	## a select window (0x40C090 with x -1: centred) with the question as its header (font
+	## 16 px) and the choices as items; a right click cancels where the question has a cancel
+	var head := GameWindow.fit(title.replace("@", "\n").strip_edges(), 36)
+	var hl := head.split("\n")
+	var hc := 0
+	for l in hl:
+		hc = maxi(hc, GameWindow.text_cols(l))
+	var ic := 0
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var c := maxi(hc, ic + (3 if labels.size() > GameWindow.SCROLL_SHOWN else 0))
+	var hh := hl.size() * 16 + 16
+	var ih := (mini(labels.size(), GameWindow.SCROLL_SHOWN) + 1) * 16
+	var gw := GameWindow.select_window(((MAIN_W - (c * 8 + 16)) / 2) & ~7, (MAIN_H - hh - ih) / 2, c,
+			hl.size(), 0, labels, ic, [], cancel)
+	gw.waits = false
+	_hold([gw])
+	gw.print_text(head)
+	return gw
+
+
+func _headless() -> bool:
+	return DisplayServer.get_name() == "headless"
+
+
+func show_line(text: String, red := false) -> void:
+	## ui_message_line (0x452300; 0x4521C0 starts it red, "%a4F" DS:0x50CBD6): a one-line
+	## window (font 12 px) centred at y (400 - 32) / 2, until a click. Lines said while one
+	## is up wait for it.
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		call_deferred("show_line", text, red)
+		return
+	_lines.append([text.replace("@", "").strip_edges(), red])
+	if _line_open == null or not is_instance_valid(_line_open):
+		_next_line()
+
+
+func _next_line() -> void:
+	_line_open = null
+	if _lines.is_empty() or hud_layer == null:
+		return
+	var it: Array = _lines.pop_front()
+	var t: String = it[0]
+	if t == "":
+		_next_line()
+		return
+	var n := mini(GameWindow.text_cols(t), 76)
+	var rows := 1
+	if GameWindow.text_cols(t) > 76:
+		t = GameWindow.fit(t, 76)
+		rows = t.split("\n").size()
+	var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, (MAIN_H - 0x20) / 2, n, rows, 1)
+	gw.waits = not _headless()
+	var hold := _hold([gw])
+	_line_open = hold
+	if react_panel == hold:
+		react_panel = null               # (not a question)
+	await gw.print_text(("\u0001" + char(0x4F) if it[1] else "") + t + "\n")
+	if is_instance_valid(hold):
+		hold.queue_free()
+	_next_line()
 
 
 # --- the item command (the machine status window's "use", 0x4279F0 -> 0x4286D0 -> 0x4ECC60)
@@ -2555,7 +2771,7 @@ func _cmd_carry_click(h: Vector2i) -> void:
 			else:
 				say("%s picks up %s." % [unit_name(u), unit_name(o)])
 			_set_mode("move")
-			_after_command())
+			_after_command(), 1)                     # 0x427410: a message box, kind 1
 	else:
 		var carried := w.ub(u, 0x34)
 		_confirm(msg(0x1B2), func():
@@ -2564,7 +2780,7 @@ func _cmd_carry_click(h: Vector2i) -> void:
 				pass
 			say("%s sets down %s." % [unit_name(u), unit_name(carried)])
 			_set_mode("move")
-			_after_command())
+			_after_command(), 1)                     # 0x426FD6: a message box, kind 1
 
 
 var _safe_shown := 0
@@ -3662,7 +3878,7 @@ class BattleHandHooks extends Pockets.HandHooks:
 		return r if r is Vector2i else null
 
 	func ask(ap: int) -> int:
-		return 1 if battle.ask_box(battle.msg(0x1E8, [ap]), false) else 0
+		return 1 if battle.ask_box(battle.msg(0x1E8, [ap]), false, 1) else 0     # 0x428B44: kind 1
 
 	func line(msg: int) -> int:
 		battle.say_msg(msg)

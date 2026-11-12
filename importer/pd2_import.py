@@ -21,6 +21,9 @@ reads, under import/:
                                  roster + NPC crew (raw), S/M/H layers (base64), text
   <campaign>/maps/mNN.png        the tactical map, 48 x 36 px tiles, odd rows shifted
   palette.json                   the tactical map palette
+  ui.json, font_ank.dat          the windows' frame tiles, background and scroll bar (from
+                                 Pd2.exe), the 8 px font
+  images/, <campaign>/images/    the screens' pictures (PAC entries as BMP)
 The format readers are in formats/.
 """
 import argparse
@@ -412,6 +415,45 @@ def export_images(game, out):
             open(os.path.join(out, camp, 'koma.dat'), 'wb').write(open(fs['koma.dat'], 'rb').read())
 
 
+# The game's windows (ui_window_create 0x4528B0, drawn by 0x4F0DB0 / 0x4F0C00): the frame's
+# eight 8 x 8 tiles in Pd2.exe (5 bytes a row: four colour planes and a mask, 0x4F0AC0),
+# top-left, top, top-right, left, right, bottom-left, bottom, bottom-right, and the
+# windows' background (DS:0x50C9E8: two rows of four planes repeated, 0x4F0860);
+# FONT_ANK.DAT, the 8 px font (8 bytes a character, DS:0x523E80) of 8 px windows.
+WINDOW_TILES = ('tl', 'top', 'tr', 'left', 'right', 'bl', 'bottom', 'br')
+WINDOW_TILES_VA = 0x51FB78
+WINDOW_BACK_VA = 0x50C9E8
+# ... and the select windows' scroll bar (0x40B6D0: 27 shapes at DS:0x5129B8, six int32
+# each: x0, y0, x1, y1, colour, type 0 line / 1 outline / 2 fill)
+SCROLL_VA = 0x5129B8
+
+
+def _planes(b0, b1, b2, b3, m=0xFF):
+    """one 8 px row: the colours 0-15 as 0x4F0AC0 / 0x4F0860 combine the planes"""
+    row = []
+    for _ in range(8):
+        v = ((((((m & b0) >> 1) | (m & b1 & 0xBF)) >> 1 | (m & b2 & 0x9F)) >> 1) | (m & b3 & 0x8F)) & 0xFF
+        row.append(v >> 4)
+        b0, b1, b2, b3, m = (b0 << 1) & 0xFF, (b1 << 1) & 0xFF, (b2 << 1) & 0xFF, (b3 << 1) & 0xFF, (m << 1) & 0xFF
+    return row
+
+
+def export_ui(game, out):
+    exe = open(os.path.join(game, 'Pd2.exe'), 'rb').read()
+    tiles = {}
+    for k, name in enumerate(WINDOW_TILES):
+        raw = exe_va(exe, WINDOW_TILES_VA + 0x28 * k, 0x28)
+        tiles[name] = [_planes(*raw[5 * r: 5 * r + 5]) for r in range(8)]
+    raw = exe_va(exe, WINDOW_BACK_VA, 8)
+    # (0x4F0860 combines the planes as 0x4F0AC0 does without a mask)
+    back = [_planes(*raw[0:4]), _planes(*raw[4:8])]
+    scroll = [list(struct.unpack('<6i', exe_va(exe, SCROLL_VA + 24 * k, 24))) for k in range(27)]
+    json.dump({'frame': tiles, 'back': back, 'scroll': scroll}, open(os.path.join(out, 'ui.json'), 'w'))
+    fs = {f.lower(): os.path.join(game, f) for f in os.listdir(game)}
+    if 'font_ank.dat' in fs:
+        open(os.path.join(out, 'font_ank.dat'), 'wb').write(open(fs['font_ank.dat'], 'rb').read())
+
+
 def default_out():
     if os.name == 'nt':
         base = os.path.join(os.environ['APPDATA'], 'Godot', 'app_userdata')
@@ -438,6 +480,7 @@ def main():
         count = export_missions(game, a.out, pal)
         export_messages(game, a.out)
         export_images(game, a.out)
+        export_ui(game, a.out)
         manifest = {'format': 1, 'version': version, 'pd2_exe_sha256': h, 'missions': count}
         json.dump(manifest, open(os.path.join(a.out, 'manifest.json'), 'w'), indent=1)
     print('imported %s: %s into %s' % (version, count, a.out))

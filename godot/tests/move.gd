@@ -6,10 +6,14 @@ var b
 
 
 func _answer(i: int) -> bool:
-	## press button i of the question panel once it is up
+	## answer i on the question's window once it is up
 	for _n in 200:
 		await process_frame
 		if b.react_panel != null and is_instance_valid(b.react_panel):
+			var wins: Array = b.react_panel.get_children().filter(func(n): return n.has_method("answer"))
+			if not wins.is_empty():
+				wins[-1].answer(i)               # the game window's region / item i
+				return true
 			var btns: Array = b.react_panel.find_children("*", "Button", true, false)
 			if btns.size() > i:
 				btns[i].pressed.emit()
