@@ -251,7 +251,9 @@ EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C
              # the new campaign's pilot choice (0x422050): the count lines, the list's header,
              # the questions and notes (PD2 / DASH)
              0x513A64, 0x513A80, 0x513A9C, 0x513AF0, 0x513B00, 0x513B18, 0x513B2C, 0x513B44,
-             0x513B5C, 0x513B8C, 0x513BA8, 0x513BD8) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
+             0x513B5C, 0x513B8C, 0x513BA8, 0x513BD8,
+             # the debrief's results (0x495B70): the header, its rule, the states
+             0x519AF8, 0x519B34, 0x519B88, 0x519B7C, 0x519BA0, 0x519B94, 0x519BC4, 0x519BB0, 0x519BB8) + tuple(sorted(SCRIPT_TEXTS)) + tuple(sorted(TITLE_TEXTS)) + tuple(sorted(PLAN_TEXTS))
 
 
 def _exe_ptr_texts(exe, va, n):
@@ -411,7 +413,10 @@ def export_messages(game, out):
 # The battle's info panel (0x4830E0): hex_g.pac (208 x 400).
 SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac',
                  'hidan.pac', 'dface.pac', 'hex_g.pac')
-CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac')    # (amap: the operation plan's area maps, 0x444500)
+CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
+                   # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
+                   # the game over, a single mission's end
+                   'm_clr.pac', 'm_fail.pac', 'gameover.pac', 'single.pac')    # (amap: the operation plan's area maps, 0x444500)
 
 
 def export_images(game, out):

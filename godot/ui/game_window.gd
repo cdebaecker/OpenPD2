@@ -43,6 +43,7 @@ var right_cancel := false
 var waits := true             # false: '@' and full windows do not wait (tests)
 var black := false            # the inside cleared to colour 0 (no background pattern: DS:0x50C9F0)
 var role := ""                # what the window asks (tests): "reaction", "weapon", ...
+var transparent := false      # printed over what is behind until a clear (a record marked 1 before its first print)
 var scroll := 0
 
 var _cells: Array = []        # [x, y, char, code]
@@ -424,6 +425,7 @@ func clear() -> void:
 	_col = 0
 	_row = 0
 	_bar = false
+	transparent = false
 	if header:
 		_draw_window(0, 0, cols, rows, lh, framed)
 	queue_redraw()
@@ -606,7 +608,8 @@ func _draw() -> void:
 		if _dirty or _tex == null:
 			_tex = _texture(_buf)
 			_dirty = false
-		draw_texture(_tex, Vector2.ZERO)
+		if not transparent:
+			draw_texture(_tex, Vector2.ZERO)
 	var o := _origin()
 	for c in _cells:
 		# (the 8 px font's half-width characters, FONT_ANK, step 8 px a column; TextOut's lh / 2)

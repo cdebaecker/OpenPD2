@@ -4020,7 +4020,7 @@ func _end_mission(code: int, exited := false) -> void:
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
-	_show_debrief(dh.lines, Debrief.next_mission(w) if debrief_result == 0x80 else [])
+	_show_debrief(dh.lines, Debrief.next_mission(w) if debrief_result == 0x80 else [], dh.screens)
 
 
 class BattleDebriefHooks extends Debrief.Hooks:
@@ -4030,8 +4030,11 @@ class BattleDebriefHooks extends Debrief.Hooks:
 	## battle's first mission does; clearinf.bin's flags in user://clearinf.bin.
 	var battle
 	var lines := []
+	var screens := []           # the screens the game shows (DebriefView replays them)
 
 	func screen(kind: String, data: Variant = null) -> int:
+		if kind in ["clear", "fail", "gameover", "single", "results"]:
+			screens.append([kind, data.duplicate() if data is Array else data])
 		match kind:
 			"clear", "fail", "gameover", "ending", "single":
 				lines.append("[b]%s[/b]" % battle.ui("UI_DEBRIEF_" + kind.to_upper()))
@@ -4098,9 +4101,18 @@ func machine_name(m: int) -> String:
 	return mach[m] if m >= 0 and m < mach.size() else "-"
 
 
-func _show_debrief(lines: Array, nxt: Array) -> void:
-	## The debrief panel: its lines, then the next mission (game_mode_loop: the mission
+func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
+	## The debrief's screens as the game shows them (ui/debrief_view.gd: the pictures, the
+	## texts, the results), then the debrief panel: its other lines (new items, recruits ..:
+	## not drawn the game's way yet), then the next mission (game_mode_loop: the mission
 	## start 0x416CF0 with the debrief's save) or the way back to the mission list.
+	if not screens.is_empty() and not auto_react and not _headless():
+		var dv := DebriefView.new()
+		dv.battle = self
+		dv.screens = screens
+		_win_root().add_child(dv)
+		await dv.play()
+		dv.queue_free()
 	if debrief_panel:
 		debrief_panel.queue_free()
 	debrief_panel = PanelContainer.new()
