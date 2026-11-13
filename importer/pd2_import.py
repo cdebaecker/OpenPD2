@@ -215,6 +215,7 @@ TITLE_TEXTS = {0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517
 # sign n from the first, past 38 on into the second, so both are exported as one list.
 CALL_SIGNS_VA = {'pd2': 0x501728, 'dash': 0x502C90}
 CALL_SIGNS = 39 + 34
+CAMPAIGN_SET_VA = {'pd2': 0x5011A8, 'dash': 0x502710}    # the set's name tables (pd2exe.NAME_TABLES)
 # The initialised data around the tables the world models, for code that reads past one
 # (Pd2World.mem8 / rules.ds_byte fall back to it), up to the end of the initialised data:
 # it holds the mission scripts' tables too (charge points, layouts, broken tiles ...).
@@ -297,6 +298,10 @@ def export_tables(game, out):
             'machine_codes': [m['code'] for m in info['sets'][TABLE_SET[camp]]['machines']],
             # (the launchers' codes, DS:0x50C0E5: the info panel's weapon list, 0x466DF0)
             'launcher_codes': {l['id']: l['code'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
+            # (the launchers' short codes DS:0x50C0E5 and the rounds' codes, the set's +0x400 =
+            # DS:0x50C665: the info panel's and the sortie cards' lists)
+            'launcher_short': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, 0x50C0E5 + 4 * i, 4))[0]) for i in range(96)],
+            'ammo_codes': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CAMPAIGN_SET_VA[camp] + 0x400 + 4 * i, 4))[0]) for i in range(96)],
             'launcher_names': {l['id']: l['name'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
             'ammo_names': {a['id']: a['name'] for a in info['sets'][TABLE_SET[camp]]['ammunition']},
             'crew_names': info['crew_names'],
@@ -414,7 +419,15 @@ def export_messages(game, out):
 SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pac', 'plan_gb.pac', 'plan_gc.pac',
                  'hidan.pac', 'dface.pac', 'hex_g.pac',
                  # the debrief's score cards (0x468490): the marks, the characters
-                 'score_p.pac', 'chara.pac')
+                 'score_p.pac', 'chara.pac',
+                 # the sortie's cards (0x4485E0) and its panel (0x45ED60)
+                 'face.pac', 'hensei_g.pac',
+                 # the armament screen (0x454E60): its background and the three layouts' panels,
+                 # the machines' pictures, the weapons' and empty slots' pictures, the air
+                 # machines' second pictures (st07-st12.pac, 0x4561F0) and the slots' blanks
+                 'busou_b.pac', 'busou_g0.pac', 'busou_g1.pac', 'busou_g2.pac', 'weapon.pac',
+                 'arms.pac', 'blanc.pac', 'st07.pac', 'st08.pac', 'st09.pac', 'st10.pac',
+                 'st11.pac', 'st12.pac', 'k_blanc0.pac', 'k_blanc1.pac', 'k_blanc2.pac')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
                    # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
                    # the game over, a single mission's end
@@ -481,7 +494,18 @@ def export_ui(game, out):
     # (0x4F0860 combines the planes as 0x4F0AC0 does without a mask)
     back = [_planes(*raw[0:4]), _planes(*raw[4:8])]
     scroll = [list(struct.unpack('<6i', exe_va(exe, SCROLL_VA + 24 * k, 24))) for k in range(27)]
-    json.dump({'frame': tiles, 'back': back, 'scroll': scroll}, open(os.path.join(out, 'ui.json'), 'w'))
+    # the base screens' window patterns (the sortie DS:0x50D719 / 0x50D721 / 0x50D729 /
+    # 0x50D731 / 0x50D739, the plan DS:0x50D699): two rows of four planes each
+    patterns = {}
+    for va in (0x50D699, 0x50D719, 0x50D721, 0x50D729, 0x50D731, 0x50D739):
+        raw = exe_va(exe, va, 8)
+        patterns['%X' % va] = [_planes(*raw[0:4]), _planes(*raw[4:8])]
+    # the sortie screen's 79 click regions (DS:0x515FC8: x0, y0, x1, y1, type; 0x45ED60)
+    raw = exe_va(exe, 0x515FC8, 79 * 20)
+    sortie_regions = [list(struct.unpack_from('<5i', raw, 20 * i)) for i in range(79)]
+    json.dump({'frame': tiles, 'back': back, 'scroll': scroll, 'patterns': patterns,
+               'sortie_regions': sortie_regions},
+              open(os.path.join(out, 'ui.json'), 'w'))
     fs = {f.lower(): os.path.join(game, f) for f in os.listdir(game)}
     if 'font_ank.dat' in fs:
         open(os.path.join(out, 'font_ank.dat'), 'wb').write(open(fs['font_ank.dat'], 'rb').read())

@@ -43,6 +43,9 @@ var right_cancel := false
 var waits := true             # false: '@' and full windows do not wait (tests)
 var black := false            # the inside cleared to colour 0 (no background pattern: DS:0x50C9F0)
 var role := ""                # what the window asks (tests): "reaction", "weapon", ...
+var pattern: Array = []       # another window pattern (two rows of 8 colours), as given to ui_window_create
+var solid_raw := 0            # a solid DIB colour (the record's +0x65 + 10: the pictures' table) for clears
+var pal16: Array = []         # the window's 16 colours when not the battle's (e.g. DS:0x50D6A1)
 var transparent := false      # printed over what is behind until a clear (a record marked 1 before its first print)
 var scroll := 0
 
@@ -170,9 +173,13 @@ func _back(x: int, y: int, w: int, h: int) -> void:
 	## 0x4F0860 / 0x4F0C00: the two-row pattern, row 0 at each cell's top (a window made
 	## without one: DS:0x50C9F0's zeros)
 	var b: Array = ui_data().back if not black else [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]]
+	if not pattern.is_empty():
+		b = pattern
 	for r in h:
 		for c in w:
 			_px(x + c, y + r, int(b[r & 1][c & 7]))
+			if solid_raw > 0 and x + c < _w and y + r < _h:
+				_raw[(y + r) * _w + x + c] = solid_raw       # a solid colour of the DIB (+0x65)
 
 
 func _draw_window(x: int, y: int, c: int, r: int, h: int, f: bool) -> void:
@@ -571,11 +578,18 @@ static func text_color(c: int) -> Color:
 	return Color8(mini(k.r8 + 10, 255), mini(k.g8 + 10, 255), mini(k.b8 + 10, 255))
 
 
+func colour(i: int) -> Color:
+	## the window's colour i: its own palette's when it has one (pal16)
+	if pal16.size() == 16:
+		return pal16[i & 15]
+	return color(i)
+
+
 func _texture(buf: PackedByteArray) -> ImageTexture:
 	var img := Image.create(_w, _h, false, Image.FORMAT_RGB8)
 	var cols_rgb := []
 	for i in 16:
-		cols_rgb.append(color(i))
+		cols_rgb.append(colour(i))
 	for y in _h:
 		for x in _w:
 			var r := _raw[y * _w + x]
@@ -613,7 +627,7 @@ func _draw() -> void:
 	var o := _origin()
 	for c in _cells:
 		# (the 8 px font's half-width characters, FONT_ANK, step 8 px a column; TextOut's lh / 2)
-		var ank: bool = ((int(c[3]) >> 2) & 3) >= 2 and half_width(c[2]) and str(c[2]).unicode_at(0) < 256
+		var ank: bool = ((int(c[3]) >> 2) & 3) >= 2 and half_width(c[2]) and ank_code(str(c[2])) >= 0
 		_draw_char(o.x + c[0] * (8 if ank else lh / 2), o.y + c[1] * lh, c[2], c[3])
 	if not items.is_empty():
 		# the items printed in turn into the item window ("%0Ns": cut and padded to the item
@@ -645,14 +659,26 @@ func _draw_char(x: int, y: int, ch: String, c: int, h := -1) -> void:
 	if h < 0:
 		h = lh
 	var px: int = [16, 12, 8, 8][(c >> 2) & 3]
-	var col := text_color(c)
-	if px == 8 and half_width(ch) and ch.unicode_at(0) < 256:
-		_ank_char(x, y + (h - 8) / 2, ch.unicode_at(0), col, (c & 2) != 0)
+	var k := colour((c >> 4) & 15)
+	var col := Color8(mini(k.r8 + 10, 255), mini(k.g8 + 10, 255), mini(k.b8 + 10, 255))
+	if px == 8 and half_width(ch) and ank_code(ch) >= 0:
+		_ank_char(x, y + (h - 8) / 2, ank_code(ch), col, (c & 2) != 0)
 		return
 	var two := not half_width(ch)
 	var dy: int = (h % px) / 2 if two else (h % maxi(px / 2, 1)) / 2
 	var f := font(px, (c & 1) != 0)
 	draw_char(f, Vector2(x, y + dy + f.get_ascent(px)), ch, px, col)
+
+
+static func ank_code(ch: String) -> int:
+	## the character's single-byte Shift-JIS code (FONT_ANK.DAT's index): ASCII, and the
+	## half-width kana U+FF61-U+FF9F at 0xA1-0xDF; -1 otherwise
+	var u := ch.unicode_at(0)
+	if u < 256:
+		return u
+	if u >= 0xFF61 and u <= 0xFF9F:
+		return u - 0xFF61 + 0xA1
+	return -1
 
 
 func _ank_char(x: int, y: int, k: int, col: Color, inverse: bool) -> void:

@@ -49,6 +49,8 @@ func tables(campaign: String) -> Dictionary:
 			"machine_names": doc.get("machine_names", []),
 			"machine_codes": doc.get("machine_codes", []),
 			"launcher_codes": doc.get("launcher_codes", {}),
+			"launcher_short": doc.get("launcher_short", []),
+			"ammo_codes": doc.get("ammo_codes", []),
 			"launcher_names": doc.get("launcher_names", {}),
 			"ammo_names": doc.get("ammo_names", {}),
 			"crew_names": doc.get("crew_names", []),
@@ -180,6 +182,11 @@ func title_note(id: int) -> String:
 ## sortie screen, the briefing), translated (mes.csv: "<campaign>.<entry>.<id>", then
 ## "<campaign>.<id>", then "<id>") and formatted; a line the entry leaves empty stays empty.
 func base_text(campaign: String, id: int, args := [], entry := 0) -> String:
+	return format_text(base_raw(campaign, id, entry), args)
+
+
+## A base-screen message as written (translated), its format codes unexpanded.
+func base_raw(campaign: String, id: int, entry := 0) -> String:
 	if not _messages.has(campaign):
 		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
 	var tables: Array = _messages[campaign].get("mes", [])
@@ -187,7 +194,7 @@ func base_text(campaign: String, id: int, args := [], entry := 0) -> String:
 	if entry < tables.size() and id < tables[entry].size():
 		ja = tables[entry][id]
 	if ja == "":
-		return format_text("", args)
+		return ""
 	var t := _translated("mes", "%s.%d.%X" % [campaign, entry, id])
 	if t == "":
 		t = _translated("mes", "%s.%X" % [campaign, id])
@@ -195,7 +202,7 @@ func base_text(campaign: String, id: int, args := [], entry := 0) -> String:
 		t = _translated("mes", "%X" % id)
 	if t == "":
 		t = ja
-	return format_text(t, args)
+	return t
 
 
 ## An engine UI string (translations/ui.csv): the language's column, else English, else the key.

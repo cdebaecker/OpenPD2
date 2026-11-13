@@ -1,7 +1,7 @@
 extends SceneTree
 ## Render the sortie screen before a battle and save it: godot --path engine/godot -s
 ## tests/sortie_shot.gd -- dash 0 out.png [group to select] [panel]
-## panel: "roster" (the pilot roster), "bulk" (the bulk menu's scopes), "machine" (the
+## panel: "page0" / "page2" (the screen's other pages), "roster" (the pilot roster), "bulk" (the bulk menu's scopes), "machine" (the
 ## first member's armament screen with its machine list), "template" (its template
 ## menu's recall list, with a register made first in a scratch reg_unit).
 
@@ -21,6 +21,8 @@ func _init() -> void:
 		b._sortie_draw()
 	var panel := args[4] if args.size() > 4 else ""
 	match panel:
+		"page0", "page2":
+			b._sortie_region(0x42 if panel == "page0" else 0x44, Vector2.ZERO)
 		"roster":
 			b._sortie_press(["roster"])
 		"bulk":

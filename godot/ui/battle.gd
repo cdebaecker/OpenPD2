@@ -447,7 +447,7 @@ class BattleSortieHooks extends Campaign.SortieHooks:
 var sortie_hooks: BattleSortieHooks
 var sortie_window := true       # false: the sortie screen presses start at once (tests)
 var sortie_sel := 0
-var sortie_panel: PanelContainer
+var sortie_panel: Control
 var hud_panel: PanelContainer        # the command bar, hidden while the sortie screen is up
 var sortie_text := ""
 const JOIN_MESSAGES := {1: 0x1D8, 2: 0x1D7, 3: 0x1D6, 4: 0x1D5, 5: 0x1D4, 6: 0x1D3, 7: 0x1DB, 8: 0x1DC}
@@ -1034,7 +1034,7 @@ func _plan_orders_ui(box: VBoxContainer) -> void:
 
 func _plan_win(x: int, y: int, c: int, r: int, h: int, filled: bool) -> GameWindow:
 	## an unframed window of the orders in the plan's window: filled with the picture
-	## table's 0xA0 (pattern DS:0x50D699 with the solid 0x90) or black (none given)
+	## table's 0x9A (pattern DS:0x50D699 with the solid 0x90) or black (none given)
 	var gw := GameWindow.new()
 	gw.cols = c
 	gw.rows = r
@@ -1057,7 +1057,7 @@ func _plan_orders_view() -> void:
 	## 0x446320 for the group being ordered, in the plan's window: the call sign "%a08%12s"
 	## (DS:0x50C7E5[+1]) at (0x188, 0xF6), the name "%a05%15s" (DS:0x50C881[+0]) at (0x1F0,
 	## 0xF6), the plan type "%a05%28s" (DS:0x50C965[the entry's +0]) at (0x188, 0x106) — 12 px
-	## lines on 0xA0 —; the requirements (MES 0x31 + 9 t + 3 j that hold, "\n" between) at
+	## lines on 0x9A —; the requirements (MES 0x31 + 9 t + 3 j that hold, "\n" between) at
 	## (0x188, 0x154) 28 x 3 of 16 px; "%a05%19s" MES 0xC1 + t at (0x188, 0x116) and the
 	## time "%5s" at (0x230, 0x116); "%a05%17s" MES 0xD1 + t at (0x188, 0x136) and the target
 	## at (0x218, 0x136) ("%2d-%2d" with the cell framed on the map, the direction, the site,
@@ -1067,7 +1067,7 @@ func _plan_orders_view() -> void:
 	plan_view.order_fills = []
 	plan_view.cell_frame = null
 	GameWindow.bmp(GameData.ROOT + "/images/plan_g/00.bmp")        # (the pictures' table)
-	plan_view.fill_col = GameWindow._pal256[0xA0] if GameWindow._pal256.size() > 0xA0 else Color.BLACK
+	plan_view.fill_col = GameWindow._pal256[0x9A] if GameWindow._pal256.size() > 0x9A else Color.BLACK     # (+0x65 = 0x90, + 10: 0x4F0A10)
 	var g: int = plan_st.g
 	var t := Flight.gb(w, g, 0x21) & 15
 	var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
@@ -1360,6 +1360,9 @@ func _sortie() -> void:
 		_begin_battle()
 		return
 	Campaign.sortie_open(w)
+	sortie_page = 1
+	sortie_pool_first = 0
+	sortie_member_first = 0
 	sortie_sel = 0
 	for g in 20:
 		if Flight.gb(w, g, 2) & 1 and (g >= 12 or g % 2 == 0):
@@ -1369,103 +1372,70 @@ func _sortie() -> void:
 
 
 func _sortie_draw(confirm := false) -> void:
+	## the sortie screen (ui/sortie_view.gd: 0x45ED60's windows and regions); the roster's /
+	## bulk menu's lists and questions, the start question and the system menu's save /
+	## load / abort questions still in a plain panel over it
 	if sortie_panel:
 		sortie_panel.queue_free()
-	sortie_panel = PanelContainer.new()
+	if hud_panel:
+		hud_panel.visible = false
+	sortie_panel = Control.new()
+	sortie_panel.size = Vector2(MAIN_W, MAIN_H)
+	sortie_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_root().add_child(sortie_panel)
+	var under := ColorRect.new()          # (the screen past the 640 x 400 window)
+	under.color = Color.BLACK
+	under.size = Vector2(MAIN_W, 480)
+	under.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(under)
+	sortie_view = SortieView.make(self, GameWindow.ui_data().get("sortie_regions", []))
+	sortie_view.page = sortie_page
+	sortie_view.pool_first = sortie_pool_first
+	sortie_view.member_first = sortie_member_first
+	sortie_panel.add_child(sortie_view)
+	sortie_view.refresh()
+	sortie_view.pressed.connect(_sortie_region)
+	if sortie_text != "":
+		# a note of the start's checks / the roster / the system menu: 0x45ED60's framed
+		# window (0x98, 0xB4) 40 x 2 of 12 px, then '@'
+		var hold := Control.new()
+		hold.size = Vector2(MAIN_W, MAIN_H)
+		hold.mouse_filter = Control.MOUSE_FILTER_STOP
+		sortie_panel.add_child(hold)
+		var nw := GameWindow.text_window(0x98, 0xB4, 0x28, 2, 1)
+		nw.lh = 12
+		nw._layout()
+		nw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hold.add_child(nw)
+		var t := sortie_text
+		if GameWindow.translated(t):
+			t = GameWindow.fit(t, 0x28)
+		nw.print_text(t)
+		hold.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.pressed:
+				sortie_text = ""
+				hold.queue_free())
+	var asking := sortie_request != null or confirm or sortie_saving >= 0 or sortie_loading >= 0 or sortie_aborting
+	if not asking:
+		return
+	var plain := PanelContainer.new()
 	var theme := Theme.new()
 	theme.default_font_size = 8
-	sortie_panel.theme = theme
+	plain.theme = theme
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
 	bg.set_content_margin_all(8)
-	sortie_panel.add_theme_stylebox_override("panel", bg)
-	sortie_panel.position = Vector2(16, 16)
-	if hud_panel:
-		hud_panel.visible = false
+	plain.add_theme_stylebox_override("panel", bg)
+	plain.position = Vector2(0x98, 0x60)
 	var box := VBoxContainer.new()
-	sortie_panel.add_child(box)
-	var title := Label.new()
-	title.text = ui("UI_SORTIE")
-	box.add_child(title)
-	var cols := HBoxContainer.new()
-	box.add_child(cols)
-	var groups_box := VBoxContainer.new()
-	cols.add_child(groups_box)
-	for g in 20:
-		if not Flight.gb(w, g, 2) & 1 or (g < 12 and g % 2 == 1):
-			continue
-		var b := Button.new()
-		b.text = "%s%s (%d)" % ["> " if g == sortie_sel else "", group_name(g), Flight.gb(w, g, 5)]
-		b.pressed.connect(func(): sortie_sel = g; _sortie_draw())
-		groups_box.add_child(b)
-	var members := VBoxContainer.new()
-	cols.add_child(members)
-	var ml := Label.new()
-	ml.text = group_name(sortie_sel)
-	members.add_child(ml)
-	for i in Flight.gb(w, sortie_sel, 5):
-		var k := Flight.gb(w, sortie_sel, 6 + i)
-		var row := HBoxContainer.new()
-		var lbl := Label.new()
-		lbl.text = unit_name(k)
-		row.add_child(lbl)
-		var arm := Button.new()
-		arm.text = ui("UI_ARM")
-		arm.pressed.connect(_equip_begin.bind(k))
-		row.add_child(arm)
-		var d := Button.new()
-		d.text = ui("UI_DROP")
-		d.pressed.connect(func():
-			if Campaign.sortie_drop(w, sortie_sel, k) == 1:
-				sortie_say(mes(0x1CE))
-			_sortie_draw())
-		row.add_child(d)
-		members.add_child(row)
-	var pool := VBoxContainer.new()
-	cols.add_child(pool)
-	var pl := Label.new()
-	pl.text = ui("UI_SORTIE_POOL")
-	pool.add_child(pl)
-	for i in w.crew_pool_n:
-		var c: int = w.ds[2 + i]
-		var row := HBoxContainer.new()
-		var lbl := Label.new()
-		lbl.text = unit_name(c)
-		row.add_child(lbl)
-		var arm := Button.new()
-		arm.text = ui("UI_ARM")
-		arm.pressed.connect(_equip_begin.bind(c))
-		row.add_child(arm)
-		var j := Button.new()
-		j.text = ui("UI_JOIN")
-		j.pressed.connect(func():
-			var code := Campaign.group_join(w, sortie_sel, c)
-			sortie_say(mes(JOIN_MESSAGES[code]) if JOIN_MESSAGES.has(code) else "")
-			_sortie_draw())
-		row.add_child(j)
-		pool.add_child(row)
-	var tools := HBoxContainer.new()             # regions 0x31 (the roster), 0x32 / 0x33 (bulk)
-	box.add_child(tools)
-	for t in [["UI_ROSTER", ["roster"]], ["UI_BULK_GROUND", ["bulk", 0]], ["UI_BULK_AIR", ["bulk", 1]]]:
-		var tb := Button.new()
-		tb.text = ui(t[0])
-		tb.disabled = sortie_request != null
-		tb.pressed.connect(_sortie_press.bind(t[1]))
-		tools.add_child(tb)
+	plain.add_child(box)
+	var buttons := HBoxContainer.new()
 	if sortie_request != null:
 		_sortie_request_ui(box)
-	if sortie_text != "":
-		var msg := Label.new()
-		msg.text = sortie_text
-		box.add_child(msg)
-	var buttons := HBoxContainer.new()
-	box.add_child(buttons)
-	if sortie_request != null:
-		pass
 	elif confirm:
 		var q := Label.new()
 		q.text = mes(0x1C)
-		buttons.add_child(q)
+		box.add_child(q)
 		for yes in [true, false]:
 			var b := Button.new()
 			b.text = ui("UI_YES") if yes else ui("UI_NO")
@@ -1487,32 +1457,152 @@ func _sortie_draw(confirm := false) -> void:
 	elif sortie_aborting:
 		var q := Label.new()
 		q.text = mes(0x1D9)
-		buttons.add_child(q)
+		box.add_child(q)
 		for yes in [1, 0]:
 			var b := Button.new()
 			b.text = ui("UI_YES") if yes else ui("UI_NO")
 			b.pressed.connect(_sortie_system_run.bind(0, yes))
 			buttons.add_child(b)
-	else:
-		var st := Button.new()
-		st.text = ui("UI_START")
-		st.pressed.connect(func():
+	box.add_child(buttons)
+	var hold2 := Control.new()
+	hold2.size = Vector2(MAIN_W, MAIN_H)
+	hold2.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(hold2)
+	hold2.add_child(plain)
+
+
+var sortie_view: SortieView = null
+var sortie_page := 1             # DS:0x50D741 (1 when the screen opens)
+var sortie_pool_first := 0
+var sortie_member_first := 0
+
+
+func _sortie_region(r: int, at: Vector2) -> void:
+	## 0x45ED60's answer to region r (DS:0x515FC8)
+	var g := sortie_sel
+	var n: int = w.crew_pool_n
+	var units := Flight.gb(w, g, 5)
+	var p := sortie_page
+	if r < 0x18:
+		var i := sortie_pool_first + ((r / 3 + 4) & 7)
+		if i >= n:
+			return
+		var c: int = w.ds[2 + i]
+		match r % 3:
+			0:
+				var code := Campaign.group_join(w, g, c)
+				if JOIN_MESSAGES.has(code):
+					show_line(mes(JOIN_MESSAGES[code]))
+				elif w.crew_pool_n <= sortie_pool_first:
+					sortie_pool_first = 0
+			1:
+				_sortie_arm(c)
+				return
+			2:
+				show_line(ui("UI_NOT_PORTED"))           # 0x46B040, the pilot's data
+		_sortie_draw()
+		return
+	if r < 0x30:
+		var k := sortie_member_first + (r - 0x18) / 3
+		if k >= units:
+			return
+		var c := Flight.gb(w, g, 6 + k)
+		match (r - 0x18) % 3:
+			0:
+				if Campaign.sortie_drop(w, g, c) == 1:
+					show_line(mes(0x1CE))
+				elif Flight.gb(w, g, 5) <= sortie_member_first:
+					sortie_member_first = 0
+			1:
+				_sortie_arm(c)
+				return
+			2:
+				show_line(ui("UI_NOT_PORTED"))
+		_sortie_draw()
+		return
+	match r:
+		0x30:
+			show_line(ui("UI_NOT_PORTED"))               # DS:0x50D701's lists (0x462C00 ..)
+		0x31:
+			_sortie_press(["roster"])
+		0x32, 0x33:
+			_sortie_press(["bulk", r - 0x32])
+		0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41:
+			var ng := r * 2 - 0x68 if r < 0x3A else r - 0x2E
+			if Flight.gb(w, ng, 2) & 1:
+				sortie_sel = ng
+				sortie_member_first = 0
+				_sortie_draw()
+		0x42, 0x43, 0x44:
+			if p != r - 0x42:
+				sortie_page = r - 0x42
+				_sortie_draw()
+		0x45:
+			_sortie_system_list()
+		0x46:
+			_sortie_back_press()
+		0x47:
 			sortie_text = ""
-			var r := Campaign.sortie_check(w, sortie_hooks)
-			_sortie_draw(r[0] == "start"))
-		buttons.add_child(st)
-		# region 0x45's list (DS:0x50D70D): 作戦中止, ＳＡＶＥ, ＬＯＡＤ; region 0x46, back
-		var sys := SaveFiles.choice_texts(0x50D70D)
-		for i in 3:
-			var sv := Button.new()
-			sv.text = sys[i] if sys.size() > i else ["ABORT", "SAVE", "LOAD"][i]
-			sv.pressed.connect(_sortie_system_press.bind(i))
-			buttons.add_child(sv)
-		var bk := Button.new()
-		bk.text = ui("UI_BACK")
-		bk.pressed.connect(_sortie_back_press)
-		buttons.add_child(bk)
-	hud_layer.add_child(sortie_panel)
+			var res := Campaign.sortie_check(w, sortie_hooks)
+			_sortie_draw(res[0] == "start")
+		0x48, 0x49, 0x4A:
+			if p == 2:
+				return
+			var shown := 4 if p != 0 else 8
+			if r == 0x48 and sortie_pool_first > 0:
+				sortie_pool_first -= 1
+			elif r == 0x49 and sortie_pool_first + shown - 1 < n - 1:
+				sortie_pool_first += 1
+			elif r == 0x4A and shown <= n:
+				sortie_pool_first = mini((int(at.y) - 0xB4) * n / 0xA8, n - shown)
+			_sortie_draw()
+		0x4B, 0x4C, 0x4D:
+			if p == 0:
+				return
+			var shown := 4 if p != 2 else 8
+			if r == 0x4B and sortie_member_first > 0:
+				sortie_member_first -= 1
+			elif r == 0x4C and sortie_member_first + shown - 1 < units - 1:
+				sortie_member_first += 1
+			elif r == 0x4D and shown <= units:
+				sortie_member_first = mini((int(at.y) - 0xB4) * units / 0xA8, units - shown)
+			_sortie_draw()
+		0x4E:
+			show_line(ui("UI_NOT_PORTED"))               # 作戦要項 (the framed 40 x 5 window)
+
+
+func _sortie_arm(c: int) -> void:
+	## sub-region 1 of a card: the armament screen 0x454E60, the player's pilots only (crew
+	## +2: the line DS:0x516728)
+	if w.cb(c, 2) != 0:
+		show_line(GameData.exe_text(campaign, 0x516728))
+		return
+	_equip_begin(c)
+
+
+func _sortie_system_list() -> void:
+	## region 0x45: 0x452A10 of DS:0x50D70D (作戦中止, ＳＡＶＥ, ＬＯＡＤ) at (0x1B2 - 0xD8
+	## page, 0x13A), 8 columns, a right click going back
+	var sys := SaveFiles.choice_texts(0x50D70D)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var labels := []
+	var ic := 8
+	for i in 3:
+		labels.append(sys[i] if sys.size() > i else "")
+		ic = maxi(ic, GameWindow.text_cols(labels[i]))
+	var gw := GameWindow.select_window(0x1B2 - 0xD8 * sortie_page, 0x13A, ic, 0, 0, labels, ic, [], true)
+	gw.role = "sortie_system"
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	gw.chosen.connect(func(v: int):
+		hold.queue_free()
+		if v >= 0:
+			_sortie_system_press(v))
 
 
 var sortie_saving := -1          # the sortie's save: 0x29 the slot list open, else the slot asked
