@@ -260,9 +260,10 @@ static func bmp(path: String) -> Array:
 	return [bw, bh, px]
 
 
-func blit(path: String, x: int, y: int) -> Vector2i:
-	## 0x40E410: a picture's pixels copied as they are into the window's DIB (its indices
-	## 10-25 are the window's colours 0-15); its size
+func blit(path: String, x: int, y: int, mirror := false) -> Vector2i:
+	## 0x40E410 / 0x40DFE0: a picture's pixels copied as they are into the window's DIB (its
+	## indices 10-25 are the window's colours 0-15); mirrored (0x40DFE0 with 1) each row is
+	## written right to left from x + width down to x + 1; its size
 	var b := bmp(path)
 	if b.is_empty():
 		return Vector2i.ZERO
@@ -270,11 +271,12 @@ func blit(path: String, x: int, y: int) -> Vector2i:
 	for yy in int(b[1]):
 		for xx in int(b[0]):
 			var v := px[yy * int(b[0]) + xx]
+			var dx := x + (int(b[0]) - xx if mirror else xx)
 			if v >= 10 and v <= 25:
-				_px(x + xx, y + yy, v - 10)
-			elif x + xx >= 0 and y + yy >= 0 and x + xx < _w and y + yy < _h:
-				_buf[(y + yy) * _w + x + xx] = 0
-				_raw[(y + yy) * _w + x + xx] = v          # a picture colour (DS:0x518478)
+				_px(dx, y + yy, v - 10)
+			elif dx >= 0 and y + yy >= 0 and dx < _w and y + yy < _h:
+				_buf[(y + yy) * _w + dx] = 0
+				_raw[(y + yy) * _w + dx] = v          # a picture colour (DS:0x518478)
 	_dirty = true
 	queue_redraw()
 	return Vector2i(b[0], b[1])

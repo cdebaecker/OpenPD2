@@ -227,7 +227,7 @@ BSS_END = 0x526000
 # (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
 # pickers' words. GameData.exe_text, exe.csv.
-EXE_TEXTS = (0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
+EXE_TEXTS = (0x516728, 0x5157A8, 0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
              0x51571C, 0x51572C, 0x51573C, 0x515B18, 0x515B44, 0x515B64, 0x515B7C, 0x515B90,
              0x515B9C, 0x515BA8, 0x515BB4, 0x515BC4, 0x515BD0, 0x515BDC, 0x515C0C, 0x515C1C,
              0x515C40, 0x515C6C, 0x515CAC, 0x515CC8, 0x515CEC,
@@ -301,6 +301,7 @@ def export_tables(game, out):
             # (the launchers' short codes DS:0x50C0E5 and the rounds' codes, the set's +0x400 =
             # DS:0x50C665: the info panel's and the sortie cards' lists)
             'launcher_short': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, 0x50C0E5 + 4 * i, 4))[0]) for i in range(96)],
+            'ammo_long': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CAMPAIGN_SET_VA[camp] + 0x280 + 4 * i, 4))[0]) for i in range(96)],
             'ammo_codes': [_exe_str(exe, struct.unpack_from('<I', exe_va(exe, CAMPAIGN_SET_VA[camp] + 0x400 + 4 * i, 4))[0]) for i in range(96)],
             'launcher_names': {l['id']: l['name'] for l in info['sets'][TABLE_SET[camp]]['launchers']},
             'ammo_names': {a['id']: a['name'] for a in info['sets'][TABLE_SET[camp]]['ammunition']},
@@ -497,14 +498,20 @@ def export_ui(game, out):
     # the base screens' window patterns (the sortie DS:0x50D719 / 0x50D721 / 0x50D729 /
     # 0x50D731 / 0x50D739, the plan DS:0x50D699): two rows of four planes each
     patterns = {}
-    for va in (0x50D699, 0x50D719, 0x50D721, 0x50D729, 0x50D731, 0x50D739):
+    for va in (0x50D699, 0x50D719, 0x50D721, 0x50D729, 0x50D731, 0x50D739, 0x5156A0, 0x5156A8):
         raw = exe_va(exe, va, 8)
         patterns['%X' % va] = [_planes(*raw[0:4]), _planes(*raw[4:8])]
     # the sortie screen's 79 click regions (DS:0x515FC8: x0, y0, x1, y1, type; 0x45ED60)
     raw = exe_va(exe, 0x515FC8, 79 * 20)
     sortie_regions = [list(struct.unpack_from('<5i', raw, 20 * i)) for i in range(79)]
+    # the armament screen's regions by layout (0x454E60 hands them to 0x438210 as they are:
+    # 18 bytes each, x0, y0, x1, y1, type, colour): ground 25, armoured 9, air 12
+    equip_regions = []
+    for va, n in ((0x515358, 25), (0x515520, 9), (0x5155C8, 12)):
+        raw = exe_va(exe, va, 18 * n)
+        equip_regions.append([list(struct.unpack_from('<4iB', raw, 18 * i)) for i in range(n)])
     json.dump({'frame': tiles, 'back': back, 'scroll': scroll, 'patterns': patterns,
-               'sortie_regions': sortie_regions},
+               'sortie_regions': sortie_regions, 'equip_regions': equip_regions},
               open(os.path.join(out, 'ui.json'), 'w'))
     fs = {f.lower(): os.path.join(game, f) for f in os.listdir(game)}
     if 'font_ank.dat' in fs:

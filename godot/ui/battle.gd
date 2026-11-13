@@ -1885,6 +1885,7 @@ func _equip_begin(k: int) -> void:
 	if w.reg_unit.size() != Equipment.REG_SIZE:
 		w.reg_unit = Equipment.reg_unit_blank()
 	equip_sess = Equipment.open(w, k)
+	equip_info = 0
 	equip_button = null
 	equip_text = ""
 	_equip_draw()
@@ -1970,106 +1971,128 @@ func _equip_entry_text(kind: String, e: Variant) -> String:
 			return "%s (%s)" % [_name_of("ammo_names", e), ui("UI_STOCK") % w.mem8(Equipment.STOCK_AMMO + e)]
 
 
+var equip_view: EquipView = null
+var equip_info := 0               # DS:0x523E74: the pilot's window (0) or the machine's (1)
+
+
 func _equip_draw() -> void:
+	## the armament screen (ui/equip_view.gd: 0x454E60's pictures, windows and regions); its
+	## lists and questions still in a plain panel over it, its notes as message lines
 	if sortie_panel:
 		sortie_panel.queue_free()
-	sortie_panel = PanelContainer.new()
+	sortie_panel = Control.new()
+	sortie_panel.size = Vector2(MAIN_W, MAIN_H)
+	sortie_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_root().add_child(sortie_panel)
+	var under := ColorRect.new()          # (the screen past the 640 x 400 window)
+	under.color = Color.BLACK
+	under.size = Vector2(MAIN_W, 480)
+	under.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(under)
+	var k: int = equip_sess.k
+	equip_view = EquipView.make(self)
+	equip_view.k = k
+	equip_view.layout = int(equip_sess.get("layout", 0))
+	equip_view.info = equip_info
+	equip_view.right_cancel = true
+	sortie_panel.add_child(equip_view)
+	equip_view.refresh()
+	equip_view.pressed.connect(_equip_region)
+	equip_view.chosen.connect(func(v: int):
+		if v == -2 and equip_request == null:
+			_equip_press("menu"))
+	if equip_text != "":
+		for l in equip_text.split("\n"):
+			show_line(l)
+		equip_text = ""
+	if equip_request == null:
+		return
+	var plain := PanelContainer.new()
 	var theme := Theme.new()
 	theme.default_font_size = 8
-	sortie_panel.theme = theme
+	plain.theme = theme
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
 	bg.set_content_margin_all(8)
-	sortie_panel.add_theme_stylebox_override("panel", bg)
-	sortie_panel.position = Vector2(16, 16)
-	var box := VBoxContainer.new()
-	sortie_panel.add_child(box)
-	var k: int = equip_sess.k
-	var title := Label.new()
-	title.text = "%s: %s" % [ui("UI_ARMAMENT"), unit_name(k)]
-	box.add_child(title)
-	var m := Flight.s8(w.ub(k, 0xC))
-	var rows := VBoxContainer.new()
-	box.add_child(rows)
-	var add_row := func(label: String, btn: String, b: Variant) -> void:
-		var row := HBoxContainer.new()
-		var bt := Button.new()
-		bt.text = btn
-		bt.disabled = equip_request != null
-		bt.pressed.connect(_equip_press.bind(b))
-		row.add_child(bt)
+	plain.add_theme_stylebox_override("panel", bg)
+	plain.position = Vector2(0xC8, 0x40)
+	var q := VBoxContainer.new()
+	plain.add_child(q)
+	if equip_request[0] == "ask":
 		var l := Label.new()
-		l.text = label
-		row.add_child(l)
-		rows.add_child(row)
-	var mn: Array = names.machine
-	add_row.call(mn[m] if m >= 0 and m < mn.size() else ui("UI_EMPTY"), ui("UI_MACHINE"), "machine")
-	if m >= 0:
-		for s in 6:
-			var lid := Flight.s8(w.ub(k, 0xF + 2 * s))
-			var txt := ui("UI_EMPTY")
-			if lid != -1:
-				var p := w.ub(k, 0x10 + 2 * s) & 0xF
-				var a := Flight.s8(w.ub(k, 0x1B + 2 * p))
-				txt = "%s / %s" % [_name_of("launcher_names", lid), _name_of("ammo_names", a) if a != -1 else "-"]
-			add_row.call(txt, ui("UI_SLOT") % (s + 1), ["slot", s])
-		for p in mini(w.mem8(Equipment.MACHS + 31 * m + 0x17), 6):
-			var a := Flight.s8(w.ub(k, 0x1B + 2 * p))
-			add_row.call(_name_of("ammo_names", a) if a != -1 else ui("UI_EMPTY"), ui("UI_POCKET") % (p + 1), ["pocket", p])
-	if equip_text != "":
-		var msg := Label.new()
-		msg.text = equip_text
-		box.add_child(msg)
+		l.text = equip_msg(equip_request[1])
+		q.add_child(l)
+		var hb := HBoxContainer.new()
+		q.add_child(hb)
+		for yes in [true, false]:
+			var bt := Button.new()
+			bt.text = ui("UI_YES") if yes else ui("UI_NO")
+			bt.pressed.connect(_equip_answer.bind(1 if yes else 0))
+			hb.add_child(bt)
+	else:
+		var kind: String = equip_request[1]
+		var ents: Array = equip_request[2]
+		if TEMPLATE_TITLES.get(kind, 0):
+			var tl := Label.new()
+			tl.text = GameData.exe_text(campaign, TEMPLATE_TITLES[kind])
+			q.add_child(tl)
+		if PICK_HEADERS.has(kind):                # the column headers sort the list
+			var heads := HBoxContainer.new()
+			q.add_child(heads)
+			var words := header_words(PICK_HEADERS[kind])
+			for col in PICK_OFFSET[kind]:
+				var hb := Button.new()
+				hb.text = words[col] if col < words.size() else str(col)
+				hb.tooltip_text = ui("UI_SORT")
+				hb.pressed.connect(_equip_answer.bind(col))
+				heads.add_child(hb)
+		var lb := list_box(q) if ents.size() > 6 else q
+		for j in ents.size():
+			var bt := Button.new()
+			bt.text = _equip_entry_text(kind, ents[j])
+			bt.pressed.connect(_equip_answer.bind(PICK_OFFSET[kind] + j))
+			lb.add_child(bt)
+		var cb := Button.new()
+		cb.text = ui("UI_CANCEL")
+		cb.pressed.connect(_equip_answer.bind(-2))
+		q.add_child(cb)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(hold)
+	hold.add_child(plain)
+
+
+func _equip_region(r: int) -> void:
+	## 0x454E60's answer to region r (its layout's table): 0 / 1 the pilot's or the machine's
+	## window, 2 the machine, 3 clear, 4 close, 5 undo, 6 .. 11 the slots, 12 .. 17 and 19 ..
+	## 24 the pockets (18: the debug key's, Ctrl + Alt only, not ported)
 	if equip_request != null:
-		var q := VBoxContainer.new()
-		box.add_child(q)
-		if equip_request[0] == "ask":
-			var l := Label.new()
-			l.text = equip_msg(equip_request[1])
-			q.add_child(l)
-			var hb := HBoxContainer.new()
-			q.add_child(hb)
-			for yes in [true, false]:
-				var bt := Button.new()
-				bt.text = ui("UI_YES") if yes else ui("UI_NO")
-				bt.pressed.connect(_equip_answer.bind(1 if yes else 0))
-				hb.add_child(bt)
-		else:
-			var kind: String = equip_request[1]
-			var ents: Array = equip_request[2]
-			if TEMPLATE_TITLES.get(kind, 0):
-				var tl := Label.new()
-				tl.text = GameData.exe_text(campaign, TEMPLATE_TITLES[kind])
-				q.add_child(tl)
-			if PICK_HEADERS.has(kind):                # the column headers sort the list
-				var heads := HBoxContainer.new()
-				q.add_child(heads)
-				var words := header_words(PICK_HEADERS[kind])
-				for col in PICK_OFFSET[kind]:
-					var hb := Button.new()
-					hb.text = words[col] if col < words.size() else str(col)
-					hb.tooltip_text = ui("UI_SORT")
-					hb.pressed.connect(_equip_answer.bind(col))
-					heads.add_child(hb)
-			var lb := list_box(q) if ents.size() > 6 else q
-			for j in ents.size():
-				var bt := Button.new()
-				bt.text = _equip_entry_text(kind, ents[j])
-				bt.pressed.connect(_equip_answer.bind(PICK_OFFSET[kind] + j))
-				lb.add_child(bt)
-			var cb := Button.new()
-			cb.text = ui("UI_CANCEL")
-			cb.pressed.connect(_equip_answer.bind(-2))
-			q.add_child(cb)
-	var buttons := HBoxContainer.new()
-	box.add_child(buttons)
-	for pair in [["UI_CLEAR", "clear"], ["UI_UNDO", "undo"], ["UI_TEMPLATES", "menu"], ["UI_CLOSE", "close"]]:
-		var bt := Button.new()
-		bt.text = ui(pair[0])
-		bt.disabled = equip_request != null
-		bt.pressed.connect(_equip_press.bind(pair[1]))
-		buttons.add_child(bt)
-	hud_layer.add_child(sortie_panel)
+		return
+	var m := Flight.s8(w.ub(equip_sess.k, 0xC))
+	match r:
+		0:
+			if equip_info == 1:
+				equip_info = 0
+				_equip_draw()
+		1:
+			if equip_info == 0 and m != -1:
+				equip_info = 1
+				_equip_draw()
+		2:
+			_equip_press("machine")
+		3:
+			_equip_press("clear")
+		4:
+			_equip_press("close")
+		5:
+			_equip_press("undo")
+		6, 7, 8, 9, 10, 11:
+			_equip_press(["slot", r - 6])
+		12, 13, 14, 15, 16, 17:
+			_equip_press(["pocket", r - 12])
+		19, 20, 21, 22, 23, 24:
+			_equip_press(["pocket", r - 19])
 
 
 # --- geometry --------------------------------------------------------------------
