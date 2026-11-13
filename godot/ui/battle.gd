@@ -2007,6 +2007,9 @@ func _equip_draw() -> void:
 		equip_text = ""
 	if equip_request == null:
 		return
+	if equip_request[0] == "pick" and equip_request[1] == "machine":
+		_equip_machine_list(equip_request[2])
+		return
 	var plain := PanelContainer.new()
 	var theme := Theme.new()
 	theme.default_font_size = 8
@@ -2061,6 +2064,50 @@ func _equip_draw() -> void:
 	hold.mouse_filter = Control.MOUSE_FILTER_STOP
 	sortie_panel.add_child(hold)
 	hold.add_child(plain)
+
+
+func _equip_machine_list(ents: Array) -> void:
+	## 0x457380: 0x452A10 at (0x78, 0x80), 0x31 columns, its header MES 0x1AF (one line of
+	## 16 px, flags 1) with six sorting regions (x 0x90-0xAF, 0xB8-0xD7, 0xE0-0xFF,
+	## 0x108-0x127, 0x138-0x167, 0x178-0x187; y 8-0x17), a right click cancelling; the rows
+	## (0x457870): a ground pilot's "%s%-17s%4d %4d %4d %2d:%1d %2d0%%(%2d) %2d" with %a4F
+	## (DS:0x50CBD6) for a machine out of stock, else %a7F (DS:0x50CBDB); an air pilot's
+	## without the colour: the name DS:0x50C265, machine +4, +5, +6, +7, +8, +0x18, crew +9 x
+	## +0x18 / 10, the stock. Its answers are Equipment's (0-5 sort, 6 + row, -2).
+	var k: int = equip_sess.k
+	var mn: Array = GameData.tables(campaign).get("machine_names", [])
+	var labels := []
+	for e in ents:
+		if not e is int:
+			labels.append(_equip_entry_text("machine", e))
+			continue
+		var m: int = e
+		var stock := w.mem8(Equipment.STOCK_MACH + m)
+		var pre := "" if w.cb(k, 3) != 0 else "\u0001" + char(0x4F if stock == 0 else 0x7F)
+		var nm := str(mn[m]) if m < mn.size() else ""
+		labels.append(pre + GameData.format_text("%17s", [nm]) + "%4d %4d %4d %2d:%1d %2d0%%(%2d) %2d" % [
+			w.machine(m, 4), w.machine(m, 5), w.machine(m, 6), w.machine(m, 7), w.machine(m, 8), w.machine(m, 0x18),
+			Flight.s8(w.cb(k, 9)) * w.machine(m, 0x18) / 10, stock])
+	var regs := []
+	for r in [[0x90, 0xAF], [0xB8, 0xD7], [0xE0, 0xFF], [0x108, 0x127], [0x138, 0x167], [0x178, 0x187]]:
+		regs.append([r[0], 8, r[1], 0x17, 2])
+	var ic := 0x31
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(l))           # (engine-side: a longer translation widens it)
+	var gw := GameWindow.select_window(0x78, 0x80, ic, 1, 1, labels, ic, regs, true)
+	gw.role = "equip_machine"
+	gw.pal16 = equip_view.palette16() if equip_view else []
+	gw.waits = false
+	gw.print_text(GameData.base_text(campaign, 0x1AF, [], mission_index))
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	gw.chosen.connect(func(v: int): _equip_answer(v))
 
 
 func _equip_region(r: int) -> void:
