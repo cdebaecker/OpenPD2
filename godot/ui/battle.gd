@@ -86,6 +86,12 @@ class SandboxHooks extends AiTurnHooks:
 	var battle
 	var flag := 0
 
+	func anim_flight(stage: int) -> void:
+		battle.anim_flight(stage, anim_rec)
+
+	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
+		battle.anim_view(k, sx, tx, ty)
+
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
 
@@ -5160,6 +5166,57 @@ func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 	return anim_skip
 
 
+func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
+	## 0x40F870 before a shot's animations: with no shooter or an unseen one (a computer
+	## unit not spotted) the view goes to the target (scroll_to); otherwise it is set so that
+	## both show. Engine-side: when they do not fit in the view at once (the game then opens
+	## a second window for the shooter), the view goes to the target.
+	if auto_react or _headless() or (options & 0x10) or tx < 0:
+		return
+	call_deferred("_anim_view", k, sx, tx, ty)
+
+
+func _anim_view(k: int, sx: int, tx: int, ty: int) -> void:
+	var t := hex_center(Vector2i(tx, ty))
+	if sx == -1 or k < 0 or (w.is_enemy(k) and not w.ub(k, 0) & 0x10):
+		cam.position = t
+		return
+	var s := hex_center(w.pos(k))
+	var vis := get_viewport().get_visible_rect().size / cam.zoom
+	vis.x = minf(vis.x, 432.0 * get_viewport().get_visible_rect().size.y / 400.0 / cam.zoom.x)   # (the map's part, left of the panel)
+	if absf(s.x - t.x) < vis.x - 3 * TILE_W and absf(s.y - t.y) < vis.y - 3 * TILE_H:
+		cam.position = (s + t) / 2
+	else:
+		cam.position = t
+
+
+func anim_flight(stage: int, rec: Array) -> void:
+	## the missile's flight stage (0x410160 -> 0x41B320: kind 8 only, no waits in the game,
+	## each step drawn; engine-side pace: 8 steps a frame); 4 erases it
+	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return
+	if anime_view == null or rec.size() < 5 or int(rec[0]) != 8:
+		return
+	call_deferred("_flight_step", stage, rec)
+	anim_sem.wait()
+
+
+func _flight_step(stage: int, rec: Array) -> void:
+	if stage == 4:
+		anime_view.clear_missile()
+		anim_sem.post()
+		return
+	var tex := anime_view.flight_sprite(rec)
+	var pts := anime_view.flight_points(rec, stage)
+	var k := 0
+	for p in pts:
+		anime_view.show_missile(p, tex)
+		k += 1
+		if k % 8 == 0:
+			await get_tree().process_frame
+	anim_sem.post()
+
+
 func anim_player(player: int, x: int, y: int) -> bool:
 	## a whole player (the bombs' 0x417410): true when a click skipped it
 	var spec: Dictionary = AnimeView.PLAYERS.get(player, {})
@@ -5171,6 +5228,13 @@ func anim_player(player: int, x: int, y: int) -> bool:
 
 func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Array) -> void:
 	var spec: Dictionary = AnimeView.PLAYERS[player]
+	if spec.get("turn", false):
+		# 0x410020's waits (a click does not stop the turn): the facing is the map's drawing
+		await get_tree().create_timer((int(spec.first_ms) if i == 0 else int(spec.ms)) / 1000.0).timeout
+		overlay.queue_redraw()
+		anim_skip = false
+		anim_sem.post()
+		return
 	if i == 0:
 		anim_click = false
 	anim_listen = true
@@ -5246,6 +5310,9 @@ func _next_line() -> void:
 # --- the item command (the machine status window's "use", 0x4279F0 -> 0x4286D0 -> 0x4ECC60)
 
 class BattleItemHooks extends Item.Hooks:
+	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
+		battle.anim_view(k, sx, tx, ty)
+
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
 
@@ -5944,6 +6011,9 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		battle.say(battle.uif("UI_BLAST", [x, y]))
 		return 0
 
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return battle.anim_frame(player, x, y, i, dy, dx, [])
+
 	func blast(x: int, y: int) -> int:
 		## 0x417410 (anime_bomb): 0x80000 when a click skipped it
 		battle.say(battle.uif("UI_BLAST", [x, y]))
@@ -6048,6 +6118,12 @@ class BattleFlightHooks extends Flight.Hooks:
 
 
 class BattleStrikeHooks extends Strike.Hooks:
+	func anim_flight(stage: int) -> void:
+		battle.anim_flight(stage, anim_rec)
+
+	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
+		battle.anim_view(k, sx, tx, ty)
+
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
 
@@ -6239,8 +6315,10 @@ class BattleBombHooks extends Turn.BombHooks:
 	var battle
 
 	func explosion(x: int, y: int) -> bool:
-		## anime_bomb (0x417410): its frames; true when a click skipped it
+		## anime_bomb (0x417410): its frames; true when a click skipped it (the view on the
+		## hex first: 0x40F730's framing for a record without a shooter is the target's)
 		battle.say("explosion at %d, %d" % [x, y])
+		battle.anim_view(-1, -1, x, y)
 		return battle.anim_player(0x417410, x, y)
 
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:

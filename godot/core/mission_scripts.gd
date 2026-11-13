@@ -47,6 +47,10 @@ class Hooks:
 
 	# the other missions' windows (rules.MissionHooks)
 	var options := 0                ## DS:0x551D29 (bit 4: no explosion animations)
+
+	## An animation's frame (display, Action.anim_*): true when a click skipped it.
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return false
 	var flight: Flight.Hooks = null ## the flight engine's windows, for the speech hooks
 
 	## ui_message_box 0x451FB0, buttons DS:0x50CBC9[kind] (0: 了解 / 中止, 1: 実行 / 中止):
@@ -9085,6 +9089,10 @@ static func m13_board(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		res = hooks.ui_wait(1000)
 		if res == 1 or res == 2:
 			return 0x40000 if res == 1 else 0x20000
+		if not hooks.options & 0x10:      # 0x40F730 for 0x40F590(0x2F, 0): 0x2F turns to 0x2E's hex
+			var lid := w.launcher_id(0x2F, 0)
+			Action.anim_shooter(w, rng, hooks, 0x2F, w.sb(0x2F, 9) if w.active(0x2F) else -1,
+					w.launcher(lid, 9) >> 4 if lid != -1 else 9, x, y)
 		res = hooks.blast_start(x, y)
 		if res in AI_ABORT:
 			return res

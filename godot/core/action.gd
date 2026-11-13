@@ -91,8 +91,9 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 	var anims := hooks.anims
 	var akind := w.launcher(w.launcher_id(s, slot), 9) >> 4       # 0x40F590: the record's kind
 	if anims:
-		hooks.anim_rec = [akind, sp.x, sp.y]             # (display: the direction players' sprite)
-	var skipped := anims and anim_play(w, rng, hooks, 0x40F730) >= 0   # the shooter's (0x40F730)
+		hooks.anim_rec = [akind, sp.x if w.active(s) else -1, sp.y, pts[0].x, pts[0].y, s]   # (display: the record)
+	var skipped := anims and anim_shooter(w, rng, hooks, s, sp.x if w.active(s) else -1, akind,
+			pts[0].x, pts[0].y)                         # the shooter's (0x40F730)
 	for p in pts:
 		var tx: int = p.x
 		var ty: int = p.y
@@ -115,6 +116,9 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 					blocked = Fire.intercept(w, rng, s, slot, o, choice, hooks)
 				else:
 					blocked = 1
+					if reaction and anims and hooks.has_method("anim_flight"):
+						for st in 5:            # 0x410160 stages 0-4 (display: kind 8's flight)
+							hooks.anim_flight(st)
 				var terms := Fire.hit_terms(w, s, o, slot, mode, move)
 				if terms.has("error"):
 					w.fault = "division by zero (weapon range 0)"
@@ -171,8 +175,12 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 # --- the attacks' animations (option 0x10 clear): their effects (rules.anim_*, RULES.md 5.25)
 
 const ANIM_TABLE := 0x512F40       # DS: 4 bytes per record kind (launcher +9 >> 4)
-const ANIM_FRAMES := {0x40F730: 1, 0x4200D0: 6, 0x4206D0: 12, 0x4203D0: 6, 0x4209D0: 12, 0x419BE0: 6,
-		0x419E20: 6, 0x4180C0: 8, 0x420CD0: 8, 0x417410: 14, 0x41CA70: 8}
+const ANIM_FRAMES := {0x4200D0: 6, 0x4206D0: 12, 0x4203D0: 6, 0x4209D0: 12, 0x419BE0: 6,
+		0x419E20: 6, 0x4180C0: 8, 0x420CD0: 8, 0x417410: 14, 0x41CA70: 8,
+		0x41EFF0: 12, 0x41FD60: 24, 0x418B20: 4, 0x41DB00: 5, 0x419870: 12, 0x41E850: 15, 0x41A5B0: 4}
+## the shooter's players by the record's kind (7: 0x41E850, its skip dropped, then 0x41A5B0)
+const SHOOTER_PLAYERS := {0: 0x41EFF0, 1: 0x41FD60, 2: 0x418B20, 3: 0x41DB00, 4: 0x418B20, 5: 0x419870,
+		6: 0x419870, 8: 0x41A5B0}
 const ANIM_JITTER := [0x4200D0, 0x4206D0, 0x4203D0, 0x4209D0]   # draw random(12) / random(3) a frame
 
 
@@ -188,6 +196,100 @@ static func anim_play(w: Pd2World, rng: Pd2Random, hooks: Object, player: int, x
 		if hooks.call("anim_frame", player, x, y, i, dy, dx):
 			return i
 	return -1
+
+
+## 0x47E440(target, shooter) (rules.shot_direction)
+static func shot_direction(tx: int, ty: int, sx: int, sy: int) -> int:
+	var dv := sy - ty
+	var ay := absi(dv)
+	var ax := absi(sx - tx)
+	if ax < ay and ay > 1:
+		if ((ax * 0x14 - (dv & 1)) * 5) / ay < 0x19:      # (toward zero, as C's)
+			return 5 if dv >= 0 else 1
+	var d := Ai.ai_direction(tx, ty, sx, sy)
+	if d != 0:
+		d += 1
+		if d > 4:
+			d += 1
+	return d
+
+
+static func _ub_any(w: Pd2World, k: int, f: int) -> int:
+	return w.mem8(0x506C93 + 55 * k + f)
+
+
+## 0x40FFC0 / 0x410020 (rules._turn_to): unit k (-1 too) turns to face (tx, ty) step by step
+## the shorter way; its waits (167 ms, 67 ms a step, 67 ms) go to hooks.anim_frame(0x410020).
+static func turn_to(w: Pd2World, rng: Pd2Random, hooks: Object, k: int, tx: int, ty: int) -> void:
+	var d := Ai.ai_direction(W.s8(_ub_any(w, k, 9)), W.s8(_ub_any(w, k, 10)), tx, ty)
+	if d == -1:
+		return
+	var f := _ub_any(w, k, 5)
+	var u := f & 7
+	var delta := d - u
+	var step := 1 if (delta + (6 if delta < 0 else 0)) < 4 else -1
+	var i := 0
+	hooks.call("anim_frame", 0x410020, tx, ty, i, 0, 0)
+	while u != d:
+		u += step
+		if u > 5:
+			u = 0
+		if u < 0:
+			u = 5
+		f = (f & ~7 | u) & 0xFF
+		w.mem_write(0x506C93 + 55 * k + 5, f)
+		i += 1
+		hooks.call("anim_frame", 0x410020, tx, ty, i, 0, 0)
+	hooks.call("anim_frame", 0x410020, tx, ty, i + 1, 0, 0)
+
+
+## 0x40F730 (rules.anim_shooter): sx the record's +6 (-1: nothing); k turns; with player the
+## kind's player at k's hex, not for an unspotted computer unit. True when skipped.
+static func anim_shooter(w: Pd2World, rng: Pd2Random, hooks: Object, k: int, sx: int, akind: int, tx: int, ty: int,
+		player := true, framing := true) -> bool:
+	if framing and hooks.has_method("anim_view"):     # 0x40F870 frames the view (display)
+		hooks.anim_view(k, sx, tx, ty)
+	if sx == -1:
+		return false
+	turn_to(w, rng, hooks, k, tx, ty)
+	if not player or (not SHOOTER_PLAYERS.has(akind) and akind != 7):
+		return false
+	if W.s8(_ub_any(w, k, 0x36)) > 2 and not _ub_any(w, k, 0) & 0x10:
+		return false
+	var x := W.s8(_ub_any(w, k, 9))
+	var y := W.s8(_ub_any(w, k, 10))
+	if akind == 7:
+		anim_play(w, rng, hooks, 0x41E850, x, y)
+		return anim_play(w, rng, hooks, 0x41A5B0, x, y) >= 0
+	return anim_play(w, rng, hooks, SHOOTER_PLAYERS[akind], x, y) >= 0
+
+
+## 0x4149F0's interceptor target (rules.intercept_aim); rec_sx: the fire record's +6 when
+## not s's own (the strike: -1).
+static func intercept_aim(w: Pd2World, s: int, t: int, rec_sx := -2) -> Vector2i:
+	if (w.active(s) if rec_sx == -2 else rec_sx != -1):
+		return w.pos(s)
+	var g := Ai.unit_group(w, s)
+	if g < 0:
+		w.fault = "intercept_aim: a striker outside any group"
+		return w.pos(t)
+	var gx := W.s8(Ai.gb(w, g, 22))
+	var gy := W.s8(Ai.gb(w, g, 23))
+	var fx := Flight.s16(w.ds16(0x50AD95))
+	var fy := Flight.s16(w.ds16(0x50AD97))
+	var d := shot_direction(fx, fy, gx, gy)
+	if fx == gx and fy == gy:
+		d = 4
+	if d < 0 or d > 7:
+		d = 0
+	var p := w.pos(t)
+	if d == 1:
+		return Vector2i(p.x, maxi(0, p.y - 2))
+	if d == 5:
+		return Vector2i(p.x, mini(0x47, p.y + 2))
+	var hd: int = {0: 0, 2: 1, 3: 2, 4: 3, 6: 4, 7: 5}[d]
+	var n: Vector2i = Move.NEIGHBOURS[p.y & 1][hd]
+	return p + n
 
 
 static func _anim_ok(w: Pd2World, akind: int) -> bool:
@@ -428,8 +530,9 @@ static func step_mine_blast(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int,
 	if not w.on_map(x, y):
 		return 0
 	hooks.mine_blast(x, y)
-	if hooks.anims:                      # (rules.step_mine_blast: the start, anime_bomb, the kill's)
-		anim_play(w, rng, hooks, 0x40F730, x, y)
+	if hooks.anims:                      # (rules.step_mine_blast: anime_bomb, the kill's; no shooter)
+		if hooks.has_method("anim_view"):
+			hooks.anim_view(-1, -1, x, y)      # 0x40F730's framing for a record without a shooter
 		anim_bomb(w, rng, hooks, x, y)
 	var res := 0
 	var dmg := Fire.fire_damage(w, rng, -1, 12, u, 4, easy)

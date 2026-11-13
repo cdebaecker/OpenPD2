@@ -3616,9 +3616,45 @@ target hex (the bomb's own, or the last hex of this bomb where a unit was destro
 plays it before its damage. At its end, click or not, a unit there at condition 0 loses
 its hex (as the explosives' explosion already did, §5.15).
 
-**Display only:** the shooter's animation (0x40F730: its 8 players are not read), the
-interception's shot and explosion (0x40F730, 0x41CA70), the other hit / miss players
-(0x419BE0, 0x419E20, 0x4180C0): frames and waits, no draws.
+**The shooter turns to face its target.** 0x40F730 runs for a record whose +6 (the
+shooter's hex) is not -1. That means a fire, a strike, the interception, the item throw and
+mission 13's 0x2F; the records made for bombs, mines and mission hooks have no shooter and
+return at once.
+- The shooter (the record's +0x16; "unit -1" for the item throw, whose bytes are combat
+  records) turns its facing (+5 bits 0-2) toward the target (ai_direction; nothing on the
+  same hex). It turns step by step the shorter way round, with waits of 167 ms, then 67 ms
+  a step and a last 67 ms. A click does not cut it short (0x40FFC0 / 0x410020).
+- The facing is then left that way, so every shot of the animations-on game turns its shooter.
+- The interceptor faces the missile shooter's hex when that shooter is on the map. Otherwise
+  (and always for a strike, which clears its record's shooter hex before the interception)
+  it faces a hex next to it toward the strike's side: 0x47E440 from the fire point to the
+  striker's group, 1 / 5 two rows up / down, others a hex_step.
+- Then the record kind's shooter player plays at the shooter's hex, unless the shooter is an
+  unspotted computer unit:
+
+| Kind | Player | Waits |
+|---|---|---|
+| 0 | 0x41EFF0 | 12 x 33 ms, a flash |
+| 1 | 0x41FD60 | 24 x 17 ms |
+| 2 / 4 | 0x418B20 | 4 x 33 ms |
+| 3 | 0x41DB00 | 5 x 33 ms |
+| 5 / 6 | 0x419870 | 12 x 17 ms |
+| 7 | 0x41E850 (15 x 17 ms, its skip dropped), then 0x41A5B0 | 4 x 33 ms |
+| 8 | 0x41A5B0 | 4 x 33 ms |
+| 9 | none | - |
+
+  Its click skips the shot's later hit animations. The item throw's record has no player
+  (+1 stays 0xFF).
+- Checked by verify_fire_anims, verify_strike_anims and verify_items with 0x40F730 run
+  for real (only its view framing 0x40F870 stubbed), wait by wait. 0x40FFC0 matches the
+  port on 300 random turns. Mission 13's turn is read from its call; verify_missions
+  stubs the window chain whole and skips it (`windows_stubbed`).
+- The bombs' "start" (0x40F730) can never be skipped in the game: their record has no
+  shooter.
+
+**Display only:** the view framing (0x40F870), the missile's flight (0x410160 -> 0x41B320,
+kind 8: no waits), the interception's explosion (0x41CA70), the other hit / miss players
+(0x419BE0, 0x419E20, 0x4180C0).
 
 **The same in the strike and the item throw.**
 - The strike (0x4E1A90, `strike_fire`; `verify_strike_anims` 300 / 300) works as the fire

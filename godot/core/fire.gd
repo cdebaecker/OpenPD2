@@ -211,8 +211,11 @@ static func intercept_candidates(w: Pd2World, t: int) -> int:
 ## stands in for the player's prompt. Returns INTERCEPTED, DECOYED or NOT_STOPPED.
 ## With hooks.anims: the interceptor's shot (0x40F730) before the rolls and a shot-down
 ## missile's explosion (0x41CA70), display only (rules.intercept).
-static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, player_choice := Callable(), hooks: Object = null) -> int:
+static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, player_choice := Callable(), hooks: Object = null, rec_sx := -2) -> int:
 	var anims: bool = hooks != null and hooks.get("anims") == true
+	var flight := anims and hooks.has_method("anim_flight")
+	if flight:
+		hooks.anim_flight(0)                    # 0x410160 stage 0 (display)
 	var result := NOT_STOPPED
 	var chosen := -1
 	if w.unit_class(t) == 0:
@@ -223,6 +226,8 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 			elif player_choice.is_valid():
 				chosen = player_choice.call(t, best)
 	var shot_down := false
+	if flight:
+		hooks.anim_flight(1)                    # stage 1, chosen or not
 	if chosen != -1:
 		w.set_slot_count(t, chosen, w.slot_count(t, chosen) - 1)
 		var aa := W.s8(w.ucrew(t, 11))
@@ -231,8 +236,12 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 		var p_track := maxi(15, mini(100, w.launcher(lid, 5) + sq))
 		var p_kill := maxi(15, mini(100, sq + ((w.launcher(lid, 6) + w.ammo(w.ammo_id(t, chosen), 2)) & 0xFF)))
 		var tp := w.pos(t)
-		if anims:
-			Action.anim_play(w, rng, hooks, 0x40F730, tp.x, tp.y)
+		if anims:                    # the interceptor's shot (0x40F730; its skip not looked at)
+			var aim := Action.intercept_aim(w, s, t, rec_sx)
+			var saved: Variant = hooks.get("anim_rec")
+			hooks.set("anim_rec", [w.launcher(lid, 9) >> 4, tp.x, tp.y, aim.x, aim.y, t])
+			Action.anim_shooter(w, rng, hooks, t, tp.x, w.launcher(lid, 9) >> 4, aim.x, aim.y, true, false)
+			hooks.set("anim_rec", saved)
 		if w.is_ace(t) and rng.r16(100) < 50:
 			p_track += 30
 			p_kill += 30
@@ -242,6 +251,8 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 			if anims:
 				Action.anim_play(w, rng, hooks, 0x41CA70, tp.x, tp.y)
 			w.events.append(["grow", t, "AA", 1])
+	if not shot_down and flight:
+		hooks.anim_flight(2)
 	if not shot_down:
 		var decoy := -1
 		for k in 12:
@@ -255,6 +266,10 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 			if n == 0:
 				w.setb(t, 0x1B + 2 * decoy, 0xFF)
 			result = DECOYED
+		if flight:
+			hooks.anim_flight(3)
+	if flight:
+		hooks.anim_flight(4)
 	return result
 
 

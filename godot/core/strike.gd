@@ -275,8 +275,10 @@ static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int,
 	var anims := hooks.anims
 	var akind := w.launcher(w.launcher_id(s, slot), 9) >> 4
 	if anims:
-		hooks.anim_rec = [akind, w.pos(s).x, w.pos(s).y]   # (display)
-	var skipped := anims and Action.anim_play(w, rng, hooks, 0x40F730, x, y) >= 0
+		hooks.anim_rec = [akind, -1, -1, x, y, s]          # (display; its +6 is -1 at the interception)
+	var first: Vector2i = pts[0] if pts != null and not (pts as Array).is_empty() else Vector2i(x, y)
+	var skipped := anims and Action.anim_shooter(w, rng, hooks, s, w.pos(s).x if w.active(s) else -1, akind,
+			first.x, first.y)
 	var wh := w.warhead(s, slot)
 	w.events.append(["grow", s, "ATTACK", 1])
 	Action.count(w, s, 4, true)
@@ -304,7 +306,7 @@ static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int,
 				elif anims and not skipped:
 					skipped = Action.anim_hit(w, rng, hooks, akind, tx, ty)
 		else:
-			var res := Fire.intercept(w, rng, s, slot, o, choice, hooks) if kind == Fire.MISSILE_KIND else Fire.NOT_STOPPED
+			var res := Fire.intercept(w, rng, s, slot, o, choice, hooks, -1) if kind == Fire.MISSILE_KIND else Fire.NOT_STOPPED
 			var h := hit(w, rng, s, o, slot)
 			if anims and (res == Fire.DECOYED or (res == Fire.NOT_STOPPED and not h)):
 				Action.anim_miss(w, rng, hooks, akind, tx, ty)

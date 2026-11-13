@@ -151,8 +151,9 @@ static func throw(w: Pd2World, rng: Pd2Random, u: int, p: int, wh: int, x: int, 
 	var self_hit := false
 	var anims := hooks.anims
 	if anims:
-		hooks.anim_rec = [4, w.pos(u).x, w.pos(u).y]      # (display: 0x40F590(-1, 2))
-		Action.anim_play(w, rng, hooks, 0x40F730, x, y)
+		hooks.anim_rec = [4, w.pos(u).x, w.pos(u).y, x, y, -1]   # (display: 0x40F590(-1, 2))
+		var first: Vector2i = pts[0] if pts != null and not (pts as Array).is_empty() else Vector2i(x, y)
+		Action.anim_shooter(w, rng, hooks, -1, w.sb(u, 9), 4, first.x, first.y, false)   # unit -1 turns
 	var hexes: Array = pts if pts != null else [Vector2i(x, y)]
 	for q in hexes:
 		var tx: int = q.x
