@@ -67,6 +67,7 @@ func refresh() -> void:
 	_sub(0x30, 0x18, 5, 1, 12, "\u0001" + char(0x74) + _time(w.mission_turn, w.ds_506651))
 	_sub(0x98, 0x18, 5, 1, 12, "\u0001" + char(0x74) + _time(w.mission_turn, 0))
 	_unit()
+	minimap()
 	_dirty = true
 	queue_redraw()
 
@@ -94,6 +95,60 @@ func _sub(x: int, y: int, c: int, r: int, h: int, t: String) -> GameWindow:
 	_subs.append(gw)
 	gw.print_text(t)
 	return gw
+
+
+var _view_rect := []            # the minimap's view frame drawn (XOR), [x0, y0, x1, y1]
+
+
+func minimap() -> void:
+	## 0x40EB70 (the panel's minimap, DS:0x551D28 set when the panel starts): each of the
+	## 72 x 72 cells a 2 x 2 block at (8 + 2 x + (y & 1), 0xE4 + 2 y) (0x46CFD0) in the colour
+	## the S layer's bytes 256-511 give its tile (0x46EC20, DS:0x50DA28 = the copy at
+	## DS:0x50D928 + 0x100), 7 for an own unit (status below 3), 4 for an enemy spotted (+0
+	## bit 0x10); out of view (in_view 0x47CF40 false) through the mask 0x55 / 0xAA (rows
+	## alternating, the pixels it leaves black); then the view's frame (0x40E920)
+	if battle == null:
+		return
+	var w: Pd2World = battle.w
+	if w.terrain.size() < 512 or w.T.is_empty():
+		return
+	_view_rect = []
+	for y in 72:
+		var y0 := 0xE4 + 2 * y
+		for x in 72:
+			var c := w.terrain[256 + w.layer(w.T, x, y)] & 15
+			var o := w.O[x + 72 * y] - 1 if w.O.size() > x + 72 * y else -1
+			if o != -1:
+				if not w.is_enemy(o):
+					c = 7
+				elif w.ub(o, 0) & 0x10:
+					c = 4
+			var seen := Ai.in_view(w, x, y, 0)
+			var x0 := 8 + 2 * x + (y & 1)
+			for dy in 2:
+				for dx in 2:
+					var px := x0 + dx
+					var py := y0 + dy
+					var on := seen or ((0x55 if (py & 1) == 0 else 0xAA) >> (7 - (px & 7))) & 1
+					_px(px, py, c if on else 0)
+	view_frame()
+
+
+func view_frame() -> void:
+	## 0x40E920: the map window's area (its cells x 2 px) outlined in XOR colour 15 at
+	## (8 + 2 x0, 0xE4 + 2 y0); the old frame XORed away first
+	if not _view_rect.is_empty():
+		var r: Array = _view_rect
+		_rect(r[0], r[1], r[2], r[3], 4, 0xF, 1)
+		_view_rect = []
+	if battle == null or not battle.has_method("map_view_cells"):
+		return
+	var v: Rect2i = battle.map_view_cells()
+	var x0 := 8 + 2 * v.position.x
+	var y0 := 0xE4 + 2 * v.position.y
+	_view_rect = [x0, y0, x0 + 2 * v.size.x - 1, y0 + 2 * v.size.y - 1]
+	_rect(x0, y0, x0 + 2 * v.size.x - 1, y0 + 2 * v.size.y - 1, 4, 0xF, 1)
+	queue_redraw()
 
 
 var _ro: Array = []
@@ -194,3 +249,41 @@ func _weapons(x: int, y: int, c: int, r: int, id: int) -> void:
 	gw.print_text(GameWindow.coded(battle.text_cells(battle.msg_codes(id), args)))
 
 
+
+
+var _drag := false
+
+
+func _gui_input(ev: InputEvent) -> void:
+	## region 3 (0x47BBB0: (8, 0xE4)-(0x97, 0x177), type 3): pressed and dragged, the map
+	## follows (0x40ECA0)
+	var inside := func(p: Vector2) -> bool: return p.x >= 8 and p.x <= 0x97 and p.y >= 0xE4 and p.y <= 0x177
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+		if ev.pressed and inside.call(ev.position):
+			_drag = true
+			battle.minimap_scroll(int(ev.position.x), int(ev.position.y))
+			accept_event()
+			return
+		if not ev.pressed and _drag:
+			_drag = false
+			accept_event()
+			return
+	if ev is InputEventMouseMotion and _drag:
+		var p: Vector2 = ev.position.clamp(Vector2(8, 0xE4), Vector2(0x97, 0x177))
+		battle.minimap_scroll(int(p.x), int(p.y))
+		accept_event()
+		return
+	super(ev)
+
+
+var _last_cam := Vector2(-1, -1)
+var _last_zoom := Vector2(-1, -1)
+
+
+func _process(delta: float) -> void:
+	## the minimap's frame follows the engine's camera (0x40E920 after each scroll_to)
+	super(delta)
+	if battle and battle.cam and (battle.cam.position != _last_cam or battle.cam.zoom != _last_zoom):
+		_last_cam = battle.cam.position
+		_last_zoom = battle.cam.zoom
+		view_frame()

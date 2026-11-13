@@ -1,6 +1,6 @@
 extends SceneTree
 ## Render the operation plan before a battle and save it: godot --path engine/godot -s
-## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders [list|objective|site]|xms|list|maps]
+## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders [list|objective|site|siteblink|dirblink]|xms|list|maps]
 ## page: 0-3 (A-D, default 1), clicks: the page's waits clicked through (default 0: the
 ## first blink shown lit); "orders" opens the orders (plan_gb.pac), "xms" the XMS box,
 ## "list" the plans' list (0x4442C0), "maps" the area maps (0x444500).
@@ -30,6 +30,24 @@ func _init() -> void:
 	if args.size() > 6 and args[5] == "orders" and args[6] == "objective":
 		b.plan_st.ask = ["objective", 1]          # the objective's question (MES 0x21)
 		b._plan_draw()
+	elif args.size() > 6 and args[5] == "orders" and args[6] in ["dirblink", "siteblink"]:
+		# a pick's blink (0x445750) lit: the direction 2's bars, or the first site's mark
+		if args[6] == "dirblink":
+			b.plan_st.ask = ["direction_blink", 2]
+		else:
+			var rows: Array = Plan.sites(b.w, Plan.SITES_A)
+			b.plan_st.ask = ["site", rows, rows[0] if not rows.is_empty() else 0, Plan.SITES_A, "blink"]
+		b._plan_draw()
+		for i in 3:
+			await process_frame
+		for c in b.plan_view.get_children():
+			for d in c.get_children():
+				if d.get("blink_rects") != null and not d.blink_rects.is_empty():
+					d.blink_on = true
+					d.queue_redraw()
+					for t in c.get_children():
+						if t.get_class() == "Timer":
+							t.stop()
 	elif args.size() > 6 and args[5] == "orders" and args[6] == "site":
 		b.plan_st.ask = ["site", Plan.sites(b.w, Plan.SITES_A), -1, Plan.SITES_A]   # the site picker
 		b._plan_draw()

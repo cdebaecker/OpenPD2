@@ -30,11 +30,13 @@ func _init() -> void:
 	b._equip_begin(k)
 	if args.size() > 4:
 		if args[4] == "menu":
-			b.equip_cursor = Vector2(0x150, 0x100)
+			b.equip_cursor = Vector2(0x30, 0x90)
 			b._equip_press("menu")
 		else:
 			b._equip_region(int(args[4]))
 	for i in range(5, args.size()):        # answers to the windows that open
+		if b.equip_request != null and b.equip_request[0] == "pick" and int(args[i]) >= 0 and int(args[i]) < b.equip_request[2].size() and str(b.equip_request[2][int(args[i])]).begins_with("crew"):
+			b.equip_preview = b.equip_request[2][int(args[i])]       # (as a click on that row sets it)
 		b._equip_answer(int(args[i]))
 	for i in 5:
 		await process_frame

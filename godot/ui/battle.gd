@@ -1098,7 +1098,16 @@ func _plan_orders_view() -> void:
 	if GameWindow.translated(et):
 		et = GameWindow.fit(et, 28)
 	ex.print_text(et)
+	if plan_st.ask == null:
+		plan_view.flashed = false
 	plan_view.asking_cell = plan_st.ask != null and plan_st.ask[0] == "cell"
+	if plan_st.ask != null and plan_st.ask[0] == "direction":
+		var dh := Control.new()
+		dh.size = Vector2(PlanView.W, PlanView.H)
+		dh.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_plan_map_window(dh)                 # (0x444730 case 1: the map under the list)
+	if plan_st.ask != null and plan_st.ask[0] == "direction_blink":
+		_plan_direction_blink(plan_st.ask[1])
 	if plan_st.ask != null and plan_st.ask[0] in ["group", "name", "type", "time", "direction"]:
 		_plan_list_window(plan_st.ask)
 	if plan_st.ask != null and plan_st.ask[0] == "objective":
@@ -1108,20 +1117,10 @@ func _plan_orders_view() -> void:
 	plan_view.queue_redraw()
 
 
-func _plan_site_window(a: Array) -> void:
-	## 0x446F50 (a kind 2 / 3 plan's target): a framed window (0xA8, 0x48) 18 x 18 of 8 px
-	## (flags 2) cleared, mmap.pac[DS:0x50663D - 1] at (0xB0, 0x50); the group's site (+0x1F)
-	## marked by a fill of colour 7 (x 2 + 0xAE, y 2 + 0x4E)-(x 2 + 0xB4, y 2 + 0x54) of its
-	## (x, y) (the table's shorts); the sites' names DS:0x50E075 (those whose x is not -1) a
-	## list at (0x178, 0xE0), 8 columns; a pick moves the mark and asks 0x451E30 (0x514BB8,
-	## kind 0): yes sets +0x1F, no lists again; a right click leaves. (The camera cell's
-	## blink 0x446E80 and the pick's 0x445750 are not drawn.)
-	var g: int = plan_st.g
-	var base: int = a[3]
-	var cur: int = a[2] if a[2] >= 0 else Flight.s8(Flight.gb(w, g, 0x1F))
-	var hold := Control.new()
-	hold.size = Vector2(PlanView.W, PlanView.H)
-	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+func _plan_map_window(hold: Control) -> GameWindow:
+	## 0x446F50 / 0x444730 case 1: a framed window (0xA8, 0x48) 18 x 18 of 8 px (flags 2)
+	## cleared, mmap.pac[DS:0x50663D - 1] at (0xB0, 0x50); the camera's cell flashes on the
+	## plan's map first (0x446E80)
 	var mw := GameWindow.text_window(0xA8, 0x48, 0x12, 0x12, 2)
 	mw.lh = 8
 	mw.black = true
@@ -1129,13 +1128,81 @@ func _plan_site_window(a: Array) -> void:
 	mw.waits = false
 	mw.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	mw.blit("%s/%s/images/mmap/%02d.bmp" % [GameData.ROOT, campaign, Debrief.chunk(w) - 1], 8, 8)
+	hold.add_child(mw)
+	plan_view.add_child(hold)
+	if not plan_view.flashed:
+		plan_view.flash_camera(w.ds16(0x50AD95), w.ds16(0x50AD97))
+	return mw
+
+
+func _plan_blink(hold: Control, mw: GameWindow, rects: Array, then: Callable) -> void:
+	## 0x445750: two rects (from (0xB0, 0x50): left, top, right, bottom inclusive) XORed in
+	## colour 15 every 0x85 ms until a left or right click, then `then`
+	for r in rects:
+		mw.blink_rects.append([r[0] + 8, r[1] + 8, r[2] + 8, r[3] + 8])
+	var t := Timer.new()
+	t.wait_time = 0.133
+	t.autostart = true
+	t.timeout.connect(func():
+		mw.blink_on = not mw.blink_on
+		mw.queue_redraw())
+	hold.add_child(t)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			t.stop()
+			then.call()
+			_plan_draw())
+
+
+## 0x444730 case 1: a direction's two bars at the map's edges (0x445750's rects from (0xB0,
+## 0x50)): 北 .. 北西
+const DIRECTION_BARS := [[[0x24, 0, 0x47, 7], [0x48, 0, 0x6B, 7]], [[0x6C, 0, 0x8F, 7], [0x88, 8, 0x8F, 0x23]],
+	[[0x88, 0x24, 0x8F, 0x47], [0x88, 0x48, 0x8F, 0x6B]], [[0x88, 0x6C, 0x8F, 0x8F], [0x6C, 0x88, 0x87, 0x8F]],
+	[[0x24, 0x88, 0x47, 0x8F], [0x48, 0x88, 0x6B, 0x8F]], [[0, 0x88, 0x23, 0x8F], [0, 0x6C, 7, 0x87]],
+	[[0, 0x24, 7, 0x47], [0, 0x48, 7, 0x6B]], [[0, 0, 0x23, 7], [0, 8, 7, 0x23]]]
+
+
+func _plan_direction_blink(v: int) -> void:
+	## the picked direction's bars blink over the map window until a click, then +0x1F is set
+	var hold := Control.new()
+	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var mw := _plan_map_window(hold)
+	var g: int = plan_st.g
+	_plan_blink(hold, mw, DIRECTION_BARS[v], func():
+		Flight.setgb(w, g, 0x1F, v)
+		plan_st.ask = null)
+
+
+func _plan_site_window(a: Array) -> void:
+	## 0x446F50 (a kind 2 / 3 plan's target): a framed window (0xA8, 0x48) 18 x 18 of 8 px
+	## (flags 2) cleared, mmap.pac[DS:0x50663D - 1] at (0xB0, 0x50); the group's site (+0x1F)
+	## marked by a fill of colour 7 (x 2 + 0xAE, y 2 + 0x4E)-(x 2 + 0xB4, y 2 + 0x54) of its
+	## (x, y) (the table's shorts); the sites' names DS:0x50E075 (those whose x is not -1) a
+	## list at (0x178, 0xE0), 8 columns; a pick moves the mark and asks 0x451E30 (0x514BB8,
+	## kind 0): yes sets +0x1F, no lists again; a right click leaves. The pick first blinks
+	## (0x445750) until a click.
+	var g: int = plan_st.g
+	var base: int = a[3]
+	var blinking: bool = a.size() > 4 and a[4] == "blink"
+	var cur: int = a[2] if a[2] >= 0 and not blinking else Flight.s8(Flight.gb(w, g, 0x1F))
+	var hold := Control.new()
+	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var mw := _plan_map_window(hold)
 	if cur >= 0 and cur < 8:
 		var sx := w.ds16(base + 4 * cur)
 		var sy := w.ds16(base + 4 * cur + 2)
 		mw._rect(sx * 2 + 0xAE - 0xA8, sy * 2 + 0x4E - 0x48, sx * 2 + 0xB4 - 0xA8, sy * 2 + 0x54 - 0x48, 0, 7, 2)
-	hold.add_child(mw)
-	plan_view.add_child(hold)
 	var names := SaveFiles.choice_texts(Plan.SITE_NAMES)
+	if blinking:
+		# 0x445750 over the picked site: (x2 - 2, y2 - 2)-(x2 + 4, y2) and (x2 - 2, y2 + 1)-(x2 +
+		# 4, y2 + 4) from (0xB0, 0x50), x2 / y2 its coordinates x 2, until a click
+		var x2 := w.ds16(base + 4 * a[2]) * 2
+		var y2 := w.ds16(base + 4 * a[2] + 2) * 2
+		_plan_blink(hold, mw, [[x2 - 2, y2 - 2, x2 + 4, y2], [x2 - 2, y2 + 1, x2 + 4, y2 + 4]], func():
+			plan_st.ask = ["site", a[1], a[2], base])
+		return
 	if a[2] >= 0:
 		# the question (0x451E30, kind 0) over the moved mark
 		var l: Array = BOX_LABELS[0]
@@ -1171,7 +1238,7 @@ func _plan_site_window(a: Array) -> void:
 		if v < 0:
 			plan_st.ask = null
 		else:
-			plan_st.ask = ["site", a[1], a[1][v], base]
+			plan_st.ask = ["site", a[1], a[1][v], base, "blink"]
 		_plan_draw())
 
 
@@ -1289,6 +1356,9 @@ func _plan_ask_apply(kind: String, row_v: int) -> void:
 			Plan.set_time(w, g, row_v)
 		"direction":
 			if row_v != Flight.s8(Flight.gb(w, g, 0x1F)):
+				if plan_view and not auto_react and not _headless():
+					plan_st.ask = ["direction_blink", row_v]     # (0x445750 first, then set)
+					return
 				Flight.setgb(w, g, 0x1F, row_v)
 	plan_st.ask = null
 
@@ -1419,6 +1489,8 @@ func _plan_ask_ui(box: VBoxContainer) -> void:
 					b.text = names[i] if i < names.size() else str(i)
 					b.pressed.connect(func(): plan_st.ask = ["site", a[1], i, a[3]]; _plan_draw())
 					v.add_child(b)
+		"direction_blink":
+			pass                                     # (drawn in the plan window: its bars blink)
 		_:
 			for i in a[1].size():
 				var row_v: int = a[1][i]
@@ -2005,6 +2077,7 @@ func _equip_begin(k: int) -> void:
 
 
 func _equip_press(b: Variant) -> void:
+	equip_preview = ""
 	equip_button = b
 	equip_answers = []
 	equip_text = ""
@@ -2441,28 +2514,51 @@ func _equip_menu_at() -> Vector2i:
 
 func _equip_template_list(kind: String, ents: Array) -> void:
 	## the right click's menu (0x452A10 of DS:0x51571C / 2C / 3C at the cursor, 4 columns);
-	## 0x45A700's lists: a framed title window (x, y) 9 x 1 of 16 px (DS:0x515BA8 register,
-	## 0x515C0C recall, 0x515CAC copy) and the list at (x, y + 0x20), 9 columns; x, y the
-	## menu's place (0x80, 0x90 without one)
+	## 0x45A700's lists: a framed title window (x, y) of 16 px (register DS:0x515BA8 9
+	## columns, recall DS:0x515C0C 0x19, copy DS:0x515CAC 0x1D) and the list at (x, y + 0x20):
+	## register 9 columns ("新規登録" DS:0x515B90, "レジスタ%d" DS:0x515B9C); recall 0x19
+	## (the registers, "レジスタ%d" DS:0x515C00) or 0x16 with the four copy choices first
+	## ("%-22s" DS:0x515BF8); copy 0x1D (the members, "%-15s %10s" DS:0x515CA0 of "given
+	## family" and the machine's code DS:0x50C2E5) or 0x1A with the choices ("%-26s"
+	## DS:0x515C94); x, y the menu's place (0x80, 0x90 without one)
 	var at := _equip_menu_at()
 	var labels := []
+	var codes: Array = GameData.tables(campaign).get("machine_codes", [])
+	var opts := false
 	for e in ents:
-		labels.append(_equip_entry_text(kind, e))
+		var t: String = _equip_entry_text(kind, e)
+		if e is String and str(e).begins_with("crew"):
+			var c := int(str(e).substr(4))
+			var cn: Array = names.crew
+			var n := w.cb(c, 0)
+			var nm: Array = cn[n] if n < cn.size() else ["", ""]
+			var m := Flight.s8(w.ub(c, 0xC))
+			t = wsp("%-15s %10s", [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""]), str(codes[m]) if m >= 0 and m < codes.size() else ""])
+		elif e is String and TEMPLATE_LABELS.has(e) and e in ["all", "machine+weapons", "weapons", "items"]:
+			opts = true
+			t = wsp("%-26s" if kind == "copy" else "%-22s", [t])
+		labels.append(t)
 	if kind == "menu":
 		var gw := _equip_list(at.x, at.y, 4, labels, [], "", "equip_menu")
 		gw.chosen.connect(func(v: int): _equip_answer(v))
 		return
-	var title := GameWindow.text_window(at.x, at.y, 9, 1, 1)
+	var tc: int = {"register": 9, "recall": 0x19, "copy": 0x1D}[kind]
+	var lc: int = {"register": 9, "recall": 0x16 if opts else 0x19, "copy": 0x1A if opts else 0x1D}[kind]
+	var title := GameWindow.text_window(at.x, at.y, tc, 1, 1)
 	title.waits = false
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var tt := GameData.exe_text(campaign, TEMPLATE_TITLES[kind])
-	if GameWindow.text_cols(tt) > 9:
+	if GameWindow.text_cols(tt) > tc:
 		title.cols = GameWindow.text_cols(tt)        # (engine-side: a longer translation widens it)
 		title._layout()
 	title.print_text(tt)
-	var gw := _equip_list(at.x, at.y + 0x20, 9, labels, [], "", "equip_" + kind)
+	var gw := _equip_list(at.x, at.y + 0x20, lc, labels, [], "", "equip_" + kind)
 	gw.get_parent().add_child(title)
-	gw.chosen.connect(func(v: int): _equip_answer(v))
+	_equip_preview(kind, at, gw.get_parent())
+	gw.chosen.connect(func(v: int):
+		if v >= 0 and v < ents.size() and ents[v] is String and (str(ents[v]).begins_with("reg") or str(ents[v]).begins_with("crew")):
+			equip_preview = ents[v]
+		_equip_answer(v))
 
 
 func _equip_ask(msg: int) -> void:
@@ -2484,6 +2580,81 @@ func _equip_ask(msg: int) -> void:
 	wins[0].print_text(wins[0].get_meta("text"))
 	wins[1].role = "equip_ask"
 	wins[1].chosen.connect(func(v: int): _equip_answer(1 if v == 0 else 0))
+
+
+var equip_preview := ""          # the template list's row picked first ("regN" / "crewN"): its preview
+
+
+func _equip_preview(kind: String, at: Vector2i, hold: Control) -> void:
+	## 0x45A700's previews of the row picked first (framed windows, flags 1, stacked from the
+	## list's y): a register at x + 0xC0 + 0x18 by its flags (bit 0 the machine 0x45C770, bit
+	## 1 the slots 0x45C810, bit 2 the pockets 0x45C910), a member at x + 0xF8 + 0x18 (the
+	## name 0x45C6A0, the machine, the slots, the pockets): the name "%s %s" 16 x 1, the
+	## machine's name DS:0x50C265 16 x 1, slots 0-3 "%-14s %-14s" (DS:0x50BDE5, the slot's
+	## pocket's round DS:0x50C365) or 装備無し (DS:0x515D38) 31 x 4, pockets 0-3 (PD2:
+	## DS:0x554B10 set) / 0-5 the rounds' names or 装備無し 16 x 4 / 6; each window 0x10 px a
+	## line plus its frame (+0x20, +0x50, +0x70)
+	if equip_preview == "" or not kind in ["register", "recall", "copy"]:
+		return
+	var t: Dictionary = GameData.tables(campaign)
+	var mn: Array = t.get("machine_names", [])
+	var ln: Dictionary = t.get("launcher_names", {})
+	var an: Dictionary = t.get("ammo_names", {})
+	var none := GameData.exe_text(campaign, 0x515D38)
+	var get_b: Callable
+	var flags := 7
+	var x := at.x
+	var y := at.y
+	if equip_preview.begins_with("crew"):
+		var c := int(equip_preview.substr(4))
+		get_b = func(f: int) -> int: return w.ub(c, f)
+		x += 0xF8 + 0x18
+		var cn: Array = names.crew
+		var n := w.cb(c, 0)
+		var nm: Array = cn[n] if n < cn.size() else ["", ""]
+		_preview_win(hold, x, y, 0x10, 1, wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""]))
+		y += 0x20
+	elif equip_preview.begins_with("reg"):
+		var r := int(equip_preview.substr(3))
+		flags = Equipment._reg(w, r, 0)
+		# (the register as the unit record it is copied to: unit +f is register +f - 0xB)
+		get_b = func(f: int) -> int: return Equipment._reg(w, r, f - 0xB)
+		x += 0xC0 + 0x18
+	else:
+		return
+	if flags & 1:
+		var m := Flight.s8(get_b.call(0xC))
+		_preview_win(hold, x, y, 0x10, 1, str(mn[m]) if m >= 0 and m < mn.size() else "")
+		y += 0x20
+	if flags & 2:
+		var lines := []
+		for s in 4:
+			var l := Flight.s8(get_b.call(0xF + 2 * s))
+			if l == -1:
+				lines.append(none)
+			else:
+				var a := Flight.s8(get_b.call(0x1B + 2 * (get_b.call(0x10 + 2 * s) & 0xF)))
+				lines.append(wsp("%-14s %-14s", [str(ln.get(str(l), "")), str(an.get(str(a), ""))]))
+		_preview_win(hold, x, y, 0x1F, 4, "\n".join(lines))
+		y += 0x50
+	if flags & 4:
+		var n := 4 if campaign == "pd2" else 6
+		var lines := []
+		for p in n:
+			var a := Flight.s8(get_b.call(0x1B + 2 * p))
+			lines.append(none if a == -1 else str(an.get(str(a), "")))
+		_preview_win(hold, x, y, 0x10, n, "\n".join(lines))
+
+
+func _preview_win(hold: Control, x: int, y: int, c: int, r: int, t: String) -> void:
+	var cc := c
+	for l in t.split("\n"):
+		cc = maxi(cc, GameWindow.text_cols(l))       # (engine-side: longer names widen it)
+	var gw := GameWindow.text_window(x, y, cc, r, 1)
+	gw.waits = false
+	gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hold.add_child(gw)
+	gw.print_text(t)
 
 
 func _equip_region(r: int) -> void:
@@ -2660,6 +2831,31 @@ func _refresh_info() -> void:
 
 var _rpress := Vector2(-100, -100)
 var hud_bar := false              # the engine's own command bar and log shown (H)
+
+
+func map_view_cells() -> Rect2i:
+	## the map window's area in cells (the engine's map window: the screen left of the info
+	## panel), for the minimap's frame
+	var sc := _win_root().scale.x
+	var mw := 432.0 * sc
+	var mh := get_viewport().get_visible_rect().size.y
+	var cw := TILE_W * cam.zoom.x
+	var ch := TILE_H * cam.zoom.y
+	var tl := hex_at(cam.position - Vector2(mw / 2.0 / cam.zoom.x, mh / 2.0 / cam.zoom.y) + Vector2(1, 1))
+	return Rect2i(clampi(tl.x, 0, 71), clampi(tl.y, 0, 71), int(mw / cw), int(mh / ch))
+
+
+func minimap_scroll(px: int, py: int) -> void:
+	## 0x40ECA0 (region 3, dragged): the view's origin from the cursor, (p - its size - the
+	## minimap's corner) / 2 + 1, at most 0x47 less its size, at least 1; scroll_to there
+	var v := map_view_cells()
+	var ox := clampi(((px - v.size.x - 8) >> 1) + 1, 1, maxi(1, 0x47 - v.size.x))
+	var oy := clampi(((py - v.size.y - 0xE4) >> 1) + 1, 1, maxi(1, 0x47 - v.size.y))
+	var tl := hex_center(Vector2i(ox, oy)) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
+	var sc := _win_root().scale.x
+	cam.position = tl + Vector2(432.0 * sc / 2.0 / cam.zoom.x, get_viewport().get_visible_rect().size.y / 2.0 / cam.zoom.y)
+	if info_panel and is_instance_valid(info_panel):
+		info_panel.view_frame()
 
 
 func _map_edge_scroll(p: Vector2) -> bool:

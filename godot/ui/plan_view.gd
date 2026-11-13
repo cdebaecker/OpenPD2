@@ -206,11 +206,34 @@ func _draw() -> void:
 		# 0x446320: the target cell's frame, XOR 15 (an outer and an inner fill: a 2 px ring)
 		var r := Rect2(cell_frame[0] * 24 + 9, cell_frame[1] * 24 + 0x21, 0x17, 0x17)
 		draw_rect(r, pal(15), false, 2.0)
+	if _flash != null and _flash_on:
+		draw_rect(Rect2(_flash[0] * 0x18 + 9, _flash[1] * 0x18 + 0x21, 0x17, 0x17), pal(15))
 	if blink != null and _on:
 		_draw_blink(blink)
 	if note != "":
 		_frame(0xC0, 0xB0, 0x18, 2, 16)
 		_text(note, 0xC0 + 8, 0xB0 + 10)
+
+
+var flashed := false            # the camera cell's flash done for this picker
+var _flash: Variant = null      # [x, y] of the cell while it flashes
+var _flash_on := false
+
+
+func flash_camera(x: int, y: int) -> void:
+	## 0x446E80: the camera's cell (x 0x18 + 9, y 0x18 + 0x21, 0x17 x 0x17) XORed in colour
+	## 15 four times, 50 ms apart (drawn in colour 15)
+	flashed = true
+	_flash = [x, y]
+	for i in 4:
+		_flash_on = not _flash_on
+		queue_redraw()
+		if not is_inside_tree():
+			return
+		await get_tree().create_timer(0.05).timeout
+	_flash = null
+	_flash_on = false
+	queue_redraw()
 
 
 func _draw_blink(b: Array) -> void:

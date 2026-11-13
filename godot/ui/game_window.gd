@@ -48,6 +48,8 @@ var solid_raw := 0            # a solid DIB colour (the record's +0x65 + 10: the
 var pal16: Array = []         # the window's 16 colours when not the battle's (e.g. DS:0x50D6A1)
 var transparent := false      # printed over what is behind until a clear (a record marked 1 before its first print)
 var scroll := 0
+var blink_rects: Array = []      # [x0, y0, x1, y1] (inclusive) blinked over the window
+var blink_on := false
 
 var _cells: Array = []        # [x, y, char, code]
 var _col := 0
@@ -626,6 +628,11 @@ func _draw() -> void:
 			_dirty = false
 		if not transparent:
 			draw_texture(_tex, Vector2.ZERO)
+	if blink_on:
+		# a blink's rects (0x445750: XOR colour 15 fills toggled every 0x85 ms; drawn in
+		# colour 15, the pictures' indices not being kept for an XOR)
+		for r in blink_rects:
+			draw_rect(Rect2(r[0], r[1], r[2] - r[0] + 1, r[3] - r[1] + 1), colour(15))
 	var o := _origin()
 	for c in _cells:
 		# (the 8 px font's half-width characters, FONT_ANK, step 8 px a column; TextOut's lh / 2)

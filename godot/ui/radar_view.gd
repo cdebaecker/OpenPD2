@@ -282,19 +282,50 @@ func _state(g: int) -> int:
 	return 0
 
 
+var _list_wins: Array = []
+var _list_texts: Array = []
+
+
 func _draw_list() -> void:
+	## 0x43E9D0: per shown group of 0-19, a row from y 0x1A (0x12 px each): unframed windows
+	## of 12 px (flags 1: code 0x75, colour 7) cleared with a zero pattern: "%2d" of +4 at
+	## (0x178, y) 2 columns, the call sign at (400, y) 12, the type (歩 陸 砲 空 輸) at (0x1F8,
+	## y) 2, "%2d" of the members alive at (0x210, y) 2, the state at (0x228, y) 10
+	var want := []
 	var y := 0x1A
 	for g in 20:
 		var G: Array = snap.groups[g]
 		if (g & 1 or G[2] & 0x30) and G[0x16] != 0xFF and snap.alive[g]:
-			_text("%2d" % G[4], 0x178, y)
-			_text(GameData.call_sign(battle.campaign, G[1]), 400, y)
 			var ty: int = (G[2] >> 1) & 7
-			_text(GameData.exe_text(battle.campaign, TYPES[ty]) if ty < TYPES.size() else "", 0x1F8, y)
-			_text("%2d" % snap.alive[g], 0x210, y)
 			var stt := _state(g)
-			_text(GameData.exe_text(battle.campaign, stt) if stt else "", 0x228, y)
+			want.append([0x178, y, 2, "%2d" % G[4]])
+			want.append([400, y, 12, GameData.call_sign(battle.campaign, G[1])])
+			want.append([0x1F8, y, 2, GameData.exe_text(battle.campaign, TYPES[ty]) if ty < TYPES.size() else ""])
+			want.append([0x210, y, 2, "%2d" % snap.alive[g]])
+			want.append([0x228, y, 10, GameData.exe_text(battle.campaign, stt) if stt else ""])
 		y += 0x12
+	if want == _list_texts:
+		return
+	_list_texts = want
+	for l in _list_wins:
+		l.queue_free()
+	_list_wins = []
+	for e in want:
+		var gw := GameWindow.new()
+		gw.cols = maxi(e[2], GameWindow.text_cols(str(e[3])))   # (engine-side: a longer translation widens it)
+		gw.rows = 1
+		gw.lh = 12
+		gw.framed = false
+		gw.black = true
+		gw.code = 0x75
+		gw.waits = false
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gw.position = Vector2(e[0], e[1])
+		gw._layout()
+		add_child(gw)
+		move_child(gw, 0)
+		_list_wins.append(gw)
+		gw.print_text(str(e[3]))
 
 
 # --- the radio's windows -------------------------------------------------------------
