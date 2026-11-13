@@ -140,6 +140,212 @@ func _credits_dash() -> void:
 	await _fade(0.0)
 
 
+# --- the new step's screens (0x48FA40 after a cleared mission) ------------------------
+
+var _on_kabe := false
+
+
+func _pal_kabe() -> Array:
+	## the kabe screens' 16 window colours: 0x487120 from DS:0x518F48
+	var out := []
+	for c in GameWindow.ui_data().get("palettes", {}).get("518F48", []):
+		out.append(Color8(int(c[0]), int(c[1]), int(c[2])))
+	return out
+
+
+func _kabe() -> void:
+	## kabe0.pac at (0, 0) with the palette DS:0x518F48 (0x40DD20 after 0x487120), faded in
+	if _on_kabe:
+		return
+	_on_kabe = true
+	await _fade(0.0)
+	_blank()
+	_pic = _shared("kabe0", 0)
+	await _fade(1.0)
+
+
+func _note(t: String) -> void:
+	## 0x452200: the line framed at ((80 - (len + 2)) / 2 x 8, 0xAA), in colour 4 (%a4F),
+	## then a click
+	var n := mini(GameWindow.text_cols(t), 76)
+	var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
+	gw.pal16 = _pal_kabe()
+	gw.waits = not battle._headless()
+	gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(gw)
+	if GameWindow.translated(t) and GameWindow.text_cols(t) > 76:
+		t = GameWindow.fit(t, 76)
+	await gw.print_text("\u0001" + char(0x4F) + t + "\n")
+	gw.queue_free()
+
+
+func _kabe_list(x: int, hy: int, cols: int, hrows: int, head: String, rows: Array) -> void:
+	## a framed header window (x, hy) cols x hrows of 16 px (flags 1) and 0x452A10 at (x,
+	## 0x80) of the rows, cols columns; its left clicks show it again, a right click ends it
+	var pal := _pal_kabe()
+	var hd := GameWindow.text_window(x, hy, cols, hrows, 1)
+	hd.pal16 = pal
+	hd.waits = false
+	hd.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(hd)
+	hd.print_text(head)
+	var ic := cols
+	for r in rows:
+		ic = maxi(ic, GameWindow.text_cols(str(r)))
+	var gw := GameWindow.select_window(x, 0x80, ic, 0, 0, rows, ic, [], true)
+	gw.pal16 = pal
+	gw.role = "debrief_list"
+	add_child(gw)
+	if not battle._headless():
+		while is_inside_tree():
+			var v: int = await gw.chosen
+			if v == -2:
+				break
+	gw.queue_free()
+	hd.queue_free()
+
+
+func _acc4(v: int) -> String:
+	return battle.wsp("%4s", [GameData.exe_text(battle.campaign, 0x50CBE1)]) if v == 0xFF else battle.wsp("%4d", [v])
+
+
+func _new_items(data: Array) -> void:
+	## the machines (0x519728, rows "%-17s%4d %4d %4d %2d:%1d  %4d0%%": DS:0x50C265, +4 .. +8,
+	## +0x18; header DS:0x519780 at (0x98, 0x60) 44 x 1, list 44 columns), the launchers
+	## (0x5197B8, "%-14s%3d%4s%%%3d%4s%%%3d %2d:%1d %3d:%2d %c%1d %s %-20s" of DS:0x50BDE5,
+	## 0x4508D0, +2's accuracy, 0x450940, +5's, 0x4509B0, the round's +4 : +5, -0x450860 :
+	## +8's low 5 bits, DS:0x50CBAA[+8 >> 5] and +9 & 7, ○ / × by +9 bit 3, the first round
+	## ("%-20s" or "%-14sx%2d" with its +0); header DS:0x519850 at (0x20, 0x60) 0x47 x 1), the
+	## rounds (0x5198A0, "%-14s  %2s%5d%5d%4d:%1d %3d:%2d" of DS:0x50C365, +0 or "--", +1, +2,
+	## +4, +5, -(+6 & 0x1F), +7 & 0x1F; header DS:0x5198FC at (0xB0, 0x60) 44 x 1), each
+	## after its 0x452200 line
+	var w: Pd2World = battle.w
+	var camp: String = battle.campaign
+	var t: Dictionary = GameData.tables(camp)
+	var an: Dictionary = t.get("ammo_names", {})
+	if not data[0].is_empty():
+		await _kabe()
+		await _note(GameData.exe_text(camp, 0x519728))
+		var mn: Array = t.get("machine_names", [])
+		var rows := []
+		for m in data[0]:
+			rows.append(battle.wsp(GameData.exe_raw(camp, 0x51975C), [str(mn[m]) if m < mn.size() else "",
+				w.machine(m, 4), w.machine(m, 5), w.machine(m, 6), w.machine(m, 7), w.machine(m, 8), w.machine(m, 0x18)]))
+		await _kabe_list(0x98, 0x60, 0x2C, 1, GameData.exe_text(camp, 0x519780), rows)
+	if not data[1].is_empty():
+		await _kabe()
+		await _note(GameData.exe_text(camp, 0x5197B8))
+		var ln: Dictionary = t.get("launcher_names", {})
+		var types := GameData.exe_text(camp, 0x50CBAA)
+		var rows := []
+		for l in data[1]:
+			var a := Pd2World.s8(w.launcher(l, 0xA))
+			var hand := w.launcher(l, 7) & 0x1F
+			if hand & 0x10:
+				hand -= 32
+			hand += w.ammo(a, 6) & 0x1F
+			var low := w.launcher(l, 8) & 0x1F
+			if low & 0x10:
+				low -= 32
+			var a0 := Pd2World.s8(w.ammo(a, 0))
+			var rnd: String = battle.wsp("%-20s", [str(an.get(str(a), ""))]) if a0 < 0 else battle.wsp("%-14sx%2d", [str(an.get(str(a), "")), a0])
+			var tc := w.launcher(l, 8) >> 5
+			rows.append(battle.wsp(GameData.exe_raw(camp, 0x519818), [str(ln.get(str(l), "")),
+				(w.ammo(a, 3) + w.launcher(l, 4)) & 0xFF, _acc4(w.launcher(l, 2)), (w.ammo(a, 1) + w.launcher(l, 3)) & 0xFF,
+				_acc4(w.launcher(l, 5)), (w.launcher(l, 6) + w.ammo(a, 2)) & 0xFF, w.ammo(a, 4), w.ammo(a, 5),
+				-(hand & 0xFF), low, types.substr(tc, 1) if tc < types.length() else " ", w.launcher(l, 9) & 7,
+				GameData.exe_text(camp, 0x519810 if w.launcher(l, 9) & 8 else 0x519814), rnd]))
+		await _kabe_list(0x20, 0x60, 0x47, 1, GameData.exe_text(camp, 0x519850), rows)
+	if not data[2].is_empty():
+		await _kabe()
+		await _note(GameData.exe_text(camp, 0x5198A0))
+		var rows := []
+		for a in data[2]:
+			var a0 := Pd2World.s8(w.ammo(a, 0))
+			rows.append(battle.wsp(GameData.exe_raw(camp, 0x5198DC), [str(an.get(str(a), "")),
+				GameData.exe_text(camp, 0x5198D8) if a0 < 0 else battle.wsp("%2d", [a0]), w.ammo(a, 1), w.ammo(a, 2),
+				w.ammo(a, 4), w.ammo(a, 5), -(w.ammo(a, 6) & 0x1F), w.ammo(a, 7) & 0x1F]))
+		await _kabe_list(0xB0, 0x60, 0x2C, 1, GameData.exe_text(camp, 0x5198FC), rows)
+
+
+func _given_family(c: int) -> String:
+	var cn: Array = GameData.tables(battle.campaign).crew_names
+	var n: int = battle.w.cb(c, 0)
+	var nm: Array = cn[n] if n < cn.size() else ["", ""]
+	return battle.wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""])
+
+
+func _recruits(data: Array) -> void:
+	## 0x519930's line, then the header DS:0x5199E0 (0x78, 0x50) 47 x 2 and 0x452A10 at (0x78,
+	## 0x80), 47 columns: "%-14s %s %s%s %2d " of "given family", 地 / 空 (crew +3), %a4F (+6
+	## bits 0 / 1) or %a7F, 不 (+6 bit 0) / 負 (bit 1) / 未 (+5 = 0xFF) / 編, +9; then +0xA,
+	## +0xB, +0xC, +0xD each "%2X " ("%2d " below 0); then "%s %s %s %s" of 有 / 無 by +8 bits
+	## 0, 1, 2, 3
+	var w: Pd2World = battle.w
+	var camp: String = battle.campaign
+	await _kabe()
+	await _note(GameData.exe_text(camp, 0x519930))
+	var rows := []
+	for c in data:
+		var s6 := w.cb(c, 6)
+		var st := 0x519968 if s6 & 1 else (0x51996C if s6 & 2 else (0x519974 if w.cb(c, 5) == 0xFF else 0x519970))
+		var r: String = battle.wsp(GameData.exe_raw(camp, 0x519980), [_given_family(c),
+			GameData.exe_text(camp, 0x51997C if w.cb(c, 3) else 0x519978), "\u0001" + char(0x4F if s6 & 3 else 0x7F),
+			GameData.exe_text(camp, st), Pd2World.s8(w.cb(c, 9))])
+		for f in [0xA, 0xB, 0xC, 0xD]:
+			var v := Pd2World.s8(w.cb(c, f))
+			r += ("%2d " % v) if v < 0 else ("%2X " % v)
+		var sk := w.cb(c, 8)
+		r += battle.wsp("%s %s %s %s", [GameData.exe_text(camp, 0x50CBB3 if sk & 1 else 0x50CBB6),
+			GameData.exe_text(camp, 0x50CBB3 if sk & 2 else 0x50CBB6), GameData.exe_text(camp, 0x50CBB3 if sk & 4 else 0x50CBB6),
+			GameData.exe_text(camp, 0x50CBB3 if sk & 8 else 0x50CBB6)])
+		rows.append(r)
+	await _kabe_list(0x78, 0x50, 0x2F, 2, GameData.exe_text(camp, 0x5199E0), rows)
+
+
+func _rmes_window(x: int, y: int, c: int, r: int, ids: Array, pics: Array = []) -> void:
+	## an unframed window (flags 1, record +0 = 1: printed over the picture) printing PD2's
+	## RMES texts in turn (their 0x0C clears, CR, '@' waits), op2.pac pictures drawn between
+	## them ([index, x, y] after each text but the last)
+	var gw := _text_window(x, y, c, r, 1, false)
+	for i in ids.size():
+		var t := GameData.debrief_raw("pd2", int(ids[i]))
+		if GameWindow.translated(t):
+			t = GameWindow.fit(t.replace("\r", "\n"), c)
+		await gw.print_text(SortieView.fmt(t, []))
+		if i < pics.size():
+			var e: Array = pics[i]
+			_over.append([_shared("op2", e[0]), e[1], e[2]])
+			queue_redraw()
+	gw.queue_free()
+
+
+func _handover() -> void:
+	## PD2's hand-over to DASH (0x48FA40 after step 7): scenes on colour 0 (0x0A), each faded
+	## in and out: op2 0 at (8, 0x38) with RMES 0x20 in (0x188, 0x3C) 30 x 15; op2 3 at
+	## (0x188, 0) with 0x21 in (0x30, 0xE0) 42 x 9; op2 1 at (0x20, 8) with 0x22 in (0x118,
+	## 0xD8) 40 x 10, then op2 2 at (0x118, 0x18) and 0x23, op2 4 at (0x20, 0x10) and 0x24;
+	## op2 5 at (0x30, 0), 1 s; op2 6 at (0, 0) with 0x25 in (0, 0x168) 80 x 2
+	var scenes := [[[0, 8, 0x38], [0x188, 0x3C, 0x1E, 0xF], [0x20], []],
+		[[3, 0x188, 0], [0x30, 0xE0, 0x2A, 9], [0x21], []],
+		[[1, 0x20, 8], [0x118, 0xD8, 0x28, 10], [0x22, 0x23, 0x24], [[2, 0x118, 0x18], [4, 0x20, 0x10]]],
+		[[5, 0x30, 0], [], [], []],
+		[[6, 0, 0], [0, 0x168, 0x50, 2], [0x25], []]]
+	for sc in scenes:
+		await _fade(0.0)
+		_blank()
+		var pic: Array = sc[0]
+		_over = [[_shared("op2", pic[0]), pic[1], pic[2]]]
+		await _fade(1.0)
+		if sc[1].is_empty():
+			await _sleep(1000)
+		else:
+			await _rmes_window(sc[1][0], sc[1][1], sc[1][2], sc[1][3], sc[2], sc[3])
+	await _fade(0.0)
+	_blank()
+	_bright = 1.0
+
+
 func _click() -> void:
 	_go = false
 	if battle._headless():
@@ -392,6 +598,18 @@ func play() -> void:
 					await _credits_dash()
 				_bright = 1.0
 				_blank()
+			"new_items":
+				await _new_items(data)
+			"recruits":
+				await _recruits(data)
+			"recovered":
+				await _kabe()
+				await _note(GameData.format_text(GameData.exe_raw(battle.campaign, 0x519A5C if data[1] else 0x519A84), [_given_family(int(data[0]))]))
+			"drop_error":
+				await _kabe()
+				await _note(GameData.exe_text(battle.campaign, 0x519A40))
+			"handover":
+				await _handover()
 			"results":
 				_bright = 0.5
 				queue_redraw()

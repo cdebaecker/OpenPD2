@@ -154,6 +154,19 @@ func call_sign(campaign: String, n: int) -> String:
 
 ## A debrief text (RMES.SLD, which 0x4719D0 loads for the debrief 0x48FA40), translated
 ## (rmes.csv: "<campaign>.<id>") or the game's own; an empty line stays empty.
+## An RMES text as written (translated), its codes, 0x0C, CR and '@' kept for the window
+## printer.
+func debrief_raw(campaign: String, id: int) -> String:
+	if not _messages.has(campaign):
+		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])
+	var lines: Array = _messages[campaign].get("rmes", [])
+	var ja: String = lines[id] if id >= 0 and id < lines.size() else ""
+	if ja.strip_edges() == "":
+		return ""
+	var t := _translated("rmes", "%s.%X" % [campaign, id])
+	return t if t != "" else ja
+
+
 func debrief_text(campaign: String, id: int) -> String:
 	if not _messages.has(campaign):
 		_messages[campaign] = _json("%s/%s/messages.json" % [ROOT, campaign])

@@ -227,7 +227,7 @@ BSS_END = 0x526000
 # (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
 # pickers' words. GameData.exe_text, exe.csv.
-EXE_TEXTS = (0x516728, 0x5157A8, 0x5156C0, 0x51FB18, 0x51FB20, 0x51FB28, 0x51FB30, 0x51F8C8, 0x51F8E0, 0x51F8F8, 0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
+EXE_TEXTS = (0x519728, 0x51975C, 0x519780, 0x5197B8, 0x519810, 0x519814, 0x519818, 0x519850, 0x5198A0, 0x5198D8, 0x5198DC, 0x5198FC, 0x519930, 0x519968, 0x51996C, 0x519970, 0x519974, 0x519978, 0x51997C, 0x519980, 0x5199E0, 0x519A40, 0x519A5C, 0x519A84, 0x516728, 0x5157A8, 0x5156C0, 0x51FB18, 0x51FB20, 0x51FB28, 0x51FB30, 0x51F8C8, 0x51F8E0, 0x51F8F8, 0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
              0x51571C, 0x51572C, 0x51573C, 0x515B18, 0x515B44, 0x515B64, 0x515B7C, 0x515B90,
              0x515B9C, 0x515BA8, 0x515BB4, 0x515BC4, 0x515BD0, 0x515BDC, 0x515C0C, 0x515C1C,
              0x515C40, 0x515C6C, 0x515CAC, 0x515CC8, 0x515CEC,
@@ -431,7 +431,9 @@ SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pa
                  'st11.pac', 'st12.pac', 'k_blanc0.pac', 'k_blanc1.pac', 'k_blanc2.pac',
                  # the ending and the credits (0x48FA40): PD2's end0 / staff_g / staff_p, DASH's
                  # staff2_g / staff2_p and the staff roll
-                 'end0.pac', 'staff_g.pac', 'staff_p.pac', 'staff2_g.pac', 'staff2_p.pac', 's_roll.pac')
+                 'end0.pac', 'staff_g.pac', 'staff_p.pac', 'staff2_g.pac', 'staff2_p.pac', 's_roll.pac',
+                 # the debrief's new items / recruits screens (kabe0) and DASH's hand-over (op2)
+                 'kabe0.pac', 'op2.pac')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
                    # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
                    # the game over, a single mission's end
@@ -513,7 +515,13 @@ def export_ui(game, out):
     for va, n in ((0x515358, 25), (0x515520, 9), (0x5155C8, 12)):
         raw = exe_va(exe, va, 18 * n)
         equip_regions.append([list(struct.unpack_from('<4iB', raw, 18 * i)) for i in range(n)])
-    json.dump({'frame': tiles, 'back': back, 'scroll': scroll, 'patterns': patterns,
+    # other screens' 16 window colours (0x487120's tables, B, G, R, pad): the debrief's
+    # kabe0 screens DS:0x518F48
+    pals = {}
+    for va in (0x518F48,):
+        raw = exe_va(exe, va, 64)
+        pals['%X' % va] = [[raw[4 * i + 2], raw[4 * i + 1], raw[4 * i]] for i in range(16)]
+    json.dump({'frame': tiles, 'back': back, 'scroll': scroll, 'patterns': patterns, 'palettes': pals,
                'sortie_regions': sortie_regions, 'equip_regions': equip_regions},
               open(os.path.join(out, 'ui.json'), 'w'))
     fs = {f.lower(): os.path.join(game, f) for f in os.listdir(game)}

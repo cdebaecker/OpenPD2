@@ -1,6 +1,6 @@
 extends SceneTree
 ## The debrief's screens (ui/debrief_view.gd) as pictures: godot --path engine/godot -s
-## tests/debrief_shot.gd -- pd2 out_prefix [ja|en|fr] [cards|credits]
+## tests/debrief_shot.gd -- pd2 out_prefix [ja|en|fr] [cards|credits|items N|recruits N|handover N]
 ## PD2 mission 1 withdrawn (its scenario hook clears it): the debrief runs; its first
 ## screens are saved as <prefix>_1.png (the picture), _2.png (its text), _3.png (the second
 ## text), _4.png (the results), each after a click; with "cards" the first score card
@@ -30,6 +30,30 @@ func _init() -> void:
 			await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_viewport().get_texture().get_image().save_png("%s_card.png" % args[1])
+		quit(0)
+		return
+	if args.size() > 3 and args[3] in ["items", "recruits", "handover"]:
+		# the new step's screens over kabe0.pac: the new items (machines 0-1, launchers 0-1,
+		# rounds 0-1) or the recruits (crews 1-4); args[4] clicks taken first
+		var v = load("res://ui/debrief_view.gd").new()
+		v.battle = b
+		v.screens = [["new_items", [[0, 1], [0, 1], [0, 1]]]] if args[3] == "items" else ([["recruits", [1, 2, 3, 4]]] if args[3] == "recruits" else [["handover", 0]])
+		b._win_root().add_child(v)
+		v.play()
+		var clicks := int(args[4]) if args.size() > 4 else 0
+		for k in clicks:
+			for i in 90:
+				await process_frame
+			for c in v.get_children():
+				if c.has_method("outside"):
+					if c._waiting:
+						c.outside(MOUSE_BUTTON_LEFT)
+					elif c.role == "debrief_list":
+						c.chosen.emit(-2)
+		for i in 90:
+			await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_viewport().get_texture().get_image().save_png("%s_%s%d.png" % [args[1], args[3], clicks])
 		quit(0)
 		return
 	if args.size() > 3 and args[3] == "credits":
