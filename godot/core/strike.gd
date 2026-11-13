@@ -53,6 +53,14 @@ class Hooks extends RefCounted:
 	func intercept_choice(t: int, best: int) -> int:
 		return -1
 
+	## The animations play (option 0x10 clear): a strike's (Action.anim_*)
+	var anims := false
+	var anim_rec: Array = []      # [kind, x, y] of the record (display)
+
+	## An animation player's frame (as AiHooks.anim_frame): true when a click skipped it.
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return false
+
 
 # --- the player's support request (cmd_support_request 0x4DF680, rules.support_request) ----
 
@@ -264,6 +272,11 @@ static func _occupant(w: Pd2World, x: int, y: int) -> int:
 
 ## 0x4E1A90: s's strike with slot `slot` at (x, y), over `pts` or the single hex.
 static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int, pts: Variant, hooks: Hooks, easy := false) -> int:
+	var anims := hooks.anims
+	var akind := w.launcher(w.launcher_id(s, slot), 9) >> 4
+	if anims:
+		hooks.anim_rec = [akind, w.pos(s).x, w.pos(s).y]   # (display)
+	var skipped := anims and Action.anim_play(w, rng, hooks, 0x40F730, x, y) >= 0
 	var wh := w.warhead(s, slot)
 	w.events.append(["grow", s, "ATTACK", 1])
 	Action.count(w, s, 4, true)
@@ -277,22 +290,34 @@ static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int,
 		var o := _occupant(w, tx, ty)
 		var laid := false
 		if wh == Action.SMOKE_WARHEAD:
+			if anims and not skipped:
+				skipped = Action.anim_hit(w, rng, hooks, akind, tx, ty)
 			if w.on_map(tx, ty):
 				w.F[tx + MAP * ty] |= 1
 			continue
 		if o == -1:
-			if w.on_map(tx, ty) and not w.campaign and wh == Action.MINE_WARHEAD and not Action.mine_at(w, tx, ty):
-				Action.lay_mine(w, tx, ty, side)
-				laid = true
+			if w.on_map(tx, ty):
+				if not w.campaign and wh == Action.MINE_WARHEAD:
+					if not Action.mine_at(w, tx, ty):
+						Action.lay_mine(w, tx, ty, side)
+						laid = true
+				elif anims and not skipped:
+					skipped = Action.anim_hit(w, rng, hooks, akind, tx, ty)
 		else:
-			var res := Fire.intercept(w, rng, s, slot, o, choice) if kind == Fire.MISSILE_KIND else Fire.NOT_STOPPED
+			var res := Fire.intercept(w, rng, s, slot, o, choice, hooks) if kind == Fire.MISSILE_KIND else Fire.NOT_STOPPED
 			var h := hit(w, rng, s, o, slot)
+			if anims and (res == Fire.DECOYED or (res == Fire.NOT_STOPPED and not h)):
+				Action.anim_miss(w, rng, hooks, akind, tx, ty)
 			if res == Fire.NOT_STOPPED and h:
+				if anims and not skipped:
+					skipped = Action.anim_hit(w, rng, hooks, akind, tx, ty)
 				Action.count(w, s, 6, true)
 				var dmg := Fire.fire_damage(w, rng, s, slot, o, 9, easy)
 				if dmg:
 					w.events.append(["grow", s, "ATTACK", 1])
 					if w.ub(o, 0xD) - dmg < 1:
+						if anims:
+							Action.anim_kill(w, rng, hooks, tx, ty)
 						Melee.kill_credit(w, s, o)
 					if Fire.apply_hit(w, rng, o, dmg, s, slot, easy) == "destroyed" and o != s:
 						Action.destroy(w, o)
@@ -301,9 +326,13 @@ static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int,
 		if not w.campaign and not laid and (wh < 3 or wh == Action.MINE_WARHEAD) and tx + MAP * ty >= 0 \
 				and Action.mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
+			if anims and w.on_map(tx, ty):
+				Action.anim_bomb(w, rng, hooks, tx, ty)
 			w.F[tx + MAP * ty] &= 0x3F
 			if o != -1 and w.unit_class(o) < 2:
 				var dmg2 := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+				if anims and w.ub(o, 0xD) - dmg2 < 1:
+					Action.anim_kill(w, rng, hooks, tx, ty)
 				if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
 					Action.destroy(w, o)
 		if w.campaign:

@@ -35,6 +35,14 @@ class Hooks extends RefCounted:
 	func discovered(u: int) -> int:
 		return 0
 
+	## The animations play (option 0x10 clear; rules.ItemHooks' default)
+	var anims := true
+	var anim_rec: Array = []      # [kind, x, y] of the record (display)
+
+	## An animation player's frame (as AiHooks.anim_frame): true when a click skipped it.
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return false
+
 
 ## The round's AP to use it (the pocket menu's "use" entry: ammo +7 low 5 bits).
 static func use_ap(w: Pd2World, u: int, p: int) -> int:
@@ -141,12 +149,18 @@ static func hit(w: Pd2World, rng: Pd2Random, t: int, dmg: int, u: int) -> int:
 static func throw(w: Pd2World, rng: Pd2Random, u: int, p: int, wh: int, x: int, y: int, pts: Variant, hooks: Hooks, easy := false) -> int:
 	var side := 0 if w.sb(u, 0x36) < 3 else 3
 	var self_hit := false
+	var anims := hooks.anims
+	if anims:
+		hooks.anim_rec = [4, w.pos(u).x, w.pos(u).y]      # (display: 0x40F590(-1, 2))
+		Action.anim_play(w, rng, hooks, 0x40F730, x, y)
 	var hexes: Array = pts if pts != null else [Vector2i(x, y)]
 	for q in hexes:
 		var tx: int = q.x
 		var ty: int = q.y
 		var laid := false
 		if wh == Action.SMOKE_WARHEAD:
+			if anims:
+				Action.anim_hit(w, rng, hooks, 4, tx, ty)
 			if w.on_map(tx, ty):
 				w.F[tx + MAP * ty] |= 1
 			continue
@@ -155,23 +169,32 @@ static func throw(w: Pd2World, rng: Pd2Random, u: int, p: int, wh: int, x: int, 
 			if not w.campaign and wh == Action.MINE_WARHEAD:
 				Action.lay_mine(w, tx, ty, side)
 				laid = true
+			elif anims:
+				Action.anim_hit(w, rng, hooks, 4, tx, ty)
 		else:
 			var h := 100 if wh == 8 else (0x62 if rng.r16(100) < 0x62 else 0)
 			if h == 0 or w.unit_class(o) > 1:
 				w.events.append(["grow", o, "DEF", 1])
 			else:
+				if anims:
+					Action.anim_hit(w, rng, hooks, 4, tx, ty)
 				var dmg := damage(w, rng, u, p, o, easy)
 				if w.ub(o, 0xD) - dmg < 1:
+					if anims:
+						Action.anim_kill(w, rng, hooks, tx, ty)
 					Melee.kill_credit(w, u, o)
 				if hit(w, rng, o, dmg, u) == 1:
 					self_hit = true
 		if not w.campaign and not laid and (wh < 3 or wh == Action.MINE_WARHEAD) and tx + MAP * ty >= 0 \
 				and Action.mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
-			Turn.explosion_clear(w, tx, ty)
+			if anims:
+				Action.anim_bomb(w, rng, hooks, tx, ty)
 			w.F[tx + MAP * ty] &= 0x3F
 			if o != -1 and w.unit_class(o) < 3:
 				var dmg2 := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+				if anims and w.ub(o, 0xD) - dmg2 < 1:
+					Action.anim_kill(w, rng, hooks, tx, ty)
 				if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
 					Action.destroy(w, o)
 	if self_hit:

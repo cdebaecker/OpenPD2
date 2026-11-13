@@ -72,6 +72,7 @@ var last_ai_result := 0
 
 var cam: Camera2D
 var overlay: Node2D
+var anime_view: AnimeView
 var info: Label
 var log_box: RichTextLabel
 var hud_layer: CanvasLayer
@@ -84,6 +85,9 @@ class SandboxHooks extends AiTurnHooks:
 	## melee, unit removal, mine blasts.
 	var battle
 	var flag := 0
+
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
 
 	func progress_reset() -> void:
 		battle.call_deferred("_think", false)
@@ -261,6 +265,10 @@ func _ready() -> void:
 	overlay = Node2D.new()
 	overlay.draw.connect(_draw_overlay)
 	add_child(overlay)
+	anime_view = AnimeView.new()                 # the attacks' animations (option 0x10)
+	anime_view.battle = self
+	anime_view.load_pack(campaign)
+	add_child(anime_view)
 	cam = Camera2D.new()
 	cam.zoom = Vector2(0.5, 0.5)
 	cam.limit_left = 0
@@ -286,6 +294,10 @@ func _scene_setup() -> void:
 	overlay = Node2D.new()
 	overlay.draw.connect(_draw_overlay)
 	add_child(overlay)
+	anime_view = AnimeView.new()                 # the attacks' animations (option 0x10)
+	anime_view.battle = self
+	anime_view.load_pack(campaign)
+	add_child(anime_view)
 	cam = Camera2D.new()
 	cam.zoom = Vector2(0.5, 0.5)
 	cam.limit_left = 0
@@ -5126,6 +5138,69 @@ func open_select(title: String, labels: Array, cancel: bool) -> GameWindow:
 	return gw
 
 
+# --- the attacks' animations (option 0x10 clear; ui/anime_view.gd) -------------------
+
+var anim_sem := Semaphore.new()
+var anim_skip := false
+var anim_click := false          # a click since the player's last frame (ui_wait's 10 at the next wait)
+var anim_listen := false
+
+
+func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Array) -> bool:
+	## an animation player's frame i (the rules' hooks): its wait, then the frame; true when
+	## a click came during the wait. Without a player (auto_react, headless, the main
+	## thread) nothing is shown or waited and no click comes. 0x40F730 (the shooter's,
+	## not read) is not drawn.
+	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return false
+	if not AnimeView.PLAYERS.has(player) or anime_view == null:
+		return false
+	call_deferred("_anim_step", player, x, y, i, dy, dx, rec)
+	anim_sem.wait()
+	return anim_skip
+
+
+func anim_player(player: int, x: int, y: int) -> bool:
+	## a whole player (the bombs' 0x417410): true when a click skipped it
+	var spec: Dictionary = AnimeView.PLAYERS.get(player, {})
+	for i in int(spec.get("frames", 0)):
+		if anim_frame(player, x, y, i, 0, 0, []):
+			return true
+	return false
+
+
+func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Array) -> void:
+	var spec: Dictionary = AnimeView.PLAYERS[player]
+	if i == 0:
+		anim_click = false
+	anim_listen = true
+	await get_tree().create_timer(int(spec.ms) / 1000.0).timeout
+	if anim_click:
+		anime_view.clear()
+		anim_skip = true
+		anim_click = false
+		anim_listen = false
+	else:
+		anim_skip = false
+		if i < int(spec.frames) - 1:
+			anime_view.show_frame(player, rec, x, y, i, dy, dx)
+		else:
+			anime_view.clear()              # (0x41F680 restores the map after the loop)
+			anim_listen = false
+	anim_sem.post()
+
+
+func _input(ev: InputEvent) -> void:
+	if anim_listen and ev is InputEventMouseButton and ev.pressed:
+		anim_click = true
+		get_viewport().set_input_as_handled()
+
+
+func _process(_delta: float) -> void:
+	if hooks:
+		hooks.anims = options & 0x10 == 0     # (DS:0x551D29 bit 0x10: the system menu's アニメ)
+
+
 func _headless() -> bool:
 	return DisplayServer.get_name() == "headless"
 
@@ -5171,6 +5246,9 @@ func _next_line() -> void:
 # --- the item command (the machine status window's "use", 0x4279F0 -> 0x4286D0 -> 0x4ECC60)
 
 class BattleItemHooks extends Item.Hooks:
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
+
 	## the throw's question was asked on the main thread before (answer 0 = yes)
 	var battle
 
@@ -5240,6 +5318,7 @@ func _cmd_item_click(h: Vector2i) -> void:
 func _do_item(u: int, p: int, ap: int, h: Vector2i) -> void:
 	var ih := BattleItemHooks.new()
 	ih.battle = self
+	ih.anims = options & 0x10 == 0
 	var before := {}
 	for q in w.n_units:
 		before[q] = [w.ub(q, 0xD), w.ub(q, 0) & 0x10]
@@ -5866,8 +5945,9 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return 0
 
 	func blast(x: int, y: int) -> int:
+		## 0x417410 (anime_bomb): 0x80000 when a click skipped it
 		battle.say(battle.uif("UI_BLAST", [x, y]))
-		return 0
+		return 0x80000 if battle.anim_player(0x417410, x, y) else 0
 
 	## DASH script 13's talk windows (0x48BF90 / 0x48C260 with a portrait and a text): the
 	## message log; the base-screen lines of 0x452200 (MES.PCK), the data window's text
@@ -5968,6 +6048,9 @@ class BattleFlightHooks extends Flight.Hooks:
 
 
 class BattleStrikeHooks extends Strike.Hooks:
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
+
 	## The strike executor (0x4E37A0) in the battle: a striker flying in draws the reaction
 	## fire of the live hooks (flag 10), the radio goes through the flight engine's, the
 	## lines and questions to the message log and the question box. The pickers (0x4E3230 /
@@ -6116,6 +6199,7 @@ func _strikes(side: int) -> int:
 	sh.battle = self
 	sh.w = w
 	sh.rng = rng
+	sh.anims = options & 0x10 == 0
 	var before := []
 	for k in w.n_units:
 		before.append(w.ub(k, 0) & 1)
@@ -6155,8 +6239,12 @@ class BattleBombHooks extends Turn.BombHooks:
 	var battle
 
 	func explosion(x: int, y: int) -> bool:
+		## anime_bomb (0x417410): its frames; true when a click skipped it
 		battle.say("explosion at %d, %d" % [x, y])
-		return false
+		return battle.anim_player(0x417410, x, y)
+
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return battle.anim_frame(player, x, y, i, dy, dx, [])
 
 	func mine_blast(x: int, y: int) -> void:
 		battle.say("mine explodes at %d, %d" % [x, y])

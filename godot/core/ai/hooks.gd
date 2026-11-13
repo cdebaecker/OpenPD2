@@ -29,6 +29,19 @@ func react(u: int) -> int:                # 0x472410 / 0x472920
 	return 0
 
 
+## The attacks' animations play (option DS:0x551D29 bit 0x10 clear, the map window up).
+var anims := false
+
+## The record's kind and the shooter's hex for the drawing ([kind, x, y]; set by the shots)
+var anim_rec: Array = []
+
+
+## An animation player's frame i at (x, y), its jitter dy rows / dx x 8 px: waits and shows
+## it; true when a click skipped it there (rules.FireHooks.anim_frame).
+func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+	return false
+
+
 func mine_blast(x: int, y: int) -> void:
 	pass
 

@@ -88,6 +88,11 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 	var kind := w.launcher(w.launcher_id(s, slot), 8) >> 5
 	var shooter_dies := false
 	var choice := Callable(hooks, "intercept_choice")
+	var anims := hooks.anims
+	var akind := w.launcher(w.launcher_id(s, slot), 9) >> 4       # 0x40F590: the record's kind
+	if anims:
+		hooks.anim_rec = [akind, sp.x, sp.y]             # (display: the direction players' sprite)
+	var skipped := anims and anim_play(w, rng, hooks, 0x40F730) >= 0   # the shooter's (0x40F730)
 	for p in pts:
 		var tx: int = p.x
 		var ty: int = p.y
@@ -95,6 +100,8 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 			continue
 		var blocked := 0
 		if wh == SMOKE_WARHEAD:
+			if anims and not skipped:
+				skipped = anim_hit(w, rng, hooks, akind, tx, ty)
 			if w.on_map(tx, ty):
 				w.F[tx + MAP * ty] |= 1
 			continue
@@ -105,7 +112,7 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 					(w.unit_class(o) < 2 if aa else w.unit_class(o) >= 2)
 			if not skip:
 				if kind == 2 and not reaction:
-					blocked = Fire.intercept(w, rng, s, slot, o, choice)
+					blocked = Fire.intercept(w, rng, s, slot, o, choice, hooks)
 				else:
 					blocked = 1
 				var terms := Fire.hit_terms(w, s, o, slot, mode, move)
@@ -113,12 +120,18 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 					w.fault = "division by zero (weapon range 0)"
 					return 0
 				var hit := Fire.roll_hit(rng, terms)
+				if anims and (blocked == 0 or (blocked == 1 and not hit)):
+					anim_miss(w, rng, hooks, akind, tx, ty)
 				if blocked == 1 and hit:
+					if anims and not skipped:
+						skipped = anim_hit(w, rng, hooks, akind, tx, ty)
 					count(w, s, 6, true)
 					var dmg := Fire.fire_damage(w, rng, s, slot, o, mode, easy)
 					if dmg and FIRE_GROW.has(mode):
 						w.events.append(["grow", s, FIRE_GROW[mode], 1])
 					if w.ub(o, 0xD) - dmg <= 0:
+						if anims:
+							anim_kill(w, rng, hooks, tx, ty)
 						var i := W.s8(w.ucrew(s, 15))
 						if i >= 0:
 							var col: int = KILL_COLUMN.get(w.umachine(o, 0) & 15, 3)
@@ -132,20 +145,104 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 					blocked = 0
 				else:
 					w.events.append(["grow", o, "DEF", 1])
-		elif kind != 0 and kind != 3 and w.on_map(tx, ty) and not w.campaign and wh == MINE_WARHEAD:
-			if not mine_at(w, tx, ty):
-				lay_mine(w, tx, ty, side)
-				blocked = 1
+		elif kind != 0 and kind != 3 and w.on_map(tx, ty):
+			if not w.campaign and wh == MINE_WARHEAD:
+				if not mine_at(w, tx, ty):
+					lay_mine(w, tx, ty, side)
+					blocked = 1
+			elif anims and not skipped:
+				skipped = anim_hit(w, rng, hooks, akind, tx, ty)
 		if not w.campaign and not blocked and (wh < 3 or wh == MINE_WARHEAD) and mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
+			if anims and w.on_map(tx, ty):
+				anim_bomb(w, rng, hooks, tx, ty)        # 0x473330 -> 0x417410
 			w.F[tx + MAP * ty] &= 0x3F
 			if o != -1 and w.unit_class(o) < 2:
 				var dmg2 := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+				if anims and w.ub(o, 0xD) - dmg2 < 1:
+					anim_kill(w, rng, hooks, tx, ty)
 				if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
 					hooks.destroy(o)
 	if shooter_dies:
 		hooks.destroy(s)
 	return 0
+
+
+# --- the attacks' animations (option 0x10 clear): their effects (rules.anim_*, RULES.md 5.25)
+
+const ANIM_TABLE := 0x512F40       # DS: 4 bytes per record kind (launcher +9 >> 4)
+const ANIM_FRAMES := {0x40F730: 1, 0x4200D0: 6, 0x4206D0: 12, 0x4203D0: 6, 0x4209D0: 12, 0x419BE0: 6,
+		0x419E20: 6, 0x4180C0: 8, 0x420CD0: 8, 0x417410: 14, 0x41CA70: 8}
+const ANIM_JITTER := [0x4200D0, 0x4206D0, 0x4203D0, 0x4209D0]   # draw random(12) / random(3) a frame
+
+
+## One player (rules._anim): frame by frame, the jitter drawn first for ANIM_JITTER's, then
+## hooks.anim_frame (true: a click skipped there). The frame skipped at, or -1.
+static func anim_play(w: Pd2World, rng: Pd2Random, hooks: Object, player: int, x := -1, y := -1) -> int:
+	for i in int(ANIM_FRAMES[player]):
+		var dy := 0
+		var dx := 0
+		if player in ANIM_JITTER:
+			dy = rng.r16(12)
+			dx = rng.r16(3)
+		if hooks.call("anim_frame", player, x, y, i, dy, dx):
+			return i
+	return -1
+
+
+static func _anim_ok(w: Pd2World, akind: int) -> bool:
+	if akind < 0 or akind > 9:
+		w.fault = "an animation kind past the table (launcher +9 >> 4 above 9)"
+		return false
+	return true
+
+
+## 0x4101A0: true if skipped.
+static func anim_hit(w: Pd2World, rng: Pd2Random, hooks: Object, akind: int, x: int, y: int) -> bool:
+	if not _anim_ok(w, akind) or w.mem8(ANIM_TABLE + 4 * akind + 2) == 0xFF:
+		return false
+	if akind == 0 or akind == 1:
+		if Strike._occupant(w, x, y) == -1:
+			return false
+		return anim_play(w, rng, hooks, 0x4200D0 if akind == 0 else 0x4206D0, x, y) >= 0
+	return anim_play(w, rng, hooks, 0x419BE0 if akind < 9 else 0x4180C0, x, y) >= 0
+
+
+## 0x4102A0 (its skip is not looked at).
+static func anim_miss(w: Pd2World, rng: Pd2Random, hooks: Object, akind: int, x: int, y: int) -> void:
+	if not _anim_ok(w, akind) or w.mem8(ANIM_TABLE + 4 * akind + 3) == 0xFF:
+		return
+	if akind in [0, 1, 2, 5]:
+		if Strike._occupant(w, x, y) != -1:
+			anim_play(w, rng, hooks, 0x4203D0 if akind == 0 else 0x4209D0, x, y)
+	else:
+		anim_play(w, rng, hooks, 0x419E20 if akind < 9 else 0x4180C0, x, y)
+
+
+## 0x4103A0 with a unit on (x, y): 0x420CD0's frames, then clear_hex of its hex (skipped or not).
+static func anim_kill(w: Pd2World, rng: Pd2Random, hooks: Object, x: int, y: int) -> void:
+	var o := Strike._occupant(w, x, y)
+	if o == -1:
+		return
+	anim_play(w, rng, hooks, 0x420CD0, x, y)
+	var p := w.pos(o)
+	anim_clear_hex(w, p.x, p.y)
+
+
+## anime_bomb 0x417410 (from the mine blast 0x473330): its frames, then a unit there at
+## condition 0 has the hex emptied (skipped or not).
+static func anim_bomb(w: Pd2World, rng: Pd2Random, hooks: Object, x: int, y: int) -> void:
+	anim_play(w, rng, hooks, 0x417410, x, y)
+	var o := Strike._occupant(w, x, y)
+	if o != -1 and w.ub(o, 0xD) == 0:
+		anim_clear_hex(w, x, y)
+
+
+## clear_hex (0x46ED80) less its redraw: on the map or its edge rows / columns.
+static func anim_clear_hex(w: Pd2World, x: int, y: int) -> void:
+	if w.on_map(x, y) or x == 0 or y == 0 or x == 0x47 or y == 0x47 or (y & 1 and x == 0x46):
+		if x + MAP * y >= 0 and x + MAP * y < MAP * MAP:
+			w.O[x + MAP * y] = 0
 
 
 ## 0x415D50: the AI's fire command at (x, y).
@@ -331,6 +428,9 @@ static func step_mine_blast(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int,
 	if not w.on_map(x, y):
 		return 0
 	hooks.mine_blast(x, y)
+	if hooks.anims:                      # (rules.step_mine_blast: the start, anime_bomb, the kill's)
+		anim_play(w, rng, hooks, 0x40F730, x, y)
+		anim_bomb(w, rng, hooks, x, y)
 	var res := 0
 	var dmg := Fire.fire_damage(w, rng, -1, 12, u, 4, easy)
 	if mmode == 0:
@@ -339,6 +439,8 @@ static func step_mine_blast(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int,
 		Ai.spend_ap(w, u, 2)
 	if w.ub(u, 0xD) - dmg <= 0:
 		res = 1
+		if hooks.anims:
+			anim_kill(w, rng, hooks, x, y)
 	if dmg and Fire.apply_hit(w, rng, u, dmg, -1, 12, easy) == "destroyed":
 		hooks.destroy(u)
 	toggle_mine(w, x, y, u)

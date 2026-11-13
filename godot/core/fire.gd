@@ -209,7 +209,10 @@ static func intercept_candidates(w: Pd2World, t: int) -> int:
 
 ## Target t reacts to a missile from s (0x4149F0). player_choice(t, best) -> slot or -1
 ## stands in for the player's prompt. Returns INTERCEPTED, DECOYED or NOT_STOPPED.
-static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, player_choice := Callable()) -> int:
+## With hooks.anims: the interceptor's shot (0x40F730) before the rolls and a shot-down
+## missile's explosion (0x41CA70), display only (rules.intercept).
+static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, player_choice := Callable(), hooks: Object = null) -> int:
+	var anims: bool = hooks != null and hooks.get("anims") == true
 	var result := NOT_STOPPED
 	var chosen := -1
 	if w.unit_class(t) == 0:
@@ -227,12 +230,17 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 		var lid := w.launcher_id(t, chosen)
 		var p_track := maxi(15, mini(100, w.launcher(lid, 5) + sq))
 		var p_kill := maxi(15, mini(100, sq + ((w.launcher(lid, 6) + w.ammo(w.ammo_id(t, chosen), 2)) & 0xFF)))
+		var tp := w.pos(t)
+		if anims:
+			Action.anim_play(w, rng, hooks, 0x40F730, tp.x, tp.y)
 		if w.is_ace(t) and rng.r16(100) < 50:
 			p_track += 30
 			p_kill += 30
 		if rng.r16(100) < p_track and rng.r16(100) < p_kill:
 			result = INTERCEPTED
 			shot_down = true
+			if anims:
+				Action.anim_play(w, rng, hooks, 0x41CA70, tp.x, tp.y)
 			w.events.append(["grow", t, "AA", 1])
 	if not shot_down:
 		var decoy := -1

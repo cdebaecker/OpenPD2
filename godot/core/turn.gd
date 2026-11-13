@@ -176,6 +176,10 @@ class BombHooks extends RefCounted:
 	func bomb_hook(i: int) -> int:
 		return 0
 
+	## A destroyed unit's animation (0x4103A0 -> 0x420CD0) frame i: true when skipped.
+	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
+		return false
+
 
 ## The end of the explosion animation 0x417410 (unless option bit 0x10): a unit at
 ## condition 0 on the hex has the hex emptied.
@@ -187,12 +191,26 @@ static func explosion_clear(w: Pd2World, x: int, y: int, options := 0) -> void:
 		Action.clear_hex(w, x, y)
 
 
+## 0x4103A0 -> 0x420CD0 at (x, y) (Action.anim_kill): with a unit there, its frames, then its
+## hex emptied (skipped or not).
+static func _kill_anim(w: Pd2World, hooks: BombHooks, x: int, y: int) -> void:
+	var o := w.O[x + 72 * y] - 1 if x >= 0 and x < 72 and y >= 0 and y < 72 else -1
+	if o == -1:
+		return
+	for i in 8:
+		if hooks.anim_frame(0x420CD0, x, y, i, 0, 0):
+			break
+	var p := w.pos(o)
+	Action.anim_clear_hex(w, p.x, p.y)
+
+
 ## 0x480280: the 15 timed explosives count down; one at 0 goes off over its hex and the
 ## six around it (rules.timed_explosives). options: DS:0x551D29.
 static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = null, options := 0) -> int:
 	if hooks == null:
 		hooks = BombHooks.new()
 	var easy := options & 2 != 0
+	var anims := options & 0x10 == 0     # 0x4103A0 for a unit the blast destroys (rules.timed_explosives)
 	var skip := false
 	var b := w.bombs
 	for i in 15:
@@ -207,6 +225,7 @@ static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = nul
 			continue
 		if not skip:
 			skip = hooks.start()
+		var tgt := Vector2i(x, y)
 		var hx := x
 		var hy := y
 		for j in 7:
@@ -217,6 +236,9 @@ static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = nul
 				var o := w.O[hx + 72 * hy] - 1
 				if o != -1:
 					var dmg := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+					if anims and w.ub(o, 0xD) - dmg < 1:
+						tgt = Vector2i(hx, hy)
+						_kill_anim(w, hooks, hx, hy)
 					if dmg and Fire.apply_hit(w, rng, o, dmg, -1, 12, easy) == "destroyed":
 						Action.destroy(w, o)
 				if not w.campaign and Action.mine_at(w, hx, hy):
@@ -226,6 +248,8 @@ static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = nul
 					w.F[hx + 72 * hy] &= 0x3F
 					if o != -1 and w.active(o) and w.unit_class(o) < 2:
 						var dmg2 := Fire.fire_damage(w, rng, -1, 12, o, 4, easy)
+						if anims and w.ub(o, 0xD) - dmg2 < 1:
+							_kill_anim(w, hooks, tgt.x, tgt.y)    # (the record's last target)
 						if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
 							Action.destroy(w, o)
 			if j < 6:

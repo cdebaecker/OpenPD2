@@ -3583,6 +3583,58 @@ flight's start, §5.9). Until its close button:
 Entry 1, the height map (0x43A900), and 指令書 (region 15: the mission's WMES 0x1A2 in
 0x43BA20's window) only show things.
 
+### 5.25 The animations' effects on the rules (option 0x10): Emulated
+
+With the animations on (DS:0x551D29 bit 0x10 clear, the game's default) the attacks'
+animation players run inside the rules, and three of their effects change the game.
+`rules.FireHooks.anims` / `anim_frame` (and the same on `StepHooks`, `BombHooks`), GDScript
+`AiHooks.anims` / `anim_frame`, `Action.anim_*`. Checked by `verify_fire_anims` (282 / 282
+at seeds 1 and 9, 271 / 271 at seed 5), `verify_bombs` (300 / 300) and
+`verify_mine_step_anims` (300 / 300), with every frame's wait scripted (a click or not).
+
+**The record.** Each shot builds one (0x40F590): its kind is the launcher's +9 high nibble
+(0–9 in the data), and a 4-byte row of DS:0x512F40 by kind gives the ANIME.PCK entries of
+the hit (+3) and the miss (+4); the kill's is 7, a bomb's 6.
+
+**Random numbers.** The direct-fire and missile players draw `random(12)` then `random(3)`
+before each frame's wait (the sprite's jitter): kind 0 hits (0x4200D0) and misses
+(0x4203D0) 6 frames, kind 1 hits (0x4206D0) and kind 1 / 2 / 5 misses (0x4209D0) 12 frames.
+They play only with a unit on the hex. So with the animations on, a hit's draws fall
+between the hit roll and the damage roll.
+- A click during a frame's wait ends the player there (its draws made). A skipped
+  shooter's animation (0x40F730) or hit animation (0x4101A0) skips the later hits'
+  animations of that shot; misses' (0x4102A0) and kills' (0x4103A0) still play.
+
+**A kill empties the hex first.** When the damage would destroy the target (condition
+less the damage below 1), the kill's animation (0x4103A0 → 0x420CD0, 8 frames) runs
+before the kill credit and apply_hit. At its end, click or not, the unit's hex is emptied
+(clear_hex). The same happens in the fire's mine blast, the mine step (0x474230) and the
+timed explosives (0x480280). The explosives' mine branch plays it at the record's last
+target hex (the bomb's own, or the last hex of this bomb where a unit was destroyed).
+
+**anime_bomb** (0x417410, 14 frames): a mine set off by a shot (0x473330) or under a mover
+plays it before its damage. At its end, click or not, a unit there at condition 0 loses
+its hex (as the explosives' explosion already did, §5.15).
+
+**Display only:** the shooter's animation (0x40F730: its 8 players are not read), the
+interception's shot and explosion (0x40F730, 0x41CA70), the other hit / miss players
+(0x419BE0, 0x419E20, 0x4180C0): frames and waits, no draws.
+
+**The same in the strike and the item throw.**
+- The strike (0x4E1A90, `strike_fire`; `verify_strike_anims` 300 / 300) works as the fire
+  resolution, except that a kill's animation plays only when the damage is not 0.
+- The item throw (0x4ED380) records kind 4 with no miss entry (0x40F590(−1, 2)), so its
+  hits play 0x419BE0 (no draws), misses play nothing, and every skip is ignored. Its kill's
+  animation (hex emptied before the kill credit) and the mine's anime_bomb play with the
+  animations only. Before, the port emptied the mine's wreck even with option 0x10 set;
+  the game does not. `ItemHooks.anims` is on by default, as the item checks always ran
+  with the option clear; `verify_items` now runs the real players.
+- Mission 13's two uses (its explosions; unit 0x2F shooting 0x2E) need nothing more. The
+  shot is animation kind 5 (no draws), and its kill's clear comes just before the
+  unit's own removal.
+- 0x4E5AA0 (another copy of the strike's fire) is dead code. Its only caller, 0x4E4CB0,
+  is reached by a thunk (0x4013BB) that nothing calls, and no pointer to either is stored.
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |

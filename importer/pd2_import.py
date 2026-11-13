@@ -473,6 +473,9 @@ def export_images(game, out):
         fs = {f.lower(): os.path.join(folder, f) for f in os.listdir(folder)}
         if 'koma.dat' in fs:
             open(os.path.join(out, camp, 'koma.dat'), 'wb').write(open(fs['koma.dat'], 'rb').read())
+        # the attacks' and blasts' animations (0x480A90 reads them; ui/anime_view.gd)
+        if 'anime.pck' in fs:
+            open(os.path.join(out, camp, 'anime.pck'), 'wb').write(open(fs['anime.pck'], 'rb').read())
 
 
 # The game's windows (ui_window_create 0x4528B0, drawn by 0x4F0DB0 / 0x4F0C00): the frame's
