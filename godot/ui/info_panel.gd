@@ -52,6 +52,26 @@ static func make(b) -> InfoPanel:
 	return p
 
 
+var think_x := 0x58             # DS:0x523410: ENEMY THINK's bar's right end
+
+
+func think_reset() -> void:
+	## 0x42B2A0: (0x58, 0xD8)-(0xBF, 0xDD) cleared (mode 1: colour 0), the bar from 0x58
+	think_x = 0x58
+	_rect(0x58, 0xD8, 0xBF, 0xDD, 0, 0, 2)
+	queue_redraw()
+
+
+func think_tick() -> void:
+	## ai_progress (0x42B360): past 0xBE the bar starts again; then one pixel longer,
+	## (0x58, 0xD8)-(x, 0xDD) in colour 4
+	if think_x > 0xBE:
+		think_reset()
+	think_x += 1
+	_rect(0x58, 0xD8, think_x, 0xDD, 0, 4, 2)
+	queue_redraw()
+
+
 func refresh() -> void:
 	## the whole panel again: the picture, the name, the time and the unit
 	_buf.fill(0)

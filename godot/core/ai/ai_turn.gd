@@ -159,12 +159,19 @@ static func run(w: Pd2World, rng: Pd2Random, hooks: AiTurnHooks = null, alert :=
 		hooks = AiTurnHooks.new(w)
 	if hooks.rng == null:
 		hooks.rng = rng
+	# player_sight_map (0x42B440): 0x42B2A0, then ai_progress per own active unit (display)
+	hooks.progress_reset()
+	for k in mini(0x28, w.n_units):
+		if w.active(k) and w.sb(k, 0x36) == 0:       # (is_enemy == 0)
+			hooks.progress()
 	var sight := player_sight_map(w)
 	refresh_strikes(w, 3)
+	hooks.progress_reset()                   # 0x42B2A0 again
 	var esi := 0                # the loop's ESI (0x42AB03); ai_progress pushes it into order 10's move result
 	for order in AiBehaviours.ORDER_PRIORITY:
 		for k in w.n_units:
 			if w.sb(k, 0x36) > 2 and w.active(k):
+				hooks.progress()                 # ai_progress, before each unit of each pass
 				var stale: Variant = esi
 				if alert:
 					esi = order         # 0x42ABD9

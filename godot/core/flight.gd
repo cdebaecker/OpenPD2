@@ -116,6 +116,74 @@ static func group_alive(w: Pd2World, g: int) -> int:
 	return n
 
 
+# --- マップ's area map (0x43A3E0 -> 0x43A570, rules.area_map) ------------------------
+
+const MAP_MENU_LABELS := [0x510560, 0x510570]                 # エリアマップ, 高低差マップ
+const HEIGHT_MENU_LABELS := [0x510580, 0x510588, 0x510590, 0x510598]
+
+
+## The area map's windows (rules.AreaMapHooks; with the flight window's).
+class AreaMapHooks extends Hooks:
+	## the flight window's regions: a status list row 0-19, 20 close
+	func region() -> int:
+		return 20
+
+	## 0x440670 from the group's cell: Vector2i of a cell area_map_point_ok takes, or null
+	func point(g: int, x: int, y: int) -> Variant:
+		return null
+
+	## DS:0x5146F0 with 実行 / 中止: 0 for 実行
+	func confirm(g: int, x: int, y: int) -> int:
+		return 1
+
+
+## 0x43A570's test for the group row g clicked.
+static func area_map_group_ok(w: Pd2World, g: int) -> bool:
+	if gb(w, g, 22) == 0xFF or not group_alive(w, g):
+		return false
+	var f := gb(w, g, 2)
+	if f & 0x30 != 0x20 or f & 0xC0 or f & 0xE == 2:
+		return false
+	for i in 16:
+		var k := gb(w, g, 6 + i)
+		if k != 0xFF and ub(w, k, 6) != 0 and ub(w, k, 6) != 3:
+			return false
+	return true
+
+
+## 0x440670's cells: 0-14 both, not the fire point (DS:0x50AD95 / 0x50AD97, signed words).
+static func area_map_point_ok(w: Pd2World, x: int, y: int) -> bool:
+	return x >= 0 and x < 15 and y >= 0 and y < 15 			and not (x == s16(w.ds16(0x50AD95)) and y == s16(w.ds16(0x50AD97)))
+
+
+## マップ entry 0: [[g, x, y]] of the groups retargeted (RULES.md 5.24).
+static func area_map(w: Pd2World, hooks: AreaMapHooks) -> Array:
+	var out := []
+	if grid_init(w, hooks, 1) in [0x10000, 0x20000, 0x40000]:   # the window opens (0x43E510(1))
+		return out
+	while true:
+		var r := hooks.region()
+		if r == 20:
+			return out
+		if r < 0 or r >= 20 or not area_map_group_ok(w, r):
+			continue
+		var gx := s8(gb(w, r, 22))
+		var gy := s8(gb(w, r, 23))
+		var p: Variant = hooks.point(r, gx, gy)
+		if p == null:
+			continue
+		if not area_map_point_ok(w, p.x, p.y):
+			w.fault = "area_map: a cell 0x440670 does not take"
+			return out
+		if p.x == gx and p.y == gy:
+			continue
+		if hooks.confirm(r, p.x, p.y) == 0:
+			Ai.group_retarget(w, r, p.x, p.y)
+			setgb(w, r, 2, (gb(w, r, 2) & 0xDF) | 0x10)
+			out.append([r, p.x, p.y])
+	return out
+
+
 ## 0x441FB0: OR bits into the flight grid at (x, y), both in 0-14.
 static func grid_mark(w: Pd2World, x: int, y: int, bits: int) -> void:
 	if x >= 0 and x < 15 and y >= 0 and y < 15:

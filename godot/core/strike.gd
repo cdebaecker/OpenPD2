@@ -54,6 +54,163 @@ class Hooks extends RefCounted:
 		return -1
 
 
+# --- the player's support request (cmd_support_request 0x4DF680, rules.support_request) ----
+
+const SUPPORT_STATE_TEXTS := [0x51F3B8, 0x51F3C0, 0x51F3C8, 0x51F3D0]   # SHIFT, BUSY, SUPPORT, STAND BY
+
+
+## The support request's windows (rules.SupportHooks).
+class SupportHooks extends RefCounted:
+	## a message line (0x1C3: nobody can support)
+	func line(msg: int) -> void:
+		pass
+
+	## the unit picker (0x4DFE70's list): an index of a row not of state 1, or -2
+	func pick(rows: Array) -> int:
+		return -2
+
+	## ui_prompt_at_cursor (0x1C2): 0 for its first choice
+	func prompt(msg: int) -> int:
+		return 1
+
+	## the weapon picker 0x4E0450(k, g, 0): a slot, or -2
+	func slot(k: int, g: int) -> int:
+		return -2
+
+	## ui_map_click mode 2: Vector2i of a hex, or null (a right click)
+	func click(k: int, s: int, kind: int, radius: int) -> Variant:
+		return null
+
+	## ui_message_box (0x201 / 0x202): 1 for yes
+	func box(msg: int) -> int:
+		return 0
+
+
+## 12 AP, 6 with crew +8 bit 2.
+static func support_cost(w: Pd2World, u: int) -> int:
+	return 6 if (w.ucrew(u, 8) >> 2) & 1 else 12
+
+
+static func _ubyte(w: Pd2World, k: int, f: int) -> int:
+	## units[k] + f as the game reads it (k = -1: the 55 bytes before the table)
+	return w.mem8(0x506C93 + 55 * k + f)
+
+
+## 0x4DFE70's rows: [unit, state (0 may be picked, 1 refused, 2 asks 0x1C2), the state's
+## text address, its colour] for the members of groups 0-19 (rules.support_units).
+static func support_units(w: Pd2World) -> Array:
+	var out := []
+	for g in 20:
+		if gb(w, g, 22) == 0xFF or gb(w, g, 2) & 0x30 != 0x20:
+			continue
+		var t := gb(w, g, 33) & 0xF0
+		if t != 0x30 and t != 0x40 and t != 0x50:
+			continue
+		var other := 0
+		if t != 0x50:
+			for j in range(20, 64):
+				var tj := gb(w, j, 33) & 0xF0
+				if gb(w, j, 22) != 0xFF and (tj == 0x30 or tj == 0x40) 						and gb(w, j, 22) == gb(w, g, 22) and gb(w, j, 23) == gb(w, g, 23):
+					other = j
+		for i in 16:
+			var k := gb(w, g, 6 + i)
+			if k == 0xFF or _ubyte(w, k, 0) & 1:
+				continue
+			var fl := gb(w, g, 2) & 0xC0
+			var row: Array
+			if fl == 0:
+				if other:
+					row = [k, 1, SUPPORT_STATE_TEXTS[1], 0x4F]
+				elif _ubyte(w, k, 6) == 1 or _ubyte(w, k, 6) == 2:
+					row = [k, 1, SUPPORT_STATE_TEXTS[2], 0x4F]
+				else:
+					row = [k, 0, SUPPORT_STATE_TEXTS[3], 0xFF]
+			elif fl == 0x40:
+				row = [k, 2, SUPPORT_STATE_TEXTS[0], 0xFF] if t == 0x50 else [k, 1, SUPPORT_STATE_TEXTS[0], 0x4F]
+			else:
+				row = [k, 1, SUPPORT_STATE_TEXTS[1], 0x4F]
+			out.append(row)
+	return out
+
+
+static func _active_any(w: Pd2World, k: int) -> bool:
+	var f := _ubyte(w, k, 0)
+	return w.on_map(Pd2World.s8(_ubyte(w, k, 9)), Pd2World.s8(_ubyte(w, k, 10))) and f & 8 != 0 			and _ubyte(w, k, 0xD) != 0 and f & 1 == 0 and f & 4 != 0
+
+
+## cmd_support_request (0x4DF680) for unit u: "ap" when short of support_cost, else the
+## orders given [[member, slot, x, y]] (rules.support_request; RULES.md 5.24).
+static func support_request(w: Pd2World, u: int, hooks: SupportHooks) -> Variant:
+	var cost := support_cost(w, u)
+	if w.sb(u, 0xE) < cost:
+		return "ap"
+	var orders := []
+	while true:
+		var rows := support_units(w)
+		if rows.is_empty():
+			hooks.line(0x1C3)
+			return orders
+		var i := hooks.pick(rows)
+		if i == -2:
+			return orders
+		var k: int = rows[i][0]
+		var st: int = rows[i][1]
+		if st == 1:
+			w.fault = "support_request: a refused row picked"
+			return orders
+		var g := Ai.unit_group(w, k)
+		if g < 0:
+			w.fault = "support_request: a member outside any group (the game writes groups[-1])"
+			return orders
+		var go := st == 0
+		if st == 2 and hooks.prompt(0x1C2) == 0:
+			setgb(w, g, 2, (gb(w, g, 2) & 0xF) | 0x20)
+			go = true
+		if go:
+			var s := hooks.slot(k, g)
+			if s != -2:
+				var lid := w.launcher_id(k, s)
+				if lid == -1:
+					w.fault = "support_request: an empty slot picked (0x4E0450 refuses it)"
+					return orders
+				var kind := w.launcher(lid, 8) >> 5
+				var radius := w.launcher(lid, 9) & 7
+				while true:
+					var c: Variant = hooks.click(k, s, kind, radius)
+					if c == null:
+						break
+					var x: int = c.x
+					var y: int = c.y
+					var o := _occupant(w, x, y)
+					var ok := false
+					if kind == 2:
+						if Pd2World.s8(_ubyte(w, o, 0x36)) > 2 and _active_any(w, o) and hooks.box(0x201) == 1:
+							w.setb(k, 7, 0xFF)
+							w.setb(k, 8, o & 0xFF)
+							setgb(w, g, 24, gb(w, g, 22))
+							setgb(w, g, 25, gb(w, g, 23))
+							ok = true
+					elif hooks.box(0x202) == 1:
+						w.setb(k, 7, x & 0xFF)
+						w.setb(k, 8, y & 0xFF)
+						var gt := gb(w, g, 33) & 0xF0
+						if gt == 0x30 or gt == 0x40:
+							setgb(w, g, 33, (gb(w, g, 33) & 0xF) | 0x30)
+							Ai.group_retarget(w, g, w.ds8(0x50AD95), w.ds8(0x50AD97))
+							setgb(w, g, 2, (gb(w, g, 2) & 0xF) | 0x20)
+						ok = true
+					if ok:
+						w.setb(k, 6, 1)
+						w.setb(k, 0x35, s)
+						Ai.spend_ap(w, u, cost)
+						Ai.mark_strike(w, x, y, k, s)
+						orders.append([k, s, x, y])
+						break
+		if w.sb(u, 0xE) < cost:
+			return orders
+	return orders
+
+
 static func gb(w: Pd2World, g: int, f: int) -> int:
 	return w.groups[35 * g + f]
 

@@ -665,7 +665,9 @@ static func search_cost(w: Pd2World, u: int) -> int:
 
 
 ## cmd_search (0x47F950 in mode 8), once confirmed: the spotted units, or null without AP.
-static func player_search(w: Pd2World, u: int) -> Variant:
+## confirm(u), when valid, answers the 0x1C8 prompt (asked once the search map exists):
+## false cancels (nothing searched, []).
+static func player_search(w: Pd2World, u: int, confirm := Callable()) -> Variant:
 	var cost := search_cost(w, u)
 	if w.sb(u, 0xE) < cost:
 		return null
@@ -678,6 +680,8 @@ static func player_search(w: Pd2World, u: int) -> Variant:
 	var spotted := []
 	var rp := Sight.recon_range(w, u)
 	var smap := Sight.search_map(w, up.x, up.y, rp.x, rp.y)
+	if smap != null and confirm.is_valid() and not confirm.call(u):
+		smap = null
 	if smap != null:
 		var side := 3 if w.is_enemy(u) else 0
 		for ly in smap.h:
@@ -690,6 +694,55 @@ static func player_search(w: Pd2World, u: int) -> Variant:
 	if climb:
 		w.H[g] = h0
 	return spotted
+
+
+## 一斉 entry 0 (0x429540 -> 0x4837A0(2)): with the campaign flag F bit 5 cleared on the
+## map; every active unit 0-253 whose status (clamped to 3) is the phase's side, with
+## search_cost AP, searches as cmd_search (its 0x1C8 prompt answered by confirm). No
+## sensors. The units spotted, in order.
+static func all_search(w: Pd2World, confirm := Callable(), phase := 0) -> Array:
+	if w.campaign:
+		for y in MAP:
+			for x in MAP:
+				if w.on_map(x, y):
+					w.F[x + MAP * y] &= 0xDF
+	var out := []
+	for u in mini(254, w.n_units):
+		var st := w.sb(u, 0x36)
+		if (3 if st > 2 else st) != phase or not w.active(u):
+			continue
+		if search_cost(w, u) <= w.sb(u, 0xE):
+			out.append_array(player_search(w, u, confirm))
+	return out
+
+
+static func _conceal_asked(w: Pd2World, u: int) -> bool:
+	if w.ub(u, 0x36) != 0 or not w.active(u):
+		return false
+	var cost := 3 if (w.ucrew(u, 8) >> 3) & 1 else 6
+	return cost <= w.sb(u, 0xE) and not w.ub(u, 0) & 0x20
+
+
+## 一斉 entry 1 (0x429540): the units asked WMES 0x1B0, in order (0-39, status 0, active,
+## the conceal cost in AP, not concealed).
+static func all_conceal_units(w: Pd2World) -> Array:
+	var out := []
+	for u in 40:
+		if _conceal_asked(w, u):
+			out.append(u)
+	return out
+
+
+## 一斉 entry 1: each unit as it comes (checked at its turn); answer(u) == 0 conceals it
+## (+0 | 0x20, the cost paid). The units concealed.
+static func all_conceal(w: Pd2World, answer: Callable) -> Array:
+	var out := []
+	for u in 40:
+		if _conceal_asked(w, u) and int(answer.call(u)) == 0:
+			w.setb(u, 0, w.ub(u, 0) | 0x20)
+			Ai.spend_ap(w, u, 3 if (w.ucrew(u, 8) >> 3) & 1 else 6)
+			out.append(u)
+	return out
 
 
 ## cmd_conceal's refusals: 0x1AF (already concealed), "ap", or "" when it may conceal.

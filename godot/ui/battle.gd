@@ -63,6 +63,7 @@ var react_sem := Semaphore.new()
 var react_answer: Variant = 1
 var scripted: Array = []      # tests: the answers ask_choice / ask_table / ask_hex give, in turn
 var hex_pick: Array = []         # the hexes a question on the worker thread waits a click on
+var hex_pick_rc := false         # (ui_map_click: a right click answers -2)
 var react_panel: Control = null
 var react_target := -1
 var react_menu: Array = []
@@ -83,6 +84,12 @@ class SandboxHooks extends AiTurnHooks:
 	## melee, unit removal, mine blasts.
 	var battle
 	var flag := 0
+
+	func progress_reset() -> void:
+		battle.call_deferred("_think", false)
+
+	func progress() -> void:
+		battle.call_deferred("_think", true)
 
 	func react(u: int) -> int:
 		var reactors := Sight.reaction_candidates(w, u, battle.alert, w.n_units)
@@ -3349,6 +3356,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 		# a right click (not a drag): the selected unit's command menu (0x4EF600's -2)
 		if ev.pressed:
 			_rpress = ev.position
+		elif ev.position.distance_to(_rpress) < 4 and hex_pick_rc and not hex_pick.is_empty():
+			hex_pick_rc = false
+			_answer_hex(-2)
 		elif ev.position.distance_to(_rpress) < 4 and selected != -1 and not busy and react_look.is_empty() 				and w.active(selected) and not w.is_enemy(selected) and hex_pick.is_empty():
 			open_command_menu(selected)
 	elif ev is InputEventMouseButton and ev.pressed:
@@ -3486,7 +3496,7 @@ func _command(u: int, v: int) -> void:
 		5:
 			_fire_command("aa")
 		6:
-			say(ui("UI_NOT_PORTED"))          # cmd_support_request (0x4E4560): not ported yet
+			_cmd_support_request()            # cmd_support_request (0x4DF680)
 		7:
 			_cmd_pocket_menu()
 		8:
@@ -3528,9 +3538,519 @@ func _panel_region(k: int) -> void:
 			# the picture: 0x467880 for the selected unit when it is an active own one
 			if selected != -1 and w.active(selected) and not w.is_enemy(selected):
 				_cmd_pocket_menu()
-		_:
-			say(ui("UI_NOT_PORTED"))             # マップ 0x43A3E0, 一斉 0x429540,
-			                                     # 指令書 0x43BA20
+		13:
+			_all_orders()                        # 一斉: 0x429540
+		10:
+			_map_menu()                          # マップ: 0x43A3E0
+		15:
+			_orders_sheet()                      # 指令書: 0x43BA20 with WMES 0x1A2
+
+
+const PANEL_X := 432              # the info panel's client in the main window (DS:0x554FB8)
+
+
+func _panel_popup(px: int, py: int, labels: Array, cols: int, role: String) -> GameWindow:
+	## 0x40C090 at the panel's (px, py) mapped to the main window (MapWindowPoints), kept
+	## inside by 0x452450's size (not below 0), a right click closing it
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))     # (engine-side: a longer translation widens it)
+	var ww := ic * 8 + 16
+	var hh := (labels.size() + 1) * 16
+	var x := PANEL_X + px
+	var y := py
+	if ww - 1 + x > MAIN_W:
+		x = MAIN_W - ww
+	if hh - 1 + y > MAIN_H:
+		y = MAIN_H - hh
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), ic, 0, 0, labels, ic, [], true)
+	gw.role = role
+	_hold([gw])
+	react_panel = null
+	return gw
+
+
+func _map_menu() -> void:
+	## マップ (0x43A3E0): エリアマップ / 高低差マップ (DS:0x50DD45 -> 0x510560 / 0x510570), 12
+	## columns at the panel's (0x28, 0x110); 0 the area map (0x43A570), 1 the height map
+	## (0x43A900)
+	var labels := Flight.MAP_MENU_LABELS.map(func(a): return GameData.exe_text(campaign, a))
+	var gw := _panel_popup(0x28, 0x110, labels, 0xC, "map")
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v == 0:
+			_area_map()
+		elif v == 1:
+			_height_menu())
+
+
+class BattleAreaMapHooks extends Flight.AreaMapHooks:
+	## 0x43A570's windows: the flight window shown (0x43E510(1)), its regions and the grid's
+	## cells picked on it, the question as 0x43BA20's windows
+	var battle
+
+	func radar_window(param: int) -> int:
+		battle.call_deferred("radar_show", RadarView.take(battle.w))
+		return 0
+
+	func radar_draw() -> int:
+		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		return 0
+
+	func air_report() -> int:
+		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		return 0
+
+	func region() -> int:
+		return int(battle.ask_radar("region"))
+
+	func point(g: int, x: int, y: int) -> Variant:
+		return battle.ask_radar("cell")
+
+	func confirm(g: int, x: int, y: int) -> int:
+		var w: Pd2World = battle.w
+		var text: String = GameData.exe_text(battle.campaign, 0x5146F0,
+				[GameData.call_sign(battle.campaign, Flight.gb(w, g, 1)), x, y])
+		return int(battle.ask_order(text, [GameData.exe_text(battle.campaign, 0x510454),
+				GameData.exe_text(battle.campaign, 0x51045C)], 4))
+
+
+func _area_map() -> void:
+	## the area map (Flight.area_map, emulated) on a worker thread: its picks wait for clicks
+	busy = true
+	var hk := BattleAreaMapHooks.new()
+	hk.battle = self
+	if auto_react:
+		_area_map_done(Flight.area_map(w, hk))
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		var res := Flight.area_map(w, hk)
+		call_deferred("_area_map_finished", res))
+
+
+func _area_map_finished(res: Array) -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_area_map_done(res)
+
+
+func _area_map_done(res: Array) -> void:
+	radar_hide()
+	busy = false
+	for r in res:
+		say("Group %s heads for %d-%d." % [GameData.call_sign(campaign, Flight.gb(w, r[0], 1)), r[1], r[2]])
+	_after_command()
+
+
+func ask_radar(kind: String) -> Variant:
+	## the flight window's picks on a worker thread: "region" (0-20) or "cell" (Vector2i or
+	## null). auto_react / the main thread: close / null.
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return 20 if kind == "region" else null
+	call_deferred("_open_radar_pick", kind)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_radar_pick(kind: String) -> void:
+	var r := _radar()
+	r.visible = true
+	r.fire_cell = Vector2i(Flight.s16(w.ds16(0x50AD95)), Flight.s16(w.ds16(0x50AD97)))
+	r.pick = kind
+	r.pick_cb = func(v: Variant):
+		react_answer = v
+		react_sem.post()
+	r.queue_redraw()
+
+
+func ask_order(text: String, labels: Array, cols: int) -> Variant:
+	## 0x43BA20 with choices on a worker thread: the index chosen. auto_react: 0.
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return 0
+	call_deferred("_open_order", text, labels, cols)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_order(text: String, labels: Array, cols: int) -> void:
+	var gw := open_order(text, labels, cols)
+	gw.chosen.connect(func(v: int): _answer_reaction(v))
+
+
+func open_order(text: String, labels: Array, cols := 0) -> GameWindow:
+	## 0x43BA20(text, n, cols, labels): a framed window of 0x28 columns and 5 rows of 16 px
+	## (flags 1) at ((640 - w) / 2, (400 - 0x60) / 2), w 0x150 without choices, cols x 8 +
+	## 0x160 with (kept inside, not below 0); the text printed; with choices their list of
+	## `cols` columns at (x + 0x150, y), no right click (returned); without, a '@'
+	## (DS:0x5147B8) unless the text's last character is one (the text window returned:
+	## await its print, then close it)
+	var ww := 0x150 if labels.is_empty() else cols * 8 + 0x160
+	var x := (MAIN_W - ww) >> 1
+	var y := (MAIN_H - 0x60) >> 1
+	if ww - 1 + x > MAIN_W:
+		x = MAIN_W - ww
+	if y + 0x5F > MAIN_H:
+		y = MAIN_H - 0x60
+	x = maxi(x, 0)
+	y = maxi(y, 0)
+	var tw := GameWindow.text_window(x, y, 0x28, 5, 1)
+	var wins := [tw]
+	var t := text
+	if GameWindow.translated(t):
+		t = GameWindow.fit(t, 0x28)            # (engine-side: a translation wraps at its words)
+	if labels.is_empty():
+		if not t.ends_with("@"):
+			t += "@"
+		tw.set_meta("text", t)
+		_hold(wins)
+		return tw
+	tw.waits = false
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var sw := GameWindow.select_window(x + 0x150, y, 0, 0, 0, labels, ic, [], false)
+	sw.role = "order"
+	wins.append(sw)
+	_hold(wins)
+	tw.print_text(t)
+	return sw
+
+
+func _orders_sheet() -> void:
+	## 指令書 (the player phase's region 15): the mission's WMES 0x1A2 (format_text without
+	## arguments) in 0x43BA20's window without choices, its '@' waits, then closed
+	busy = true
+	var tw := open_order(msg(0x1A2), [])
+	tw.role = "orders"
+	await tw.print_text(str(tw.get_meta("text")))
+	_close_window(tw)
+	busy = false
+
+
+func _height_menu() -> void:
+	## 0x43A900: 南東 / 北東 / 北西 / 南西 (DS:0x50DD4D) in 4 columns at the panel's (0x68,
+	## 0x110), a right click ending it; then the height map seen from that corner
+	var labels := Flight.HEIGHT_MENU_LABELS.map(func(a): return GameData.exe_text(campaign, a))
+	var gw := _panel_popup(0x68, 0x110, labels, 4, "height")
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v >= 0 and v < 4:
+			height_map(v))
+
+
+## 0x43A900's corners: [a0, a1, b0, b1, c0, c1, e0, e1] (the two profiles' ranges)
+const HEIGHT_RANGES := [[1, 0x46, 2, 0x46, 1, 0x46, 2, 0x46], [0x45, 1, 2, 0x46, 1, 0x46, 0x44, 1],
+		[0x45, 1, 0x44, 1, 0x45, 1, 0x44, 1], [1, 0x46, 0x44, 1, 0x45, 1, 2, 0x46]]
+
+
+func _hm_raw(x: int, y: int) -> int:
+	return w.H[x + MAP * y] if x >= 0 and x < MAP and y >= 0 and y < MAP else 0
+
+
+func _hm_h(x: int, y: int) -> int:
+	## height_at, less 0x1E above 0x3B (0x43A900's scale)
+	var h := _hm_raw(x, y)
+	return h - 0x1E if h > 0x3B else h
+
+
+func _hm_c(x: int, y: int) -> int:
+	## 0x46EC20: the tile's colour (DS:0x50DA28, the S layer's bytes 256-511)
+	return w.terrain[256 + w.layer(w.T, x, y)] & 15 if w.terrain.size() >= 512 else 0
+
+
+func _hm_odd(x: int, y: int) -> void:
+	## a height below 0x14: the game's notes "%d %dの高さが変" (DS:0x514740 .. 0x514770, by
+	## ui_message_line / 0x4521C0) go to the log
+	if _hm_raw(x, y) < 0x14:
+		say(GameData.exe_text(campaign, 0x514740, [x, y]))
+
+
+func height_map(d: int) -> void:
+	## 0x43A900 (display): a framed window of 0x37 x 15 rows of 16 px centred (the pattern
+	## DS:0x50C9E8), 0x0C (DS:0x51473C); the two edge profiles
+	## (0x46C370 lines, type 0, in the tiles' colours) over the corner's ranges; '@' and
+	## 0x0C (DS:0x514780); the relief, rows from the far corner, each hex a column 6 px wide
+	## (its top 2 px in the tile's colour, a mark of 2 x 6 px in 7 for an own unit or 4 for a
+	## spotted enemy, under it colour 0, 0xB on the map's edge in the second half);
+	## "最高地点は%d@" (DS:0x514784) with the highest scaled height; the window closes.
+	## Heights above 0x3B count 0x1E less. The game draws the columns one by one.
+	var gw := GameWindow.text_window((MAIN_W - (0x37 * 8 + 16)) >> 1, (MAIN_H - (15 * 16 + 16)) >> 1, 0x37, 15, 0)
+	gw.role = "height_map"
+	_hold([gw])
+	busy = true
+	var R: Array = HEIGHT_RANGES[d]
+	var a0: int = R[0]
+	var a1: int = R[1]
+	var b0: int = R[2]
+	var b1: int = R[3]
+	var c0: int = R[4]
+	var c1: int = R[5]
+	var e0: int = R[6]
+	var e1: int = R[7]
+	var sa := signi(a1 - a0)
+	var sb := signi(b1 - b0)
+	var sc := signi(c1 - c0)
+	var se := signi(e1 - e0)
+	var odd := d & 1
+	var xx := 0xE0
+	var yb := 0x69
+	var a := a0
+	while a != a1:
+		if odd == 0:
+			_hm_odd(a, sb + b0)
+		else:
+			_hm_odd(b0 + sb, a)
+		var h0 := _hm_h(a, sb + b0) if odd == 0 else _hm_h(b0 + sb, a)
+		var x := xx
+		var y := yb
+		var b := b0
+		while b != b1:
+			var X := a if odd == 0 else b
+			var Y := b if odd == 0 else a
+			_hm_odd(X, Y)
+			var h := _hm_h(X, Y)
+			gw._rect(x, y - 3 * h0 + 0x3B, x - 6, y - 3 * h + 0x3C, 0, _hm_c(X, Y), 0)
+			x -= 3
+			y += 1
+			h0 = h
+			b += sb
+		xx += 3
+		yb += 1
+		a += sa
+	xx = 0xDD
+	yb = 0x69
+	var c := c0
+	while c != c1:
+		var h0 := _hm_h(se + e0, c) if odd == 0 else _hm_h(c, se + e0)
+		var x := xx
+		var y := yb
+		var e := e0
+		while e != e1:
+			var X := e if odd == 0 else c
+			var Y := c if odd == 0 else e
+			var h := _hm_h(X, Y)
+			gw._rect(x, y - 3 * h0 + 0x3B, x + 6, y - 3 * h + 0x3C, 0, _hm_c(X, Y), 0)
+			x += 3
+			y += 1
+			h0 = h
+			e += se
+		xx -= 3
+		yb += 1
+		c += sc
+	gw.queue_redraw()
+	await gw.print_text(GameData.exe_raw(campaign, 0x514780) if GameData.exe_raw(campaign, 0x514780) != "" else "@\u000c")
+	gw.transparent = true
+	var top := 0
+	var row := 0x68
+	xx = 0xE0
+	var n := 2
+	var k40 := 0x46
+	while true:
+		var px := 0
+		var py := 0
+		var dx := 0
+		var dy := 0
+		match d:
+			0:
+				py = row - 0x67
+				px = 1
+				dx = 1
+				dy = -1
+			1:
+				px = row - 0x67
+				dx = -1
+				py = 0x46
+				dy = -1
+			2:
+				px = 0x46
+				dx = -1
+				py = k40
+				dy = 1
+			3:
+				dx = 1
+				py = 1
+				px = k40
+				dy = 1
+		var x := xx
+		for i in n:
+			top = _hm_column(gw, px, py, x, row, top, false)
+			py += dy
+			x += 6
+			px += dx
+		var last := row
+		k40 -= 1
+		n += 1
+		row += 1
+		xx -= 3
+		if not last - 0x66 < 0x46:
+			break
+	var k50 := 1
+	var k34 := 1
+	k40 = 0x46
+	while true:
+		var px := 0
+		var py := 0
+		var dx := 0
+		var dy := 0
+		match d:
+			0:
+				dx = 1
+				py = 0x46
+				dy = -1
+				px = k50
+			1:
+				px = 0x46
+				dx = -1
+				dy = -1
+				py = k40
+			2:
+				dx = -1
+				py = 1
+				dy = 1
+				px = k40
+			3:
+				px = 1
+				dx = 1
+				dy = 1
+				py = k50
+		if k40 > 0:
+			var x := xx
+			for i in 0x47 - k34:
+				top = _hm_column(gw, px, py, x, row, top, true)
+				py += dy
+				x += 6
+				px += dx
+		k50 += 1
+		k40 -= 1
+		k34 += 1
+		row += 1
+		xx += 3
+		if not k40 > 1:
+			break
+	gw.queue_redraw()
+	await gw.print_text(GameData.exe_text(campaign, 0x514784, [top]))
+	_close_window(gw)
+	busy = false
+
+
+func _hm_column(gw: GameWindow, x: int, y: int, sx: int, row: int, top: int, edge: bool) -> int:
+	## one hex of the relief at (sx, row), skipped at height 0: the highest height so far
+	if _hm_raw(x, y) == 0:
+		return top
+	var h := _hm_h(x, y)
+	if h > top:
+		top = h
+	var mark := -1
+	var o := w.O[x + MAP * y] - 1 if x >= 0 and x < MAP and y >= 0 and y < MAP else -1
+	if o != -1:
+		var st := w.sb(o, 0x36)
+		if st == 0:
+			mark = 7
+		elif st == 3 and w.ub(o, 0) & 0x10:
+			mark = 4
+	var b := row - 3 * h
+	gw._rect(sx, row + (0x14 - h) * 3, sx + 5, b + 0x3D, 0, _hm_c(x, y), 2)
+	if mark != -1:
+		gw._rect(sx + 2, b + 0x3C, sx + 3, b + 0x38, 0, mark, 2)
+	var under := 0xB if edge and (y == 1 or y == 0x46 or x == 1 or x == 0x46) else 0
+	gw._rect(sx, row, sx + 5, b + 0x3E, 0, under, 2)
+	return top
+
+
+func _all_orders() -> void:
+	## 一斉 (0x429540): 索敵 / 隠蔽 (DS:0x5142A4 / 0x5142B4) in a popup of 4 columns at the
+	## cursor ((x & ~7) - 0x10, y - 0x10; kept inside by 0x452450's size), a right click
+	## closing it; 0 every unit searches (Action.all_search, emulated), 1 every unit is asked
+	## to conceal (Action.all_conceal, emulated)
+	var labels := [GameData.exe_text(campaign, 0x5142A4), GameData.exe_text(campaign, 0x5142B4)]
+	var ic := 4
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))     # (engine-side: a longer translation widens it)
+	var ww := ic * 8 + 16
+	var hh := (labels.size() + 1) * 16
+	var m := _mouse_main()
+	var x := (int(m.x) & 0xFFF8) - 0x10
+	var y := int(m.y) - 0x10
+	if ww - 1 + x > MAIN_W:
+		x = MAIN_W - ww
+	if hh - 1 + y > MAIN_H:
+		y = MAIN_H - hh
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), ic, 0, 0, labels, ic, [], true)
+	gw.role = "all"
+	_hold([gw])
+	react_panel = null
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v == 0 or v == 1:
+			_all_run(v))
+
+
+func _all_run(v: int) -> void:
+	## the units' questions wait on a worker thread (as the move's)
+	busy = true
+	if auto_react:
+		_all_done(v, _all_rule(v))
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		var res := _all_rule(v)
+		call_deferred("_all_finished", v, res))
+
+
+func _all_rule(v: int) -> Array:
+	if v == 0:
+		return Action.all_search(w, _all_search_confirm)
+	return Action.all_conceal(w, _all_conceal_answer)
+
+
+func _all_search_confirm(u: int) -> bool:
+	## step_search's 0x1C8 prompt for unit u (the view on it: set_target_mark / scroll_to):
+	## its first choice searches, a right click cancels; "check the area" asks again (the
+	## map stays in view, as the recon round's)
+	call_deferred("_look_unit", u)
+	var parts := GameData.prompt_parts(msg(0x1C8))
+	var labels: Array = parts[1] if parts[1].size() >= 2 else [ui("UI_YES"), ui("UI_NO")]
+	while true:
+		var a: Variant = ask_choice(parts[0], [[labels[0], 0], [labels[1], 1], [ui("UI_CANCEL"), -2]], 0)
+		if not (a is int and a == 1):
+			return a is int and a == 0
+	return false
+
+
+func _all_conceal_answer(u: int) -> int:
+	## WMES 0x1B0 (the cost, the AP, the cover of its hex) at the cursor, the view on u
+	call_deferred("_look_unit", u)
+	var cost := 3 if (w.ucrew(u, 8) >> 3) & 1 else 6
+	return 0 if ask_prompt(msg(0x1B0, [cost, w.sb(u, 0xE), w.cover(u)]), true) else 1
+
+
+func _look_unit(u: int) -> void:
+	cam.position = hex_center(w.pos(u))
+	overlay.queue_redraw()
+
+
+func _all_finished(v: int, res: Array) -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_all_done(v, res)
+
+
+func _all_done(v: int, res: Array) -> void:
+	busy = false
+	if v == 0:
+		for k in res:
+			if w.is_enemy(k):
+				say_msg(0x1C7)                   # 0x47E790: "enemy discovered"
+				say("  enemy found: %s" % unit_name(k))
+	else:
+		for k in res:
+			say("%s conceals." % unit_name(k))
+	_after_command()
 
 
 func _arms_units() -> Array:
@@ -3751,12 +4271,14 @@ func _fire_command(m: String) -> void:
 		_set_mode(m)
 		return
 	var u := selected
+	fire_list = false
 	_open_weapon(u, FIRE_MODES[m], 0, func(v: int):
 		if v == -2:
 			_set_mode("move")
 		elif v < 4:
 			slot = v
 			_set_mode(m)
+			_fire_range_question()
 		else:
 			_set_mode(m)
 			slot = v - 4
@@ -4003,6 +4525,29 @@ func text_cells(fmt: String, args: Array) -> Array:
 	return out
 
 
+func support_unit_rows(rows: Array) -> Array:
+	## 0x4DFE70's rows (WMES 0x1C4, as 0x4E3230's): the call sign, the pilot's names, the
+	## machine, the damage, the state (SHIFT / BUSY / SUPPORT / STAND BY by
+	## Strike.support_units, its colour); state 1 is refused (the list opens again)
+	var out := []
+	for rw in rows:
+		var k: int = rw[0]
+		var g := Ai.unit_group(w, k)
+		var cond := w.ub(k, 0xD)
+		var cc := 0x7F if cond >= 0x32 else (0xFF if cond >= 0x23 else 0x4F)
+		var c := w.ucrew(k, 0)
+		var cn: Array = names.crew
+		var given: String = cn[c][0] if c < cn.size() else ""
+		var family: String = cn[c][1] if c < cn.size() and cn[c].size() > 1 else ""
+		var mn: Array = names.machine
+		var m := Flight.s8(w.ub(k, 0xC))
+		var sign := GameData.call_sign(campaign, Flight.gb(w, g, 1)) if g >= 0 else ""
+		var args := [0xFF, sign, given, family, mn[m] if m >= 0 and m < mn.size() else "", cc,
+				100 - cond, rw[3], GameData.exe_text(campaign, rw[2])]
+		out.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": rw[1] == 1})
+	return out
+
+
 func cb_unit_rows(units: Array) -> Array:
 	## 0x4E3230's rows (WMES 0x1C4): the group's call sign, the pilot's names, the machine,
 	## the damage (100 - condition; colour by condition: below 35, 35-49, 50 up) and the
@@ -4228,6 +4773,7 @@ func _open_hex(text: String, hexes: Array) -> void:
 
 func _answer_hex(v: Variant) -> void:
 	hex_pick = []
+	hex_pick_rc = false
 	_answer_reaction(v)
 
 
@@ -4277,10 +4823,13 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 		return
 	if fire_map == null or fire_map.cell(h.x, h.y) != 1:
 		return
+	_fire_hit_line(u, fmode, h)
 	var check := Action.fire_check(w, u, slot, fmode, h.x, h.y)
 	if check[0] == Action.FIRE_REFUSED:
 		if check[1] != -1:
 			say_msg(check[1])
+		if fire_list:
+			_fire_range_list()
 		return
 	if check[0] == Action.FIRE_CONFIRM:
 		# 0x1AD shows the AP needed, the AP left and the distance (cmd_fire 0x4262DF); 0x1AC none
@@ -4289,6 +4838,66 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 		_confirm(msg(check[1], args), _do_fire.bind(u, fmode, h))
 		return
 	_do_fire(u, fmode, h)
+
+
+var fire_list := false            # option 0x2000 answered yes: the in-range list before each click
+
+
+func _fire_range_question() -> void:
+	## option 0x2000 (範囲内表) in cmd_fire (0x425AF0), after the target map: WMES 0x1EE in a
+	## message box (kind 0); yes: before each map click the list of the enemies in range
+	if not options & 0x2000 or auto_react:
+		return
+	_confirm(msg(0x1EE), func():
+		fire_list = true
+		_fire_range_list(), 0)
+
+
+func _fire_range_list() -> void:
+	## 0x4E9AC0 over the target map's marked hexes with an occupant (rows y then x): the
+	## spotted enemies (status 3 up, +0 bit 0x10), "%b%12s DP:%2d" (DS:0x51F878: 0x70, the
+	## machine's DS:0x50C2E5 name, 100 - condition) in a list of 0x12 columns centred; a row
+	## scrolls the map to it and the list comes again, a right click ends it; none: 0x1EF
+	if fire_map == null:
+		return
+	var units := []
+	for y in MAP:
+		for x in MAP:
+			if fire_map.cell(x, y) == 1:
+				var o := w.O[x + MAP * y] - 1
+				if o != -1 and w.is_enemy(o) and w.ub(o, 0) & 0x10:
+					units.append(o)
+	if units.is_empty():
+		say_msg(0x1EF)
+		return
+	var mn: Array = names.machine
+	var labels := []
+	for o in units:
+		var m := Flight.s8(w.ub(o, 0xC))
+		labels.append(GameWindow.coded(text_cells(GameData.exe_raw(campaign, 0x51F878),
+				[0x70, mn[m] if m >= 0 and m < mn.size() else "", 100 - w.ub(o, 0xD)])))
+	var gw := _centred_list(labels, 0x12, "in_range")
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v >= 0:
+			cam.position = hex_center(w.pos(units[v]))
+			_fire_range_list())
+
+
+func _fire_hit_line(u: int, fmode: int, h: Vector2i) -> void:
+	## option 0x4000 (命中率) after the click, for a launcher of kind 0: the occupant (an
+	## unspotted enemy counts as none) gets ui_show_hit_estimate (0x426A50): WMES 0x211 with
+	## min(100, ai_hit_estimate(u, it, slot, mode)) as a message line
+	if not options & 0x4000:
+		return
+	var lid := w.launcher_id(u, slot)
+	if lid == -1 or w.launcher(lid, 8) >> 5 != 0:
+		return
+	var o := w.O[h.x + MAP * h.y] - 1
+	if o != -1 and w.is_enemy(o) and not w.ub(o, 0) & 0x10:
+		o = -1
+	if o != -1:
+		say_msg(0x211, [mini(100, Ai.ai_hit_estimate(w, u, o, slot, fmode, -1))])
 
 
 func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
@@ -5124,6 +5733,15 @@ func radar_hide() -> void:
 		radar_view.radio_close(-1)
 
 
+func _think(tick: bool) -> void:
+	## ENEMY THINK's bar in the info panel (0x42B2A0 / 0x42B360)
+	if info_panel and is_instance_valid(info_panel):
+		if tick:
+			info_panel.think_tick()
+		else:
+			info_panel.think_reset()
+
+
 func _ai_done(res: int, undefined: Array, end_code := 0) -> void:
 	radar_hide()
 	ai_thread.wait_to_finish()
@@ -5395,6 +6013,101 @@ class BattleStrikeHooks extends Strike.Hooks:
 
 	func intercept_choice(t: int, best: int) -> int:
 		return battle.hooks.intercept_choice(t, best)
+
+
+class BattleSupportHooks extends Strike.SupportHooks:
+	## cmd_support_request's windows (0x4DF680) on the worker thread: the unit picker
+	## (0x4DFE70: 0x3B columns centred, a refused row keeps it open), the 0x1C2 prompt, the
+	## weapon picker (0x4E0450 against the fire point), the map click (ui_map_click mode 2:
+	## the hexes marked, kind 2 the spotted enemy ground units, else every hex; a right
+	## click cancels) and the boxes 0x201 / 0x202 (kind 0)
+	var battle
+	var w: Pd2World
+
+	func line(msg: int) -> void:
+		battle.say_msg(msg)
+
+	func pick(rows: Array) -> int:
+		return battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], battle.support_unit_rows(rows), -2, 0x3B)
+
+	func prompt(msg: int) -> int:
+		return 0 if battle.ask_prompt(battle.msg(msg), true) else 1
+
+	func slot(k: int, g: int) -> int:
+		return battle.ask_table(battle.ui("UI_PICK_WEAPON"), battle.text_cells(battle.msg_raw(0x1C5), []),
+				battle.cb_slot_rows(k, g, -1), -2, 0x31)
+
+	func click(k: int, s: int, kind: int, radius: int) -> Variant:
+		var hexes := []
+		if kind == 2:
+			for y in 72:
+				for x in 72:
+					var o := w.O[x + 72 * y] - 1
+					if o != -1 and w.is_enemy(o) and w.ub(o, 0) & 0x10 and w.unit_class(o) < 2:
+						hexes.append(Vector2i(x, y))
+		var v: Variant = battle.ask_map_click(hexes)
+		return null if v is int else v
+
+	func box(msg: int) -> int:
+		return 1 if battle.ask_box(battle.msg(msg), false) else 0
+
+
+func _cmd_support_request() -> void:
+	## cmd_support_request (0x4DF680, Strike.support_request, emulated): short of 12 AP (6
+	## with crew +8 bit 2) ui_not_enough_ap; else the pickers, the click and the boxes on a
+	## worker thread until the unit runs out of AP or a picker is cancelled
+	if selected == -1:
+		return
+	var u := selected
+	var cost := Strike.support_cost(w, u)
+	if w.sb(u, 0xE) < cost:
+		say_msg(0x1AE, [cost])
+		return
+	var sh := BattleSupportHooks.new()
+	sh.battle = self
+	sh.w = w
+	busy = true
+	if auto_react:
+		_support_done(u, Strike.support_request(w, u, sh))
+		return
+	move_thread = Thread.new()
+	move_thread.start(func():
+		var res: Variant = Strike.support_request(w, u, sh)
+		call_deferred("_support_finished", u, res))
+
+
+func _support_finished(u: int, res: Variant) -> void:
+	move_thread.wait_to_finish()
+	move_thread = null
+	_support_done(u, res)
+
+
+func _support_done(u: int, res: Variant) -> void:
+	busy = false
+	hex_pick = []
+	hex_pick_rc = false
+	if res is Array:
+		for o in res:
+			say("%s calls support: %s, slot %d at (%d, %d)." % [unit_name(u), unit_name(o[0]), o[1] + 1, o[2], o[3]])
+	_after_command()
+
+
+func ask_map_click(hexes: Array) -> Variant:
+	## ui_map_click on a worker thread (mode 2: no window, the hexes marked; "any" when
+	## empty): the hex clicked, or -2 for a right click. auto_react / the main thread: -2.
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return -2
+	call_deferred("_open_map_click", hexes)
+	react_sem.wait()
+	return react_answer
+
+
+func _open_map_click(hexes: Array) -> void:
+	hex_pick = hexes if not hexes.is_empty() else ["any"]
+	hex_pick_rc = true
+	overlay.queue_redraw()
 
 
 func _strikes(side: int) -> int:

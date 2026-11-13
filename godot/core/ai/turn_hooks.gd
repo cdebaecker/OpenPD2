@@ -15,6 +15,15 @@ func _init(w_: Pd2World, easy_ := false, rng_: Pd2Random = null) -> void:
 	rng = rng_
 
 
+## ENEMY THINK's bar (display): 0x42B2A0 resets it, ai_progress (0x42B360) adds a pixel.
+func progress_reset() -> void:
+	pass
+
+
+func progress() -> void:
+	pass
+
+
 func reload(u: int) -> int:
 	return Ai.ai_reload(w, u)
 

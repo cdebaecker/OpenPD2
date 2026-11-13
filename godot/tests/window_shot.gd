@@ -1,6 +1,10 @@
 extends SceneTree
 ## The game's windows over a battle, saved as a picture: godot --path engine/godot -s
-## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction|command|units|arms [ja|en|fr]
+## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction|command|units|arms|all|map|height|relief|orders|confirm|support [ja|en|fr]
+##   all: 一斉's popup (0x429540); map: マップ's (0x43A3E0); height: its corners (0x43A900);
+##   relief: the height map from the south-east, its last text up; orders: 指令書 (0x43BA20,
+##   WMES 0x1A2); confirm: the area map's question (0x5146F0); support: the support
+##   request's unit picker (0x4DFE70) with a support group set up
 ##   prompt: the move's question 0x1DC at the cursor (0x47EBE0); box: the mine's 0x1A3
 ##   (ui_message_box, kind 0); line: 0x1AE (ui_message_line) with its click wait lit;
 ##   select: a select window with 12 items (the scroll bar), the second outlined;
@@ -85,6 +89,56 @@ func _init() -> void:
 			b.open_command_menu(u)
 			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
 			gw._hover = 3
+		"all":
+			b._all_orders()
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+			gw._hover = 0
+		"map":
+			b._map_menu()
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+			gw._hover = 1
+		"height":
+			b._height_menu()
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+			gw._hover = 0
+		"relief", "profile":
+			b.height_map(0)
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+			for i in 3:
+				await process_frame
+			if args[3] == "relief":
+				gw.outside(MOUSE_BUTTON_LEFT)    # past the profiles' '@'
+				for i in 10:
+					await process_frame
+				for i in 3:
+					await process_frame
+		"orders":
+			b._orders_sheet()
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)
+		"confirm":
+			var gd = root.get_node("GameData")
+			b.open_order(gd.exe_text(b.campaign, 0x5146F0, [gd.call_sign(b.campaign, 0), 7, 4]),
+					[gd.exe_text(b.campaign, 0x510454), gd.exe_text(b.campaign, 0x51045C)], 4)
+			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(1)
+			gw._hover = 0
+		"support":
+			var k := 39
+			for f in 55:
+				b.w.setb(k, f, b.w.ub(b.squad[1], f))
+			b.w.setb(k, 6, 0)
+			for f in 35:
+				b.w.groups[35 * 19 + f] = 0xFF if f >= 6 and f < 22 else 0
+			b.w.groups[35 * 19 + 2] = 0x20
+			b.w.groups[35 * 19 + 5] = 2
+			b.w.groups[35 * 19 + 6] = k
+			b.w.groups[35 * 19 + 7] = b.squad[2]
+			b.w.groups[35 * 19 + 22] = 10
+			b.w.groups[35 * 19 + 23] = 10
+			b.w.groups[35 * 19 + 33] = 0x50
+			b.w.setb(b.squad[2], 6, 1)
+			var rows = b.support_unit_rows(load("res://core/strike.gd").support_units(b.w))
+			gw = b.open_table([], rows, 0x3B)
+			gw._hover = 0
 		"select":
 			var labels := []
 			for i in 12:

@@ -3512,6 +3512,77 @@ writer is somewhere in `mission_loop`'s earlier calls (not emulated whole; the b
 leaves the field), the row‑72 writes past the layers (skipped), and DASH's radio lines
 and faces that read their missing arguments from the stack (display only).
 
+### 5.24 The info panel's buttons: Emulated
+
+The battle screen's COMMAND buttons that change the game (the player phase 0x4EF600's
+regions), each run whole under emulation.
+
+**一斉, all at once** (region 13, 0x429540; `rules.all_search` / `all_conceal_units` /
+`all_conceal`, GDScript `Action`, `verify_all_orders`: search 100 / 100, conceal 100 / 100
+at seed 1). A popup of two entries, 索敵 / 隠蔽 (exe 0x5142A4 / 0x5142B4), four columns at
+the cursor less 0x10; a right click closes it.
+- **索敵, all search** (0x4837A0 in mode 2):
+  - with the campaign flag, the map's F bit 5 is cleared first (as the turn's recon pass);
+  - then units 0–253 in order: active, status equal to the phase's side (status 0 in
+    the player's phase; 1 and 2 are left out), with the search cost in AP (8, 4 with the
+    recon skill);
+  - each searches as the search command does (`step_search` mode 8), with its own
+    "search here?" prompt (0x1C8): the first choice searches, a right click cancels, the
+    second looks at the map and asks again. A window shows each enemy found;
+  - the sensors are not run (mode 0 runs them, mode 2 does not).
+- **隠蔽, all conceal**: units 0–39 in order, status 0, active, with the conceal cost in
+  AP (6, 3 with crew +8 bit 3) and not concealed already. Each is asked 0x1B0 (the cost,
+  its AP and its hex's cover) with the view on it. Yes: +0 bit 0x20 and the AP paid.
+  A unit is checked at its turn, after the ones before it answered.
+
+**The support request** (command menu entry 6, `cmd_support_request` 0x4DF680;
+`rules.support_units` / `support_request`, GDScript `Strike`, `verify_support_request`:
+365 / 365 at seed 5, the windows' order compared too). It costs 12 AP, 6 with crew +8
+bit 2; short of that, "not enough AP" (0x1AE). Otherwise, while the unit has the AP:
+1. **The unit picker** (0x4DFE70): the members of the player's groups 0–19 that have a
+   position, +2 bits 4–5 = 2 and type 3, 4 or 5 (not destroyed, +0 bit 0). Each row shows
+   a state:
+   - the group's +2 bits 6–7 = 0: STAND BY, unless a computer group (20–63) of type 3 / 4
+     shares its position (BUSY; checked for types 3 and 4 only) or the member already has
+     a support order 1 or 2 (SUPPORT);
+   - 0x40: SHIFT. A type-5 group's can be picked and asks first "stop the evasive move
+     and fire?" (0x1C2): yes sets +2's high nibble to 2;
+   - 0x80 / 0xC0: BUSY.
+   Only STAND BY and a type-5 SHIFT can be picked (the list opens again on another). No
+   row at all: 0x1C3 and the end. Cancel: the end.
+2. **The weapon picker** (0x4E0450 against the fire point, as the counter-battery's).
+   Cancel: back to 1.
+3. **The target**, a hex clicked on the map (a right click: back to 1):
+   - a missile (launcher kind 2) needs an active computer unit there (status 3 up), else
+     the click is asked again; then 0x201. Yes: the member's +7 = 0xFF, +8 = that unit,
+     and the group's previous position (+24 / +25) = its position;
+   - any other weapon asks 0x202. Yes: +7 / +8 = the hex; a type 3 / 4 group becomes
+     type 3, heads for the fire point (`group_retarget` to DS:0x50AD95 / 0x50AD97) and
+     its +2 high nibble becomes 2.
+   A no asks the click again.
+4. **Ordered:** the member's +6 = 1, +0x35 = the slot; the caller pays the AP; the blast
+   area around the clicked hex is marked struck (F bit 4, 0x483C10). Back to 1.
+
+The orders are then carried out by the strike executor (§5.13) at the phase's end.
+The clicked hex of an empty cell gives "unit −1": its status and position are read from
+the 55 bytes before the unit table, as the game does.
+
+**マップ, the area map** (region 10, 0x43A3E0 entry 0 → 0x43A570; `rules.area_map`,
+GDScript `Flight.area_map`, `verify_area_map`: 600 / 600 at seed 3 and 400 / 400 with the
+grid compared). The flight window opens (0x43E510 in mode 1: its grid marks as at the
+flight's start, §5.9). Until its close button:
+- a click on one of the status list's rows 0–19 takes that group when it has a position
+  and members alive, its +2 bits 4–5 are 2 (standing by), bits 6–7 are 0, bits 1–3 are not 1,
+  and no member has a support order other than 0 and 3;
+- a cell of the flight grid is then picked (any of its 15 × 15 but the fire point,
+  DS:0x50AD95 / 0x50AD97; a right click gives it up). A cell other than the group's asks
+  "%s's standby area will change to x-y" (0x5146F0, 実行 / 中止);
+- 実行 retargets the group there (`group_retarget`) and sets its +2 to `+2 & 0xDF | 0x10`
+  (moving).
+
+Entry 1, the height map (0x43A900), and 指令書 (region 15: the mission's WMES 0x1A2 in
+0x43BA20's window) only show things.
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |

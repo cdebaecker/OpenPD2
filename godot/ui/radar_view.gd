@@ -121,6 +121,7 @@ func _draw() -> void:
 		var t := tex("%s/images/%s/%02d.bmp" % [root, f[0], f[1]])
 		if t:
 			draw_texture(t, Vector2(f[2], f[3]))
+	_draw_pick()
 
 
 func _labels() -> void:
@@ -161,7 +162,95 @@ func waiting() -> Variant:
 	return null
 
 
+# --- マップ's area map: the window's regions (0x437AC0) and the grid's cells (0x440670) ---
+
+var pick := ""                  # "region" / "cell" while the area map waits, else ""
+var pick_cb: Callable           # the answer: a region (0-20) / a cell (Vector2i, or null)
+var _hover_r := -1
+var _pressed_r := -1
+var _hover_c := Vector2i(-1, -1)
+var fire_cell := Vector2i(-1, -1)   # DS:0x50AD95 / 0x50AD97: not taken
+
+
+static func region_at(p: Vector2) -> int:
+	## 0x43A570's 21 regions (0x452990(0x15, 400, 0x1A, 12, 12), then each row's y0 0x1A +
+	## 0x12 i, y1 + 0xB, type 1): the status list's rows 0-19 (x 400-495), 20 the close
+	## button (0x24A, 0x181)-(0x277, 0x18D), type 2; PtInRect over (x0, y0)-(x1 + 1, y1 + 1)
+	var x := int(p.x)
+	var y := int(p.y)
+	for i in 20:
+		var y0 := 0x1A + 0x12 * i
+		if x >= 400 and x <= 400 + 95 and y >= y0 and y <= y0 + 0xB:
+			return i
+	if x >= 0x24A and x <= 0x277 and y >= 0x181 and y <= 0x18D:
+		return 20
+	return -1
+
+
+static func cell_at(p: Vector2) -> Vector2i:
+	## 0x440670: the grid's cells of 24 px over (8, 0x20)-(0x16F, 0x187) (PtInRect)
+	if p.x < 8 or p.x >= 0x16F or p.y < 0x20 or p.y >= 0x187:
+		return Vector2i(-1, -1)
+	return Vector2i((int(p.x) - 8) / 0x18, (int(p.y) - 0x20) / 0x18)
+
+
+func _pick_input(ev: InputEvent) -> bool:
+	if pick == "":
+		return false
+	accept_event()
+	if ev is InputEventMouseMotion:
+		if pick == "region":
+			_hover_r = region_at(ev.position)
+		else:
+			_hover_c = cell_at(ev.position)
+		queue_redraw()
+	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+		if pick == "region":
+			var r := region_at(ev.position)
+			if ev.pressed:
+				_pressed_r = r
+			elif r != -1 and r == _pressed_r:
+				_answer(r)            # the release on the region pressed (0x202)
+		elif ev.pressed:
+			var c := cell_at(ev.position)
+			if c.x != -1 and c != fire_cell:
+				_answer(c)
+	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
+		if pick == "cell":
+			_answer(null)             # 0x204: 0 (the area map asks a row again)
+		# (a right click on the regions: -2, which 0x43A570 ignores)
+	return true
+
+
+func _answer(v: Variant) -> void:
+	pick = ""
+	_hover_r = -1
+	_pressed_r = -1
+	_hover_c = Vector2i(-1, -1)
+	queue_redraw()
+	var cb := pick_cb
+	pick_cb = Callable()
+	if cb.is_valid():
+		cb.call(v)
+
+
+func _draw_pick() -> void:
+	## 0x4380C0: the hovered region XORed in its colour (+0x11: 15) by its type (+0x10: rows
+	## an outline, the close button a fill); 0x440670: the hovered cell's inside XOR 7
+	## ((x 0x18 + 9, y 0x18 + 0x21)-(x 0x18 + 0x1F, y 0x18 + 0x37), type 2). (Drawn over the
+	## pictures in the colour, not XORed: the engine keeps no indices for them.)
+	if pick == "region" and _hover_r != -1:
+		if _hover_r == 20:
+			draw_rect(Rect2(0x24A, 0x181, 0x2E, 0xD), Color(pal(15), 0.5))
+		else:
+			draw_rect(Rect2(400, 0x1A + 0x12 * _hover_r, 96, 0xC), pal(15), false)
+	elif pick == "cell" and _hover_c.x != -1:
+		draw_rect(Rect2(_hover_c.x * 0x18 + 9, _hover_c.y * 0x18 + 0x21, 0x17, 0x17), Color(pal(7), 0.5))
+
+
 func _gui_input(ev: InputEvent) -> void:
+	if _pick_input(ev):
+		return
 	## the radio's click waits (ui_wait_click): a left or right click anywhere goes on
 	if ev is InputEventMouseButton and ev.pressed:
 		var gw: Variant = waiting()
