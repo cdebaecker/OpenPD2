@@ -98,3 +98,14 @@ class Writer extends Title.SaveHooks:
 
 	func write(name: String, data: PackedByteArray) -> bool:
 		return SaveFiles.write(name, data)
+
+
+## A save file's modified time as the local date (FindFirstFile's ftLastWriteTime through
+## FileTimeToLocalFileTime): {} without the file.
+static func modified_time(name: String) -> Dictionary:
+	var p := "user://saves/" + name
+	if not FileAccess.file_exists(p):
+		return {}
+	var t := FileAccess.get_modified_time(p)
+	var bias: int = int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+	return Time.get_datetime_dict_from_unix_time(t + bias)

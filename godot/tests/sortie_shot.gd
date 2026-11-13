@@ -1,7 +1,7 @@
 extends SceneTree
 ## Render the sortie screen before a battle and save it: godot --path engine/godot -s
 ## tests/sortie_shot.gd -- dash 0 out.png [group to select] [panel]
-## panel: "page0" / "page2" (the screen's other pages), "roster" (the pilot roster), "bulk" (the bulk menu's scopes), "machine" (the
+## panel: "page0" / "page2" (the screen's other pages), "brief" (作戦要項), "start" / "abort" / "save" / "load" (the questions and slot lists), "roster" (the pilot roster), "bulk" (the bulk menu's scopes), "lists" / "lists1" (一覧: the kinds; the weapons with the first one's crews), "machine" (the
 ## first member's armament screen with its machine list), "template" (its template
 ## menu's recall list, with a register made first in a scratch reg_unit).
 
@@ -21,12 +21,31 @@ func _init() -> void:
 		b._sortie_draw()
 	var panel := args[4] if args.size() > 4 else ""
 	match panel:
+		"data":
+			b._sortie_region(0x1A, Vector2.ZERO)      # the first member's card, its data region
+		"brief":
+			b._sortie_region(0x4E, Vector2.ZERO)
+		"abort", "save", "load":
+			b._sortie_system_press(["abort", "save", "load"].find(panel))
+		"start":
+			b._sortie_draw(true)
 		"page0", "page2":
 			b._sortie_region(0x42 if panel == "page0" else 0x44, Vector2.ZERO)
 		"roster":
 			b._sortie_press(["roster"])
 		"bulk":
 			b._sortie_press(["bulk", 0])
+		"lists":
+			b._sortie_region(0x30, Vector2.ZERO)
+		"lists1":                                    # the weapons' list, its first one's crews
+			b._sortie_list_items(1, -1)
+			for n in b.sortie_panel.find_children("*", "", true, false):
+				if n.get("role") == "sortie_list_items":
+					n.chosen.emit(0)
+					break
+		"bulk2":
+			b._sortie_press(["bulk", 0])
+			b._sortie_answer(0)
 		"machine", "template":
 			var k: int = b.w.ds[2] if b.w.crew_pool_n else 0      # the first free pilot
 			for g in 20:

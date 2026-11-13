@@ -1195,6 +1195,19 @@ func _plan_site_window(a: Array) -> void:
 		var sy := w.ds16(base + 4 * cur + 2)
 		mw._rect(sx * 2 + 0xAE - 0xA8, sy * 2 + 0x4E - 0x48, sx * 2 + 0xB4 - 0xA8, sy * 2 + 0x54 - 0x48, 0, 7, 2)
 	var names := SaveFiles.choice_texts(Plan.SITE_NAMES)
+	# the names' list (0x452A10 at (0x178, 0xE0), 8 columns) stays up during the pick's blink
+	# and its question (0x446F50 reuses it); it answers only when neither is up
+	var labels := []
+	for i in a[1]:
+		labels.append(names[i] if i < names.size() else "")
+	var ic := 8
+	for lb in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(lb)))
+	var gw := GameWindow.select_window(0x178, 0xE0, ic, 0, 0, labels, ic, [], true)
+	gw.role = "plan_site"
+	hold.add_child(gw)
+	if blinking or a[2] >= 0:
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if blinking:
 		# 0x445750 over the picked site: (x2 - 2, y2 - 2)-(x2 + 4, y2) and (x2 - 2, y2 + 1)-(x2 +
 		# 4, y2 + 4) from (0xB0, 0x50), x2 / y2 its coordinates x 2, until a click
@@ -1222,15 +1235,6 @@ func _plan_site_window(a: Array) -> void:
 				plan_st.ask = ["site", a[1], -1, base]
 			_plan_draw())
 		return
-	var labels := []
-	for i in a[1]:
-		labels.append(names[i] if i < names.size() else "")
-	var ic := 8
-	for lb in labels:
-		ic = maxi(ic, GameWindow.text_cols(str(lb)))
-	var gw := GameWindow.select_window(0x178, 0xE0, ic, 0, 0, labels, ic, [], true)
-	gw.role = "plan_site"
-	hold.add_child(gw)
 	hold.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and ev.pressed:
 			gw.outside(ev.button_index))
@@ -1603,6 +1607,11 @@ func _sortie_draw(confirm := false) -> void:
 	var asking := sortie_request != null or confirm or sortie_saving >= 0 or sortie_loading >= 0 or sortie_aborting
 	if not asking:
 		return
+	if sortie_request == null:
+		_sortie_question(confirm)            # (the game's windows)
+	else:
+		_sortie_request_win()
+	return
 	var plain := PanelContainer.new()
 	var theme := Theme.new()
 	theme.default_font_size = 8
@@ -1656,6 +1665,208 @@ func _sortie_draw(confirm := false) -> void:
 	hold2.add_child(plain)
 
 
+func _sortie_list_win(x: int, y: int, cols: int, labels: Array, regs: Array, head: String, head_rows: int, active: bool, role: String) -> GameWindow:
+	## 0x452A10 over the sortie screen (a header of 16 px, flags 1, when given)
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var gw := GameWindow.select_window(x, y, ic, head_rows if head != "" else 0, 1, labels, ic, regs, true)
+	gw.role = role
+	gw.waits = false
+	if head != "":
+		gw.print_text(head)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP if active else Control.MOUSE_FILTER_IGNORE
+	if not active:
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hold.add_child(gw)
+	if active:
+		hold.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.pressed:
+				gw.outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	return gw
+
+
+func _sortie_request_win() -> void:
+	## the roster (0x46A240: 0x452A10 at (0x38, 0x80), 0x40 columns, its header MES 0x1CD two
+	## lines with 12 sorting regions (x 0x80 + 0x18 i .. 0x8F + 0x18 i, y 8 .. 0x28), rows
+	## 0x46A6D0: MES 0x1CC "%-14s %s %s%s%%a7F %2d " of "given family", 地 / 空 (DS:0x5171EC
+	## / F0 by crew +3), %a4F (+6 bits 0 / 1) or %a7F, 不 / 負 / 未 (+5 = 0xFF) / 編, +9; then
+	## +0xA .. +0xD "%2X " ("%2d " below 0); then MES 0x1CB "%s %s %s %s %-16s" of 有 / 無 by
+	## +8 bits 0 .. 3 and the machine's name DS:0x50C265); the bulk menu (0x462390: the scopes
+	## DS:0x50D6E1 at (0x200 - 0xD8 page, 0x8C) 10 columns, the actions DS:0x50D6ED (0x1E0 -
+	## .., 0x9C) 0x12 columns or for the pool DS:0x50D6F9 (0x218 - .., 0x9C) 8 columns, the
+	## scopes' list staying up) and their question 0x451E30(MES 0x1CF, kind 1)
+	var dx := -0xD8 * sortie_page
+	match sortie_request[0]:
+		"ask":
+			if sortie_act != null and sortie_act[0] == "bulk":
+				_sortie_bulk_lists(dx, false)
+			_sortie_box(mes(sortie_request[1]), 1, func(yes: bool): _sortie_answer(1 if yes else 0))
+		"roster":
+			var rows: Array = sortie_request[1]
+			var labels := []
+			var codes := GameData.tables(campaign)
+			var mn: Array = codes.get("machine_names", [])
+			for c in rows:
+				var s6 := w.cb(c, 6)
+				var st := 0x5171DC if s6 & 1 else (0x5171E0 if s6 & 2 else (0x5171E8 if w.cb(c, 5) == 0xFF else 0x5171E4))
+				var cn: Array = names.crew
+				var n := w.cb(c, 0)
+				var nm: Array = cn[n] if n < cn.size() else ["", ""]
+				var r: String = wsp(GameData.base_raw(campaign, 0x1CC, mission_index), [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""]),
+					GameData.exe_text(campaign, 0x5171F0 if w.cb(c, 3) else 0x5171EC), "\u0001" + char(0x4F if s6 & 3 else 0x7F),
+					GameData.exe_text(campaign, st), Flight.s8(w.cb(c, 9))])
+				for f in [0xA, 0xB, 0xC, 0xD]:
+					var v := Flight.s8(w.cb(c, f))
+					r += ("%2d " % v) if v < 0 else ("%2X " % v)
+				var m := Flight.s8(w.ub(c, 0xC))
+				var sk := w.cb(c, 8)
+				var yn := func(bit: int) -> String: return GameData.exe_text(campaign, 0x50CBB3 if sk & bit else 0x50CBB6)
+				r += wsp(GameData.base_raw(campaign, 0x1CB, mission_index), [yn.call(1), yn.call(2), yn.call(4), yn.call(8),
+					str(mn[m]) if m >= 0 and m < mn.size() else ""])
+				labels.append(_codes(r))
+			var regs := []
+			for i in 12:
+				regs.append([0x80 + 0x18 * i, 8, 0x8F + 0x18 * i, 0x28, 2])
+			var gw := _sortie_list_win(0x38, 0x80, 0x40, labels, regs, GameData.base_raw(campaign, 0x1CD, mission_index).replace("\r", "\n"), 2, true, "sortie_roster")
+			gw.chosen.connect(func(v: int): _sortie_answer(v))
+		"bulk":
+			_sortie_bulk_lists(dx, true)
+
+
+func _sortie_bulk_lists(dx: int, active: bool) -> void:
+	var scope_t := BULK_SCOPES.map(func(a): return GameData.exe_text(campaign, a))      # (DS:0x50D6E1's)
+	if sortie_request[0] == "bulk" and sortie_request[1] == "scope":
+		var gw := _sortie_list_win(0x200 + dx, 0x8C, 10, scope_t.slice(0, 3), [], "", 0, active, "sortie_bulk")
+		gw.chosen.connect(func(v: int): _sortie_answer(v))
+		return
+	_sortie_list_win(0x200 + dx, 0x8C, 10, scope_t.slice(0, 3), [], "", 0, false, "sortie_bulk_scope")
+	var scope: int = sortie_answers[0] if not sortie_answers.is_empty() else 0
+	var pool := scope == 2
+	var acts: Array = (BULK_POOL_ACTIONS if pool else BULK_ACTIONS).map(func(a): return GameData.exe_text(campaign, a))
+	var n := 2 if pool else 3
+	var gw := _sortie_list_win((0x218 if pool else 0x1E0) + dx, 0x9C, 8 if pool else 0x12, acts.slice(0, n), [], "", 0,
+		active and sortie_request[0] == "bulk", "sortie_bulk_action")
+	if active and sortie_request[0] == "bulk":
+		gw.chosen.connect(func(v: int): _sortie_answer(v))
+
+
+func _sortie_box(text: String, kind: int, then: Callable) -> void:
+	## 0x451E30(text, kind) over the sortie screen (y 0xAA): then(true) for the first answer
+	var l: Array = BOX_LABELS[kind]
+	var wins := box_windows(text, [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])], 0xAA)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	for wn in wins:
+		hold.add_child(wn)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			wins[1].outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	wins[0].print_text(wins[0].get_meta("text"))
+	wins[1].role = "sortie_box"
+	wins[1].chosen.connect(func(v: int): then.call(v == 0))
+
+
+func _sortie_question(confirm: bool) -> void:
+	## 0x45ED60's questions: start 0x451E30(MES 0x1C, kind 0); abort 0x451E30(MES 0x1D9,
+	## kind 1); the save's / load's lists (0x497A10 / 0x498290) and their slot line
+	## (0x498070: 0x451E30 of DS:0x519EF0 "%8s %-18s %-5sを%sします", kind 1)
+	if confirm:
+		_sortie_box(mes(0x1C), 0, func(yes: bool):
+			Campaign.sortie_start(w, yes)
+			if yes:
+				Plan.pre_battle_round(w, brief_code, plan_code, 0)
+				sortie_panel.queue_free()
+				sortie_panel = null
+				hud_panel.visible = hud_bar
+				_begin_battle()
+			else:
+				_sortie_draw())
+	elif sortie_aborting:
+		_sortie_box(mes(0x1D9), 1, func(yes: bool): _sortie_system_run(0, 1 if yes else 0))
+	elif sortie_saving == 0x29 or sortie_loading == 0x29:
+		_sortie_slot_list(sortie_saving == 0x29)
+	elif sortie_saving >= 0:
+		var s := sortie_saving
+		_sortie_box(SaveFiles.slot_line(s, 0x519ED8).substr(4), 1, func(yes: bool):
+			_sortie_system_run(1, 1 if yes else 0, s))
+	elif sortie_loading >= 0:
+		var s := sortie_loading
+		var line: Variant = Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % s), w.mode_663a & 0xFF, true)
+		if line is String:                   # a save made in a battle: 0x498070's note 0x519F0C
+			sortie_loading = 0x29
+			sortie_text = SaveFiles.exe(0x519F0C)
+			show_line(sortie_text)
+			call_deferred("_sortie_draw")
+			return
+		_sortie_box(SaveFiles.slot_line(s, 0x519EE8).substr(4), 1, func(yes: bool):
+			if yes:
+				_sortie_system_run(2, 1, s)
+			else:
+				sortie_loading = 0x29
+				_sortie_draw())
+
+
+func _sortie_slot_list(saving: bool) -> void:
+	## 0x497BC0's rows: the save files PD2REC??.BIN that are the game's, by their number
+	## (0x4172B0 with 0x497F40), each "%2d:%8s %-18s %-5s %02d/%02d/%02d %02d:%02d" (DS:0x519E84:
+	## the number, Campaign / One Shot / Rescue, the name, the time or 編成, the file's date:
+	## its DOS year + 0x50, month, day, hour, minute); for a save first DS:0x4FD030 (New File)
+	## while fewer than 0x28 files (the free space aside), which takes the count + 1. 0x452A10
+	## at (0x78, 0x70), 0x35 columns, a right click leaving; none (MES 10 to save, 0xD to load:
+	## 0x452170) leaves too
+	var nums := []
+	for sl in Title.SLOTS:
+		if Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sl), 0xFF, true) is Array:
+			nums.append(sl)
+	var rows := []
+	var picks := []
+	var room := nums.size() <= 0x27
+	if saving and room:
+		rows.append(GameData.exe_text(campaign, 0x4FD030))
+		picks.append(nums.size() + 1)
+	for sl in nums:
+		var line: Array = Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sl), 0xFF, false)
+		var when: String = line[2] if line[2] != null else SaveFiles.exe(Title.SLOT_SORTIE_TIME)
+		var t := SaveFiles.modified_time("PD2REC%02d.BIN" % sl)
+		rows.append(wsp(GameData.exe_raw(campaign, 0x519E84), [sl, SaveFiles.exe(line[0]), SaveFiles.saved_name(line[1]), when,
+			int(t.get("year", 1980)) - 1980 + 0x50, int(t.get("month", 1)), int(t.get("day", 1)), int(t.get("hour", 0)), int(t.get("minute", 0))]))
+		picks.append(sl)
+	if rows.is_empty():
+		show_line(mes(10 if saving else 0xD))
+		sortie_saving = -1
+		sortie_loading = -1
+		call_deferred("_sortie_draw")
+		return
+	var ic := 0x35
+	for r in rows:
+		ic = maxi(ic, GameWindow.text_cols(str(r)))
+	var gw := GameWindow.select_window(0x78, 0x70, ic, 0, 0, rows, ic, [], true)
+	gw.role = "sortie_slots"
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	gw.chosen.connect(func(v: int):
+		if v < 0:
+			sortie_saving = -1
+			sortie_loading = -1
+		elif saving:
+			sortie_saving = picks[v]
+		else:
+			sortie_loading = picks[v]
+		_sortie_draw())
+
+
 var sortie_view: SortieView = null
 var sortie_page := 1             # DS:0x50D741 (1 when the screen opens)
 var sortie_pool_first := 0
@@ -1684,7 +1895,8 @@ func _sortie_region(r: int, at: Vector2) -> void:
 				_sortie_arm(c)
 				return
 			2:
-				show_line(ui("UI_NOT_PORTED"))           # 0x46B040, the pilot's data
+				_sortie_data(c)                               # 0x46B040, the pilot's data
+				return
 		_sortie_draw()
 		return
 	if r < 0x30:
@@ -1702,12 +1914,13 @@ func _sortie_region(r: int, at: Vector2) -> void:
 				_sortie_arm(c)
 				return
 			2:
-				show_line(ui("UI_NOT_PORTED"))
+				_sortie_data(c)
+				return
 		_sortie_draw()
 		return
 	match r:
 		0x30:
-			show_line(ui("UI_NOT_PORTED"))               # DS:0x50D701's lists (0x462C00 ..)
+			_sortie_lists()                              # DS:0x50D701's lists (0x462C00 ..)
 		0x31:
 			_sortie_press(["roster"])
 		0x32, 0x33:
@@ -1753,7 +1966,235 @@ func _sortie_region(r: int, at: Vector2) -> void:
 				sortie_member_first = mini((int(at.y) - 0xB4) * units / 0xA8, units - shown)
 			_sortie_draw()
 		0x4E:
-			show_line(ui("UI_NOT_PORTED"))               # 作戦要項 (the framed 40 x 5 window)
+			_sortie_brief()                              # 作戦要項
+
+
+func _sortie_brief() -> void:
+	## region 0x4E (作戦要項): a framed window (0x98, 0x90) 40 x 5 of 16 px (flags 1): MES 0xE1
+	## + t formatted with the plan type (DS:0x50C965[the entry's +0]), the group's name
+	## (DS:0x50C881[+0]), its call sign (DS:0x50C7E5[+1]), the target ("%2d-%2d", the
+	## direction DS:0x50E009[+0x1F] or the site DS:0x50E075[+0x1F]) and +0x20 x 5; then for
+	## each requirement that holds "\n" (DS:0x51698C) and MES 0x32 + 9 t + 3 j; then '@'
+	var g := sortie_sel
+	var t := Flight.gb(w, g, 0x21) & 15
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(hold)
+	var tw := GameWindow.text_window(0x98, 0x90, 0x28, 5, 1)
+	tw.waits = not auto_react and not _headless()
+	tw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hold.add_child(tw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			tw.outside(ev.button_index))
+	var txt := SortieView.fmt(GameData.base_raw(campaign, 0xE1 + t, mission_index), [plan_type_name(g),
+		GameData.call_sign(campaign, 39 + Flight.gb(w, g, 0)), GameData.call_sign(campaign, Flight.gb(w, g, 1)),
+		plan_target(g), Flight.s8(Flight.gb(w, g, 0x20)) * 5])
+	for r in Plan.requirements(w, g):
+		txt += "\n" + SortieView.fmt(GameData.base_raw(campaign, int(r) + 1, mission_index), [])
+	if GameWindow.translated(txt):
+		txt = GameWindow.fit(txt.replace("\r", "\n"), 0x28)
+	await tw.print_text(txt + "@")
+	hold.queue_free()
+
+
+const LIST_KINDS := [0x5104E0, 0x5104EC, 0x5104F8]      # DS:0x50D701 (機体 / 武器 / 備品一覧)
+
+
+func _sortie_lists() -> void:
+	## region 0x30 (一覧): 0x452A10 of DS:0x50D701 at (0x1B8 - 0xD8 page, 0x8C), 8 columns,
+	## closed on a pick; then 0x462C00 (machines, DS:0x50C265, a crew's +0xC), 0x462EA0
+	## (launchers, DS:0x50BDE5, the slots' +0xF + 2 k) or 0x4631B0 (rounds, DS:0x50C365, the
+	## pockets' +0x1B + 2 k) over the roster's crews (0x46A6D0's filter) aboard a machine:
+	## each kind held "%-18s%2d" (DS:0x5169C0) with its count (crews for a machine, slots /
+	## pockets for the others), in the
+	## table's order, at (0xE8, 0x60) 0x14 columns (none: MES 0x1DF / 0x1E0 / 0x1E1 by
+	## 0x452170); a pick opens 0x4634C0: the crews holding it, "%-14s" of "%s %s" (given,
+	## family) at (0xF8, 0x68) 0x0E columns, the kinds' list staying up; a crew picked shows
+	## its data (0x46B040), a right click goes back to the kinds; a right click on the
+	## kinds' list leaves
+	var kinds := LIST_KINDS.map(func(a): return GameData.exe_text(campaign, a))
+	var gw := _sortie_list_win(0x1B8 - 0xD8 * sortie_page, 0x8C, 8, kinds, [], "", 0, true, "sortie_lists")
+	gw.chosen.connect(func(v: int):
+		gw.get_parent().queue_free()
+		if v >= 0:
+			_sortie_list_items(v, -1))
+
+
+func _sortie_list_holds(kind: int, crew: int, item: int) -> bool:
+	## LAB_00462E80 / 0x463160 / 0x463470: the crew's machine is the item, or one of its six
+	## slots' launchers or pockets' rounds is
+	if kind == 0:
+		return Flight.s8(w.ub(crew, 0xC)) == item
+	for k in 6:
+		if Flight.s8(w.ub(crew, (0xF if kind == 1 else 0x1B) + 2 * k)) == item:
+			return true
+	return false
+
+
+func _sortie_list_items(kind: int, keep: int) -> void:
+	var t: Dictionary = GameData.tables(campaign)
+	var crews := []
+	for c in Campaign.sortie_roster_rows(w):
+		if Flight.s8(w.ub(c, 0xC)) != -1:
+			crews.append(c)
+	var size: int = [32, 96, 96][kind]
+	var count := []
+	count.resize(size)
+	count.fill(0)
+	for c in crews:
+		for k in (1 if kind == 0 else 6):         # (per slot / pocket: a launcher twice counts 2)
+			var it := Flight.s8(w.ub(c, [0xC, 0xF, 0x1B][kind] + 2 * k))
+			if it != -1:
+				count[it] += 1
+	var names_t: Variant = t.get(["machine_names", "launcher_names", "ammo_names"][kind], {})
+	var rows := []
+	var items := []
+	for it in size:
+		if count[it] == 0:
+			continue
+		var nm := ""
+		if names_t is Array:
+			nm = str(names_t[it]) if it < names_t.size() else ""
+		else:
+			nm = str(names_t.get(str(it), ""))
+		rows.append(wsp("%-18s%2d", [nm, count[it]]))
+		items.append(it)
+	if rows.is_empty():
+		show_line(mes([0x1DF, 0x1E0, 0x1E1][kind]))
+		return
+	var asking := keep >= 0
+	var gw := _sortie_list_win(0xE8, 0x60, 0x14, rows, [], "", 0, not asking, "sortie_list_items")
+	if not asking:
+		gw.chosen.connect(func(v: int):
+			gw.get_parent().queue_free()
+			if v >= 0:
+				_sortie_list_items(kind, items[v]))
+		return
+	var who := []
+	for c in crews:
+		if _sortie_list_holds(kind, c, keep):
+			who.append(c)
+	var labels := []
+	for c in who:
+		var cn: Array = names.crew
+		var n := w.cb(c, 0)
+		var nm: Array = cn[n] if n < cn.size() else ["", ""]
+		labels.append(wsp("%-14s", [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""])]))
+	var mw := _sortie_list_win(0xF8, 0x68, 0xE, labels, [], "", 0, true, "sortie_list_crews")
+	mw.chosen.connect(func(v: int):
+		mw.get_parent().queue_free()
+		gw.get_parent().queue_free()
+		if v >= 0:
+			_sortie_data(who[v])
+		else:
+			_sortie_list_items(kind, -1))
+
+
+func _sortie_data(c: int) -> void:
+	## 0x46B040, a pilot's data: framed windows (flags 1, 16 px) drawn in turn, then a click
+	## closes them: with a machine, for a ground one (0x4538A0 = 0) the pockets (0x46BD10:
+	## (0, 0x100) 42 x 7: MES 0x1BC, then per pocket 0-5 "\n" and MES 0x1BA "%14s%4d%5d%5d%4d:
+	## %1d %2d:%2d " of DS:0x50C365, +0 (signed), +1, +2, +4, +5, -(+6 & 0x1F), +7 & 0x1F, or
+	## 0x1BB (none), or 0x1DD past machine +0x17); the slots (0x46B960: (0, 0xA0) 0x47 x (4 /
+	## 3 / 6 by the class) + 1: MES 0x1BE, then per slot "\n" and MES 0x1BD of the launcher's
+	## name DS:0x50BDE5, range, "%4d" / "%4s" ** of +2, ground attack, +5, air attack, the
+	## round's +4, +5, -0x450860, +8's low 5 bits, DS:0x50CBAA[+8 >> 5], +9 & 7, ○ / × by +9
+	## bit 3, "%-17s" / "%-14sx%2d" of the round; or 0x1BB); the machine (0x46B810: (0xF8, 0)
+	## 18 x 6, MES 0x1BF as 0x456FD0's 0x1AD); the pilot (0x46B200: (0, 0) 29 x 9: MES 0x1C8 ..
+	## 0x1C5 each with "%2x(%3d)" (0x1C9; 0x1CA "%2d" below 0) of +0xA .. +0xD and their ranks,
+	## 0x1C4 / 0x1C3 / 0x1C2 / 0x1C1 the skills (+8 bits 0 / 1 / 2 / 3; 0x1C2 with the given
+	## name, 0x1C1 with "%2s%-10s " of "" and the family name), 0x1C0 "%s%s" of DS:0x50C949[+0xE
+	## >> 5] and DS:0x50C909[+0xE & 0x1F], the AP per turn, +9 and its rank; the face (0x4485E0)
+	## at (8, 8))
+	var t: Dictionary = GameData.tables(campaign)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	sortie_panel.add_child(hold)
+	var win := func(x: int, y: int, cols: int, rows: int) -> GameWindow:
+		var gw := GameWindow.text_window(x, y, cols, rows, 1)
+		gw.waits = false
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hold.add_child(gw)
+		return gw
+	var raw := func(id: int) -> String: return GameData.base_raw(campaign, id, mission_index)
+	var an: Dictionary = t.get("ammo_names", {})
+	var m := Flight.s8(w.ub(c, 0xC))
+	if m != -1:
+		var cls: int = Pd2World.CLASS_BY_CATEGORY[w.machine(m, 0) & 15]
+		if cls == 0:
+			var pw: GameWindow = win.call(0, 0x100, 0x2A, 7)
+			var txt: String = raw.call(0x1BC)
+			for p in 6:
+				txt += "\n"
+				var a := Flight.s8(w.ub(c, 0x1B + 2 * p))
+				if p >= w.machine(m, 0x17):
+					txt += raw.call(0x1DD)
+				elif a == -1:
+					txt += raw.call(0x1BB)
+				else:
+					txt += wsp(raw.call(0x1BA), [str(an.get(str(a), "")), Flight.s8(w.ammo(a, 0)), w.ammo(a, 1), w.ammo(a, 2),
+						w.ammo(a, 4), w.ammo(a, 5), -(w.ammo(a, 6) & 0x1F), w.ammo(a, 7) & 0x1F])
+			pw.print_text(txt)
+		var slots: int = [4, 3, 6, 6][cls]
+		var ww: GameWindow = win.call(0, 0xA0, 0x47, slots + 1)
+		var ln: Dictionary = t.get("launcher_names", {})
+		var types := GameData.exe_text(campaign, 0x50CBAA)
+		var st: String = raw.call(0x1BE)
+		for sl in slots:
+			st += "\n"
+			var l := Flight.s8(w.ub(c, 0xF + 2 * sl))
+			if l == -1:
+				st += raw.call(0x1BB)
+				continue
+			var a := Flight.s8(w.ub(c, 0x1B + 2 * (w.ub(c, 0x10 + 2 * sl) & 0xF)))
+			var hand := w.launcher(l, 7) & 0x1F
+			if hand & 0x10:
+				hand -= 32
+			hand += w.ammo(a, 6) & 0x1F
+			var low := w.launcher(l, 8) & 0x1F
+			if low & 0x10:
+				low -= 32
+			var a0 := Flight.s8(w.ammo(a, 0))
+			var rnd: String = wsp("%-17s", [str(an.get(str(a), ""))]) if a0 < 0 else wsp("%-14sx%2d", [str(an.get(str(a), "")), a0])
+			var tc := w.launcher(l, 8) >> 5
+			st += wsp(raw.call(0x1BD), [str(ln.get(str(l), "")), (w.ammo(a, 3) + w.launcher(l, 4)) & 0xFF, _equip_acc(w.launcher(l, 2)),
+				(w.ammo(a, 1) + w.launcher(l, 3)) & 0xFF, _equip_acc(w.launcher(l, 5)), (w.launcher(l, 6) + w.ammo(a, 2)) & 0xFF,
+				w.ammo(a, 4), w.ammo(a, 5), -(hand & 0xFF), low, types.substr(tc, 1) if tc < types.length() else " ",
+				w.launcher(l, 9) & 7, GameData.exe_text(campaign, 0x519810 if w.launcher(l, 9) & 8 else 0x519814), rnd])
+		ww.print_text(st)
+		var mw: GameWindow = win.call(0xF8, 0, 0x12, 6)
+		var mn: Array = t.get("machine_names", [])
+		var rr := Sight.recon_range(w, c)
+		mw.print_text(SortieView.fmt(raw.call(0x1BF), [str(mn[m]) if m < mn.size() else "", w.machine(m, 4), w.machine(m, 5),
+			Ai.machine_melee_of(w, c) & 0xFF, w.machine(m, 6), rr.x & 0xFF, w.machine(m, 7), rr.y & 0xFF, w.machine(m, 8)]))
+	var cw: GameWindow = win.call(0, 0, 0x1D, 9)
+	var ct := ""
+	var lv := [[0x1C8, 0xA, 1], [0x1C7, 0xB, 2], [0x1C6, 0xC, 3], [0x1C5, 0xD, 4]]
+	for e in lv:
+		var v := Flight.s8(w.cb(c, e[1]))
+		ct += raw.call(e[0]) + SortieView.fmt(raw.call(0x1CA if v < 0 else 0x1C9), [v, MachineStatus._rank(w, c, e[1], e[2]) & 0xFF])
+	var yn := func(bit: int) -> String: return GameData.exe_text(campaign, 0x50CBB3 if w.cb(c, 8) & bit else 0x50CBB6)
+	var cn: Array = names.crew
+	var nn := w.cb(c, 0)
+	var nm: Array = cn[nn] if nn < cn.size() else ["", ""]
+	ct += SortieView.fmt(raw.call(0x1C4), [yn.call(1)]) + SortieView.fmt(raw.call(0x1C3), [yn.call(2)])
+	ct += SortieView.fmt(raw.call(0x1C2), [str(nm[0]), yn.call(4)])
+	ct += SortieView.fmt(raw.call(0x1C1), [wsp("%2s%-10s ", ["", str(nm[1]) if nm.size() > 1 else ""]), yn.call(8)])
+	var e_ := w.cb(c, 0xE)
+	var br: Array = t.get("branches", [])
+	var rk: Array = t.get("ranks", [])
+	var rec := Flight.s8(w.cb(c, 0xF))
+	var ap_rank := 1 if rec < 0 else Flight.s8((w.mem8(0x50CC11 + Flight.s8(w.cb(c, 9))) - w.mem8(0x506B34 + 13 * rec)) & 0xFF)
+	ct += SortieView.fmt(raw.call(0x1C0), [str(br[e_ >> 5]) + str(rk[e_ & 0x1F] if (e_ & 0x1F) < rk.size() else ""),
+		Move.max_ap(w, c) & 0xFF, Flight.s8(w.cb(c, 9)), ap_rank & 0xFF])
+	cw.print_text(ct)
+	cw.blit("%s/images/face/%02d.bmp" % [GameData.ROOT, Flight.s8(w.cb(c, 1))], 8, 8)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			hold.queue_free())
 
 
 func _sortie_arm(c: int) -> void:
@@ -2836,7 +3277,7 @@ var hud_bar := false              # the engine's own command bar and log shown (
 func map_view_cells() -> Rect2i:
 	## the map window's area in cells (the engine's map window: the screen left of the info
 	## panel), for the minimap's frame
-	var sc := _win_root().scale.x
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
 	var mw := 432.0 * sc
 	var mh := get_viewport().get_visible_rect().size.y
 	var cw := TILE_W * cam.zoom.x
@@ -2852,7 +3293,7 @@ func minimap_scroll(px: int, py: int) -> void:
 	var ox := clampi(((px - v.size.x - 8) >> 1) + 1, 1, maxi(1, 0x47 - v.size.x))
 	var oy := clampi(((py - v.size.y - 0xE4) >> 1) + 1, 1, maxi(1, 0x47 - v.size.y))
 	var tl := hex_center(Vector2i(ox, oy)) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
-	var sc := _win_root().scale.x
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
 	cam.position = tl + Vector2(432.0 * sc / 2.0 / cam.zoom.x, get_viewport().get_visible_rect().size.y / 2.0 / cam.zoom.y)
 	if info_panel and is_instance_valid(info_panel):
 		info_panel.view_frame()
@@ -2863,7 +3304,7 @@ func _map_edge_scroll(p: Vector2) -> bool:
 	## column scrolls it a hex left (scroll_to 0x4066F0), on the first row up, on the last
 	## row down, on the last column right (one each move, while the map goes on); the
 	## engine's map window is the screen left of the info panel, its cells the zoomed hexes
-	var sc := _win_root().scale.x
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
 	var mw := 432.0 * sc                          # (the info panel's left edge)
 	var mh := get_viewport().get_visible_rect().size.y
 	if p.x >= mw or busy:

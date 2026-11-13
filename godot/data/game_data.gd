@@ -52,6 +52,8 @@ func tables(campaign: String) -> Dictionary:
 			"launcher_short": doc.get("launcher_short", []),
 			"ammo_codes": doc.get("ammo_codes", []),
 			"ammo_long": doc.get("ammo_long", []),
+			"branches": doc.get("branches", []),
+			"ranks": doc.get("ranks", []),
 			"launcher_names": doc.get("launcher_names", {}),
 			"ammo_names": doc.get("ammo_names", {}),
 			"crew_names": doc.get("crew_names", []),
@@ -255,7 +257,8 @@ static func _load_csv(table: String) -> Dictionary:
 			var cells := {}
 			for i in range(1, mini(row.size(), head.size())):
 				if row[i] != "":
-					cells[head[i]] = row[i]
+					# (a checkout with CRLF line ends gives a quoted multi-line cell CR LF: one break)
+					cells[head[i]] = row[i].replace("\r\n", "\n")
 			out[row[0]] = cells
 	return out
 
