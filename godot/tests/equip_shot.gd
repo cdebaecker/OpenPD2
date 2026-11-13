@@ -1,7 +1,7 @@
 extends SceneTree
 ## Render the armament screen (0x454E60) for a group's first member, or the first air /
 ## armoured pilot: godot --path engine/godot -s tests/equip_shot.gd -- pd2 0 out.png
-## <group|air|armour> [region to press first]
+## <group|air|armour> [region to press first | menu] [answers ...]
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	await process_frame
@@ -29,7 +29,13 @@ func _init() -> void:
 		k = Flight.gb(b.w, int(args[3]), 6)
 	b._equip_begin(k)
 	if args.size() > 4:
-		b._equip_region(int(args[4]))
+		if args[4] == "menu":
+			b.equip_cursor = Vector2(0x150, 0x100)
+			b._equip_press("menu")
+		else:
+			b._equip_region(int(args[4]))
+	for i in range(5, args.size()):        # answers to the windows that open
+		b._equip_answer(int(args[i]))
 	for i in 5:
 		await process_frame
 	await RenderingServer.frame_post_draw

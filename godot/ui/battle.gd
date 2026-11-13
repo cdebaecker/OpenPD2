@@ -911,9 +911,9 @@ func _plan_draw() -> void:
 			if plan_view == null:
 				_plan_maps_ui(box)
 	hud_layer.add_child(plan_panel)
-	# the orders are the plan window's own (0x444730 / 0x446320); the objective's question and
-	# the site's picker stay on the panel
-	plan_panel.visible = plan_view == null or (plan_st.mode == "orders" and plan_st.ask != null 			and plan_st.ask[0] in ["objective", "site"])
+	# the orders are the plan window's own (0x444730 / 0x446320), the objective's question
+	# (0x4DD390) and the site's picker (0x446F50) too
+	plan_panel.visible = plan_view == null or (plan_st.mode == "orders" and plan_st.ask != null 			and plan_st.ask[0] in ["site_none"])
 	if plan_view and plan_st.mode == "orders":
 		_plan_orders_view()
 
@@ -1101,7 +1101,120 @@ func _plan_orders_view() -> void:
 	plan_view.asking_cell = plan_st.ask != null and plan_st.ask[0] == "cell"
 	if plan_st.ask != null and plan_st.ask[0] in ["group", "name", "type", "time", "direction"]:
 		_plan_list_window(plan_st.ask)
+	if plan_st.ask != null and plan_st.ask[0] == "objective":
+		_plan_objective_window(plan_st.ask[1])
+	if plan_st.ask != null and plan_st.ask[0] == "site":
+		_plan_site_window(plan_st.ask)
 	plan_view.queue_redraw()
+
+
+func _plan_site_window(a: Array) -> void:
+	## 0x446F50 (a kind 2 / 3 plan's target): a framed window (0xA8, 0x48) 18 x 18 of 8 px
+	## (flags 2) cleared, mmap.pac[DS:0x50663D - 1] at (0xB0, 0x50); the group's site (+0x1F)
+	## marked by a fill of colour 7 (x 2 + 0xAE, y 2 + 0x4E)-(x 2 + 0xB4, y 2 + 0x54) of its
+	## (x, y) (the table's shorts); the sites' names DS:0x50E075 (those whose x is not -1) a
+	## list at (0x178, 0xE0), 8 columns; a pick moves the mark and asks 0x451E30 (0x514BB8,
+	## kind 0): yes sets +0x1F, no lists again; a right click leaves. (The camera cell's
+	## blink 0x446E80 and the pick's 0x445750 are not drawn.)
+	var g: int = plan_st.g
+	var base: int = a[3]
+	var cur: int = a[2] if a[2] >= 0 else Flight.s8(Flight.gb(w, g, 0x1F))
+	var hold := Control.new()
+	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var mw := GameWindow.text_window(0xA8, 0x48, 0x12, 0x12, 2)
+	mw.lh = 8
+	mw.black = true
+	mw._layout()
+	mw.waits = false
+	mw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mw.blit("%s/%s/images/mmap/%02d.bmp" % [GameData.ROOT, campaign, Debrief.chunk(w) - 1], 8, 8)
+	if cur >= 0 and cur < 8:
+		var sx := w.ds16(base + 4 * cur)
+		var sy := w.ds16(base + 4 * cur + 2)
+		mw._rect(sx * 2 + 0xAE - 0xA8, sy * 2 + 0x4E - 0x48, sx * 2 + 0xB4 - 0xA8, sy * 2 + 0x54 - 0x48, 0, 7, 2)
+	hold.add_child(mw)
+	plan_view.add_child(hold)
+	var names := SaveFiles.choice_texts(Plan.SITE_NAMES)
+	if a[2] >= 0:
+		# the question (0x451E30, kind 0) over the moved mark
+		var l: Array = BOX_LABELS[0]
+		var wins := box_windows(plan_exe(Plan.SITE_QUESTION), [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])], 0xAA)
+		for wn in wins:
+			hold.add_child(wn)
+		wins[0].print_text(wins[0].get_meta("text"))
+		hold.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.pressed:
+				wins[1].outside(ev.button_index))
+		wins[1].role = "plan_site_ask"
+		wins[1].chosen.connect(func(v: int):
+			if v == 0:
+				Flight.setgb(w, g, 0x1F, a[2])
+				plan_st.ask = null
+			else:
+				plan_st.ask = ["site", a[1], -1, base]
+			_plan_draw())
+		return
+	var labels := []
+	for i in a[1]:
+		labels.append(names[i] if i < names.size() else "")
+	var ic := 8
+	for lb in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(lb)))
+	var gw := GameWindow.select_window(0x178, 0xE0, ic, 0, 0, labels, ic, [], true)
+	gw.role = "plan_site"
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	gw.chosen.connect(func(v: int):
+		if v < 0:
+			plan_st.ask = null
+		else:
+			plan_st.ask = ["site", a[1], a[1][v], base]
+		_plan_draw())
+
+
+func _plan_objective_window(m: int) -> void:
+	## 0x4DD390 for the deploy hook's message (0x444730 region 0): MES m + 0x20 in a framed
+	## window ((0x24 - 4) / 2 x 8 = 0x80, 0x90) 40 x 5 of 12 px (flags 1), its two answers
+	## DS:0x50E06D (無視, 再考) a 4-column list at (0x80 + 0x150, 0x90), no right click;
+	## 0 leaves the plan, 1 stays
+	var hold := Control.new()
+	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	var tw := GameWindow.text_window(0x80, 0x90, 0x28, 5, 1)
+	tw.lh = 12
+	tw._layout()
+	tw.waits = not auto_react
+	tw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hold.add_child(tw)
+	var labels := SaveFiles.choice_texts(Plan.OBJECTIVE_BUTTONS)
+	var ic := 4
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var gw := GameWindow.select_window(0x80 + 0x150, 0x90, ic, 0, 0, labels.slice(0, 2), ic, [], false)
+	gw.role = "plan_objective"
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			if tw._waiting:
+				tw.outside(ev.button_index)
+			else:
+				gw.outside(ev.button_index))
+	plan_view.add_child(hold)
+	var t := GameData.base_text(campaign, m + 0x20, [], mission_index)
+	if GameWindow.translated(t):
+		t = GameWindow.fit(t, 0x28)
+	tw.print_text(t)
+	gw.chosen.connect(func(v: int):
+		if v < 0:
+			return
+		plan_st.ask = null
+		if v == 0:
+			plan_st.mode = "page"
+			plan_st.k = 0
+		_plan_draw())
 
 
 func _plan_list_window(a: Array) -> void:
@@ -1225,9 +1338,9 @@ func _plan_target_ask() -> void:
 		1:
 			plan_st.ask = ["direction", range(8)]
 		2:
-			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_A)]
+			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_A), -1, Plan.SITES_A]
 		3:
-			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_B)]
+			plan_st.ask = ["site", Plan.sites(w, Plan.SITES_B), -1, Plan.SITES_B]
 
 
 func plan_choices(arr: int) -> Array:
@@ -1284,7 +1397,7 @@ func _plan_ask_ui(box: VBoxContainer) -> void:
 						_plan_draw())
 			v.add_child(r)
 		"site":
-			if a.size() > 2:                       # 0x451E30: the site question (0x514BB8)
+			if a[2] >= 0:                          # 0x451E30: the site question (0x514BB8)
 				var q := Label.new()
 				q.text = plan_exe(Plan.SITE_QUESTION)
 				v.add_child(q)
@@ -1296,7 +1409,7 @@ func _plan_ask_ui(box: VBoxContainer) -> void:
 							Flight.setgb(w, g, 0x1F, a[2])
 							plan_st.ask = null
 						else:
-							plan_st.ask = ["site", a[1]]
+							plan_st.ask = ["site", a[1], -1, a[3]]
 						_plan_draw())
 					v.add_child(b)
 			else:
@@ -1304,7 +1417,7 @@ func _plan_ask_ui(box: VBoxContainer) -> void:
 				for i in a[1]:
 					var b := Button.new()
 					b.text = names[i] if i < names.size() else str(i)
-					b.pressed.connect(func(): plan_st.ask = ["site", a[1], i]; _plan_draw())
+					b.pressed.connect(func(): plan_st.ask = ["site", a[1], i, a[3]]; _plan_draw())
 					v.add_child(b)
 		_:
 			for i in a[1].size():
@@ -1972,6 +2085,7 @@ func _equip_entry_text(kind: String, e: Variant) -> String:
 
 
 var equip_view: EquipView = null
+var equip_cursor := Vector2(0x80, 0x90)   # the right click's place (the template menu's windows)
 var equip_info := 0               # DS:0x523E74: the pilot's window (0) or the machine's (1)
 
 
@@ -2000,6 +2114,7 @@ func _equip_draw() -> void:
 	equip_view.pressed.connect(_equip_region)
 	equip_view.chosen.connect(func(v: int):
 		if v == -2 and equip_request == null:
+			equip_cursor = equip_view.last
 			_equip_press("menu"))
 	if equip_text != "":
 		for l in equip_text.split("\n"):
@@ -2007,9 +2122,25 @@ func _equip_draw() -> void:
 		equip_text = ""
 	if equip_request == null:
 		return
-	if equip_request[0] == "pick" and equip_request[1] == "machine":
-		_equip_machine_list(equip_request[2])
+	if equip_request[0] == "ask":
+		_equip_ask(equip_request[1])
 		return
+	match equip_request[1]:
+		"machine":
+			_equip_machine_list(equip_request[2])
+			return
+		"slot":
+			_equip_slot_list(equip_request[2])
+			return
+		"item":
+			_equip_item_list(equip_request[2])
+			return
+		"pocket":
+			_equip_pocket_list(equip_request[2])
+			return
+		"menu", "register", "recall", "copy":
+			_equip_template_list(equip_request[1], equip_request[2])
+			return
 	var plain := PanelContainer.new()
 	var theme := Theme.new()
 	theme.default_font_size = 8
@@ -2108,6 +2239,251 @@ func _equip_machine_list(ents: Array) -> void:
 			gw.outside(ev.button_index))
 	sortie_panel.add_child(hold)
 	gw.chosen.connect(func(v: int): _equip_answer(v))
+
+
+static func wsp(t: String, args: Array) -> String:
+	## wsprintfA as the armament screen's lists build their rows: %[-][width] s / d / c, a
+	## string's width in Shift-JIS bytes (format_text's count), right-justified unless '-';
+	## %% a percent sign; %aHH (no wsprintf meaning: its rows are printed through
+	## format_text by the list, 0x40C090) kept as the colour code
+	var out := ""
+	var ai := 0
+	var i := 0
+	while i < t.length():
+		var c := t[i]
+		if c != "%" or i + 1 >= t.length():
+			out += c
+			i += 1
+			continue
+		i += 1
+		if t[i] == "%":
+			out += "%"
+			i += 1
+			continue
+		if t[i] == "a" and i + 2 < t.length():
+			out += "\u0001" + char(("0x" + t.substr(i + 1, 2)).hex_to_int())
+			i += 3
+			continue
+		var left := false
+		if t[i] == "-":
+			left = true
+			i += 1
+		var wd := ""
+		while i < t.length() and t[i] >= "0" and t[i] <= "9":
+			wd += t[i]
+			i += 1
+		if i >= t.length():
+			break
+		var k := t[i]
+		i += 1
+		var a: Variant = args[ai] if ai < args.size() else 0
+		ai += 1
+		var v := ""
+		match k:
+			"s":
+				v = str(a)
+			"d":
+				v = str(int(a))
+			"c":
+				v = str(a) if a is String else char(int(a))
+			_:
+				ai -= 1
+				v = k
+		var n := 0
+		var j := 0
+		while j < v.length():
+			if v[j] == "\u0001":
+				n += 4                               # (a colour code: wsprintf counts "%aHH", 4 bytes)
+				j += 2
+				continue
+			n += 1 if GameData._single_byte(v.unicode_at(j)) else 2
+			j += 1
+		var pad := " ".repeat(maxi(0, int(wd) - n)) if wd != "" else ""
+		out += (v + pad) if left else (pad + v)
+	return out
+
+
+func _equip_list(x: int, y: int, cols: int, labels: Array, regs: Array, head: String, role: String) -> GameWindow:
+	## 0x452A10 over the armament screen: a header window (one line of 16 px, flags 1) when
+	## head is given, its regions (sorting), the rows; a right click cancels (-2). Engine-side
+	## fit: rows wider than the columns (translations) widen it.
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var gw := GameWindow.select_window(x, y, ic, 1 if head != "" else 0, 1, labels, ic, regs, true)
+	if x + gw.size.x > MAIN_W:
+		gw.position.x = maxi(0, MAIN_W - int(gw.size.x)) & ~7
+	gw.role = role
+	gw.pal16 = equip_view.palette16() if equip_view else []
+	gw.waits = false
+	if head != "":
+		gw.print_text(head)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	return gw
+
+
+func _equip_head_regions(xs: Array) -> Array:
+	var regs := []
+	for r in xs:
+		regs.append([r[0], 8, r[1], 0x17, 2])
+	return regs
+
+
+func _equip_acc(v: int) -> String:
+	## wsprintf "%4d" of an accuracy, or "%4s" of "**" (DS:0x50CBE1) for 0xFF
+	return wsp("%4s", [GameData.exe_text(campaign, 0x50CBE1)]) if v == 0xFF else wsp("%4d", [v])
+
+
+func _equip_slot_list(ents: Array) -> void:
+	## 0x457C80: 0x452A10 at (0, 0x80), 0x4B columns, header MES 0x1B2 with 13 sorting
+	## regions (y 8-0x17: x 0x70-0x8F, 0x98-0xB7, 0xC0-0xCF, 0xD8-0xF7, 0x100-0x10F,
+	## 0x118-0x137, 0x140-0x157, 0x160-0x16F, 0x178-0x187, 400-0x19F, 0x1A8-0x1B7,
+	## 0x1C0-0x247, 0x250-0x25F); rows 0x4582D0: a slot holding a launcher first "%30s%-46s"
+	## of %a7F and 武器をはずす (DS:0x5156C0); then MES 0x1B5 by wsprintf: %a4F when the
+	## launcher's or the round's stock is 0 (else %a7F), the launcher's name DS:0x50BDE5,
+	## range (0x4508D0), the ground accuracy (+2), ground attack (0x450940), air accuracy
+	## (+5), air attack (0x4509B0), the round's +4 : +5, -(0x450860) : launcher +8's low 5
+	## bits, DS:0x50CBAA[+8 >> 5] and +9 & 7, the launcher's stock, ○ / × (DS:0x5158A8 /
+	## AC by +9 bit 3), the round ("%-20s" of its name when its +0 is negative, "%-14sx%2d"
+	## with +0 when the launcher takes one round, else "%-14sx%2d %2d" with its stock)
+	var t: Dictionary = GameData.tables(campaign)
+	var ln: Dictionary = t.get("launcher_names", {})
+	var an: Dictionary = t.get("ammo_names", {})
+	var row := GameData.base_raw(campaign, 0x1B5, mission_index)
+	var labels := []
+	for e in ents:
+		if e is String:
+			labels.append(wsp("%30s%-46s", ["\u0001" + char(0x7F), GameData.exe_text(campaign, 0x5156C0)]))
+			continue
+		var l: int = e[0]
+		var a: int = e[1]
+		var ls := w.mem8(Equipment.STOCK_LAUN + l)
+		var as_ := w.mem8(Equipment.STOCK_AMMO + a)
+		var low := w.launcher(l, 8) & 0x1F
+		if low & 0x10:
+			low -= 32
+		var hand := (w.launcher(l, 7) & 0x1F)
+		if hand & 0x10:
+			hand -= 32
+		hand += w.ammo(a, 6) & 0x1F
+		var types := GameData.exe_text(campaign, 0x50CBAA)
+		var tc := w.launcher(l, 8) >> 5
+		var a0 := Flight.s8(w.ammo(a, 0))
+		var rnd := ""
+		if a0 < 0:
+			rnd = wsp("%-20s", [str(an.get(str(a), ""))])
+		elif Flight.s8(w.launcher(l, 0xB)) == -1:
+			rnd = wsp("%-14sx%2d", [str(an.get(str(a), "")), a0])
+		else:
+			rnd = wsp("%-14sx%2d %2d", [str(an.get(str(a), "")), a0, as_])
+		labels.append(wsp(row, ["\u0001" + char(0x4F if ls == 0 or as_ == 0 else 0x7F),
+			str(ln.get(str(l), "")), (w.ammo(a, 3) + w.launcher(l, 4)) & 0xFF, _equip_acc(w.launcher(l, 2)),
+			(w.ammo(a, 1) + w.launcher(l, 3)) & 0xFF, _equip_acc(w.launcher(l, 5)), (w.launcher(l, 6) + w.ammo(a, 2)) & 0xFF,
+			w.ammo(a, 4), w.ammo(a, 5), -(hand & 0xFF), low, types.substr(tc, 1) if tc < types.length() else " ",
+			w.launcher(l, 9) & 7, ls, GameData.exe_text(campaign, 0x5158A8 if w.launcher(l, 9) & 8 else 0x5158AC), rnd]))
+	var regs := _equip_head_regions([[0x70, 0x8F], [0x98, 0xB7], [0xC0, 0xCF], [0xD8, 0xF7], [0x100, 0x10F],
+		[0x118, 0x137], [0x140, 0x157], [0x160, 0x16F], [0x178, 0x187], [400, 0x19F], [0x1A8, 0x1B7], [0x1C0, 0x247], [0x250, 0x25F]])
+	var gw := _equip_list(0, 0x80, 0x4B, labels, regs, GameData.base_text(campaign, 0x1B2, [], mission_index), "equip_slot")
+	gw.chosen.connect(func(v: int): _equip_answer(v))
+
+
+func _equip_item_list(ents: Array) -> void:
+	## 0x458E40 (the items 0x458B80, a launcher's magazines 0x459230): 0x452A10 at (0x90,
+	## 0x80), 0x2C columns, header MES 0x1B8 with 7 sorting regions (y 8-0x17: x 0x80-0x9F,
+	## 0xA8-0xC7, 0xD0-0xEF, 0xF8-0x117, 0x120-0x137, 0x140-0x14F, 0x158-0x167); rows
+	## 0x458CD0: MES 0x1B7 of %a4F (stock 0) / %a7F, the round's name DS:0x50C365, +0
+	## (signed), +1, +2, +4, +5, -(+6 & 0x1F), +7 & 0x1F, the stock
+	var an: Dictionary = GameData.tables(campaign).get("ammo_names", {})
+	var row := GameData.base_raw(campaign, 0x1B7, mission_index)
+	var labels := []
+	for e in ents:
+		if e is String:
+			labels.append(_equip_entry_text("item", e))
+			continue
+		var a: int = e
+		var st := w.mem8(Equipment.STOCK_AMMO + a)
+		labels.append(wsp(row, ["\u0001" + char(0x4F if st == 0 else 0x7F), str(an.get(str(a), "")),
+			Flight.s8(w.ammo(a, 0)), w.ammo(a, 1), w.ammo(a, 2), w.ammo(a, 4), w.ammo(a, 5), -(w.ammo(a, 6) & 0x1F),
+			w.ammo(a, 7) & 0x1F, st]))
+	var regs := _equip_head_regions([[0x80, 0x9F], [0xA8, 0xC7], [0xD0, 0xEF], [0xF8, 0x117], [0x120, 0x137], [0x140, 0x14F], [0x158, 0x167]])
+	var gw := _equip_list(0x90, 0x80, 0x2C, labels, regs, GameData.base_text(campaign, 0x1B8, [], mission_index), "equip_item")
+	gw.chosen.connect(func(v: int): _equip_answer(v))
+
+
+func _equip_pocket_list(ents: Array) -> void:
+	## 0x454E60's pocket cases: 0x452A10 at (200, 0x80), 0x1C columns, no header: MES 0x1A6
+	## with DS:0x50CBE0 ("") when the pocket holds a round, MES 0x1A7, MES 0x1A8 with each
+	## magazine launcher's name DS:0x50BDE5
+	var ln: Dictionary = GameData.tables(campaign).get("launcher_names", {})
+	var labels := []
+	for e in ents:
+		if e is String:
+			labels.append(wsp(GameData.base_raw(campaign, 0x1A6 if e == "remove" else 0x1A7, mission_index), [""]))
+		else:
+			labels.append(wsp(GameData.base_raw(campaign, 0x1A8, mission_index), [str(ln.get(str(Flight.s8(e[1])), ""))]))
+	var gw := _equip_list(200, 0x80, 0x1C, labels, [], "", "equip_pocket")
+	gw.chosen.connect(func(v: int): _equip_answer(v))
+
+
+func _equip_menu_at() -> Vector2i:
+	## the cursor as 0x454E60 takes it for the template menu: x & 0xFFF0 at most 0x250, y
+	## at most 0x150
+	var p := Vector2i(equip_cursor)
+	return Vector2i(mini(p.x & 0xFFF0, 0x250), mini(p.y, 0x150))
+
+
+func _equip_template_list(kind: String, ents: Array) -> void:
+	## the right click's menu (0x452A10 of DS:0x51571C / 2C / 3C at the cursor, 4 columns);
+	## 0x45A700's lists: a framed title window (x, y) 9 x 1 of 16 px (DS:0x515BA8 register,
+	## 0x515C0C recall, 0x515CAC copy) and the list at (x, y + 0x20), 9 columns; x, y the
+	## menu's place (0x80, 0x90 without one)
+	var at := _equip_menu_at()
+	var labels := []
+	for e in ents:
+		labels.append(_equip_entry_text(kind, e))
+	if kind == "menu":
+		var gw := _equip_list(at.x, at.y, 4, labels, [], "", "equip_menu")
+		gw.chosen.connect(func(v: int): _equip_answer(v))
+		return
+	var title := GameWindow.text_window(at.x, at.y, 9, 1, 1)
+	title.waits = false
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tt := GameData.exe_text(campaign, TEMPLATE_TITLES[kind])
+	if GameWindow.text_cols(tt) > 9:
+		title.cols = GameWindow.text_cols(tt)        # (engine-side: a longer translation widens it)
+		title._layout()
+	title.print_text(tt)
+	var gw := _equip_list(at.x, at.y + 0x20, 9, labels, [], "", "equip_" + kind)
+	gw.get_parent().add_child(title)
+	gw.chosen.connect(func(v: int): _equip_answer(v))
+
+
+func _equip_ask(msg: int) -> void:
+	## 0x451E30(text, kind): the text framed at ((80 - (len + 2)) / 2 x 8, 0xAA), its two
+	## answers DS:0x50CBC9[kind] (kind 0 for the template's overwrite, else 1) as a 4-column
+	## list at its right, y 0xCA; the first answers yes (1), the second or a right click 0
+	var kind := 0 if msg == Equipment.TEMPLATE_TEXT.overwrite else 1
+	var l: Array = BOX_LABELS[kind]
+	var wins := box_windows(equip_msg(msg), [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])], 0xAA)
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	for wn in wins:
+		hold.add_child(wn)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			wins[1].outside(ev.button_index))
+	sortie_panel.add_child(hold)
+	wins[0].print_text(wins[0].get_meta("text"))
+	wins[1].role = "equip_ask"
+	wins[1].chosen.connect(func(v: int): _equip_answer(1 if v == 0 else 0))
 
 
 func _equip_region(r: int) -> void:
@@ -2286,11 +2662,51 @@ var _rpress := Vector2(-100, -100)
 var hud_bar := false              # the engine's own command bar and log shown (H)
 
 
+func _map_edge_scroll(p: Vector2) -> bool:
+	## ui_map_click's mouse move (0x47AC70 case 0): the cursor on the map window's first
+	## column scrolls it a hex left (scroll_to 0x4066F0), on the first row up, on the last
+	## row down, on the last column right (one each move, while the map goes on); the
+	## engine's map window is the screen left of the info panel, its cells the zoomed hexes
+	var sc := _win_root().scale.x
+	var mw := 432.0 * sc                          # (the info panel's left edge)
+	var mh := get_viewport().get_visible_rect().size.y
+	if p.x >= mw or busy:
+		return false
+	var cw := TILE_W * cam.zoom.x
+	var ch := TILE_H * cam.zoom.y
+	var cols := int(mw / cw)
+	var rows := int(mh / ch)
+	var row := int(p.y / ch)
+	var col := int(p.x / cw)
+	var d := Vector2.ZERO
+	if col < 1:
+		d = Vector2(-TILE_W, 0)
+	elif col < cols - 1:
+		if row < 1:
+			d = Vector2(0, -TILE_H)
+		elif row >= rows - 1:
+			d = Vector2(0, TILE_H)
+	else:
+		d = Vector2(TILE_W, 0)
+	if d == Vector2.ZERO:
+		return false
+	var np := (cam.position + d).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
+	if np == cam.position:
+		return false
+	cam.position = np
+	return true
+
+
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseMotion:
 		if ev.button_mask & MOUSE_BUTTON_MASK_RIGHT or ev.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 			cam.position = (cam.position - ev.relative / cam.zoom).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
-		hover = hex_at(get_global_mouse_position())
+		var hv := hex_at(get_global_mouse_position())
+		if ev.button_mask == 0 and _map_edge_scroll(ev.position):
+			pass
+		elif hv != hover and w.on_map(hv.x, hv.y) and info_panel and is_instance_valid(info_panel):
+			info_panel.readouts(hv.x, hv.y, w.O[hv.x + MAP * hv.y] - 1)
+		hover = hv
 		overlay.queue_redraw()
 	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT:
 		# a right click (not a drag): the selected unit's command menu (0x4EF600's -2)
@@ -2460,12 +2876,222 @@ func _panel_region(k: int) -> void:
 			_confirm(msg(0x1E0), _end_turn, 1)  # 終了: 0x1E0, a message box of kind 1
 		16:
 			_cmd_system()                        # システム: 0x4847C0
+		8:
+			_units_list()                        # 部隊: 0x4EFC60
+		9:
+			_arms_menu()                         # 武装: 0x4E9D90
+		12:
+			# 作戦中止: WMES 0x1DF in a message box of kind 0; yes: the phase returns 0x81,
+			# which mission_loop takes as the mission's end code (the title after it)
+			_confirm(msg(0x1DF), func(): _end_mission(0x81), 0)
 		22:
 			if selected != -1:
 				_cmd_pocket_menu()               # the weapons' box: ui_machine_status
+		23:
+			# the picture: 0x467880 for the selected unit when it is an active own one
+			if selected != -1 and w.active(selected) and not w.is_enemy(selected):
+				_cmd_pocket_menu()
 		_:
-			say(ui("UI_NOT_PORTED"))             # 部隊 0x4EFC60, 武装 0x4E9D90, マップ 0x43A3E0,
-			                                     # 作戦中止 0x1DF, 一斉 0x429540, 指令書 0x43BA20, 23
+			say(ui("UI_NOT_PORTED"))             # マップ 0x43A3E0, 一斉 0x429540,
+			                                     # 指令書 0x43BA20
+
+
+func _arms_units() -> Array:
+	## 0x4EA050 / 0x4EA2F0 / 0x4EA620 / 0x4EA950's units: crew c (= unit c, c below 64) with
+	## +4 at most DS:0x50AD92, +2 = 0, +6 & 3 = 0, the unit's status (+0x36) 0, a machine,
+	## active
+	var out := []
+	for c in 64:
+		if w.cb(c, 4) <= w.ds16(0x50AD92) and w.cb(c, 2) == 0 and w.cb(c, 6) & 3 == 0 \
+				and w.ub(c, 0x36) == 0 and w.ub(c, 0xC) != 0xFF and w.active(c):
+			out.append(c)
+	return out
+
+
+func _centred_list(labels: Array, cols: int, role: String) -> GameWindow:
+	## 0x40C090 centred in the main window (0x452450's size), a right click cancelling
+	var ic := cols
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))
+	var n := labels.size()
+	var ww := (ic + (3 if n > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var hh := (mini(n, GameWindow.SCROLL_SHOWN) + 1) * 16
+	var gw := GameWindow.select_window(maxi(0, (MAIN_W - ww) >> 1), maxi(0, (MAIN_H - hh) >> 1), ic, 0, 0, labels, ic, [], true)
+	gw.role = role
+	_hold([gw])
+	react_panel = null
+	return gw
+
+
+func _arms_menu() -> void:
+	## 武装 (0x4E9D90): 0x40C090 of DS:0x51F8C8 / 0x51F8E0 / 0x51F8F8 (機体一覧, 武器一覧,
+	## 備品一覧), 8 columns at ((x & ~7) - 0x18, y - 0x18) of the cursor (kept inside, not
+	## below 0), a right click closing it
+	var labels := [GameData.exe_text(campaign, 0x51F8C8), GameData.exe_text(campaign, 0x51F8E0), GameData.exe_text(campaign, 0x51F8F8)]
+	var ic := 8
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(l))
+	var ww := ic * 8 + 16
+	var hh := (labels.size() + 1) * 16
+	var m := _mouse_main()
+	var x := (int(m.x) & 0xFFF8) - 0x18
+	var y := int(m.y) - 0x18
+	if ww - 1 + x > MAIN_W:
+		x = MAIN_W - ww
+	if hh - 1 + y > MAIN_H:
+		y = MAIN_H - hh
+	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), ic, 0, 0, labels, ic, [], true)
+	gw.role = "arms"
+	_hold([gw])
+	react_panel = null
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v >= 0:
+			_arms_list(v))
+
+
+func _arms_list(kind: int) -> void:
+	## 0x4EA050 (machines: the unit's +0xC), 0x4EA2F0 (launchers: each slot's, its pocket
+	## state +1 & 0x30 not 0x20), 0x4EA620 (rounds: each pocket's with a count, its state
+	## +1 & 0xC0 not 0x80), counted over _arms_units; rows "%-18s%2d" (DS:0x51F6C4) of the
+	## name (DS:0x50C265 / 0x50BDE5 / 0x50C365) and the count, 0x14 columns centred; none:
+	## 武装 ends; a right click ends it; a row: its units (0x4EA950)
+	var counts := {}
+	for c in _arms_units():
+		match kind:
+			0:
+				var m := w.ub(c, 0xC)
+				counts[m] = counts.get(m, 0) + 1
+			1:
+				for s in 6:
+					var l := w.ub(c, 0xF + 2 * s)
+					if l != 0xFF and w.ub(c, 0x10 + 2 * s) & 0x30 != 0x20:
+						counts[l] = counts.get(l, 0) + 1
+			2:
+				for p in 12:
+					var a := w.ub(c, 0x1B + 2 * p)
+					var cs := w.ub(c, 0x1C + 2 * p)
+					if a != 0xFF and cs & 0xC0 != 0x80 and cs & 0x3F != 0:
+						counts[a] = counts.get(a, 0) + 1
+	if counts.is_empty():
+		return
+	var t: Dictionary = GameData.tables(campaign)
+	var ids := counts.keys()
+	ids.sort()
+	var labels := []
+	for i in ids:
+		var nm := ""
+		match kind:
+			0:
+				var mn: Array = t.get("machine_names", [])
+				nm = str(mn[i]) if i < mn.size() else ""
+			1:
+				nm = str(t.get("launcher_names", {}).get(str(i), ""))
+			2:
+				nm = str(t.get("ammo_names", {}).get(str(i), ""))
+		labels.append(wsp("%-18s%2d", [nm, counts[i]]))
+	var gw := _centred_list(labels, 0x14, "arms_list")
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v >= 0:
+			_arms_who(kind, ids[v]))
+
+
+func _arms_who(kind: int, id: int) -> void:
+	## 0x4EA950: _arms_units with the machine (0x4EA2D0), a slot's launcher (0x4EA5D0) or a
+	## pocket's round with a count (0x4EA900); rows "%-14s" of "%s %s" (given, family), 0xE
+	## columns centred; a right click: the list again; a unit: scroll_to and its command menu
+	var who := []
+	for c in _arms_units():
+		var ok := false
+		match kind:
+			0:
+				ok = w.ub(c, 0xC) == id
+			1:
+				for s in 6:
+					ok = ok or w.ub(c, 0xF + 2 * s) == id
+			2:
+				for p in 12:
+					ok = ok or (w.ub(c, 0x1B + 2 * p) == id and w.ub(c, 0x1C + 2 * p) & 0x3F != 0)
+		if ok:
+			who.append(c)
+	if who.is_empty():
+		_arms_list(kind)
+		return
+	var crew_names: Array = names.crew
+	var labels := []
+	for c in who:
+		var n := w.cb(c, 0)
+		var nm: Array = crew_names[n] if n < crew_names.size() else ["", ""]
+		labels.append(wsp("%-14s", [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""])]))
+	var gw := _centred_list(labels, 0xE, "arms_who")
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v < 0:
+			_arms_list(kind)
+			return
+		var u: int = who[v]
+		_select(u)
+		cam.position = hex_center(w.pos(u))      # scroll_to
+		open_command_menu(u))
+
+
+func _units_list() -> void:
+	## 部隊 (0x4EFC60 / 0x4EFD10): the active own units 0-39 sorted by AP (+0xE) from the
+	## highest (0x4EFD10's exchange sort), each WMES 0x1BC of 0x70, the pilot's given name
+	## DS:0x50BCB5, the machine's code DS:0x50C2E5, 0x4F1780's colour << 4 | 0xF and 100 -
+	## condition (+0xD), 0x7F and the AP, 0x7F and Cover (+0 bit 0x20) / "  --- ", 0x4F and
+	## Stack (+1 & 0xC = 8 or +1 & 0x30 = 0x20) / 0x7F and "  --- ", 0x7F and Carry (+0x34
+	## not 0xFF) / "  --- "; a select window (0x40C090) of 0x36 columns centred in the main
+	## window, a right click closing it; a unit is scrolled to and its command menu opens
+	## (then the list again, as 0x4EFC60 loops)
+	var ids := []
+	for u in 40:
+		if w.active(u) and not w.is_enemy(u):
+			ids.append(u)
+	if ids.is_empty():
+		return
+	for i in ids.size():
+		for j in range(i, ids.size()):
+			if w.sb(ids[i], 0xE) < w.sb(ids[j], 0xE):
+				var t: int = ids[i]
+				ids[i] = ids[j]
+				ids[j] = t
+	var codes: Array = GameData.tables(campaign).get("machine_codes", [])
+	var crew_names: Array = names.crew
+	var dash := GameData.exe_text(campaign, 0x51FB30)
+	var labels := []
+	for u in ids:
+		var n := w.ucrew(u, 0)
+		var given: String = str(crew_names[n][0]) if n < crew_names.size() else ""
+		var m := Pd2World.s8(w.ub(u, 0xC))
+		var dmg := 100 - w.ub(u, 0xD)
+		var cc := 7 if dmg < 0x32 else (4 if dmg > 0x4A else 15)
+		var p1 := w.ub(u, 1)
+		var stack := (p1 & 0xC) == 8 or (p1 & 0x30) == 0x20
+		labels.append(SortieView.fmt(msg_raw(0x1BC), [0x70, given, str(codes[m]) if m >= 0 and m < codes.size() else "",
+			cc << 4 | 0xF, dmg, 0x7F, w.sb(u, 0xE), 0x7F,
+			GameData.exe_text(campaign, 0x51FB18) if w.ub(u, 0) & 0x20 else dash,
+			0x4F if stack else 0x7F, GameData.exe_text(campaign, 0x51FB20) if stack else dash,
+			0x7F, GameData.exe_text(campaign, 0x51FB28) if w.ub(u, 0x34) != 0xFF else dash]))
+	var ic := 0x36
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(l))
+	var n_ := labels.size()
+	var ww := (ic + (3 if n_ > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var hh := (mini(n_, GameWindow.SCROLL_SHOWN) + 1) * 16
+	var gw := GameWindow.select_window(maxi(0, (MAIN_W - ww) >> 1), maxi(0, (MAIN_H - hh) >> 1), ic, 0, 0, labels, ic, [], true)
+	gw.role = "units"
+	_hold([gw])
+	react_panel = null
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		if v < 0 or v >= ids.size():
+			return
+		var u: int = ids[v]
+		_select(u)
+		cam.position = hex_center(w.pos(u))      # scroll_to
+		open_command_menu(u))
 
 
 func panel_refresh() -> void:
@@ -3185,8 +3811,9 @@ func open_box(text: String, labels: Array) -> GameWindow:
 	return wins[1]
 
 
-func box_windows(text: String, labels: Array) -> Array:
-	## ui_message_box's two windows (open_box's layout): [the message's, the buttons']
+func box_windows(text: String, labels: Array, at_y := -1) -> Array:
+	## ui_message_box's two windows (open_box's layout): [the message's, the buttons'];
+	## at_y: 0x451E30's message row (0xAA, the buttons at 0xCA) instead of the centre
 	var t := text.replace("@", "").strip_edges()
 	var n := GameWindow.text_cols(t)
 	var rows := 1
@@ -3197,7 +3824,7 @@ func box_windows(text: String, labels: Array) -> Array:
 		for l in t.split("\n"):
 			n = maxi(n, GameWindow.text_cols(l))
 	var x := ((80 - (n + 2)) / 2) * 8
-	var y := (MAIN_H - 0x20) / 2
+	var y := (MAIN_H - 0x20) / 2 if at_y < 0 else at_y
 	var mw := GameWindow.text_window(x, y, n, rows, 1)
 	var ic := 4
 	for l in labels:
@@ -4841,7 +5468,7 @@ func msg_codes(id: int) -> String:
 	var out := ""
 	var last := 0
 	for m in re.search_all(t):
-		out += t.substr(last, m.get_start() - last) + "" + char(m.get_string(1).hex_to_int())
+		out += t.substr(last, m.get_start() - last) + "\u0001" + char(m.get_string(1).hex_to_int())
 		last = m.get_end()
 	return out + t.substr(last)
 
@@ -5046,7 +5673,7 @@ func _open_pick_box(t: String) -> void:
 	## 0x451E30: ui_message_box's layout (kind 1: 実行 / 中止) in the start window
 	var l: Array = BOX_LABELS[1]
 	var labels := [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])]
-	var wins := box_windows(t, labels)
+	var wins := box_windows(t, labels, 0xAA)
 	_pick_hold(wins)
 	wins[0].print_text(wins[0].get_meta("text"))
 	wins[1].chosen.connect(func(v: int):

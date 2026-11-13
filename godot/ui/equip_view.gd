@@ -235,6 +235,15 @@ func _info_win() -> GameWindow:
 	return _win(8, 0xF6, 0x12, 8, 0x10, 1, "5156A0", 0x90)
 
 
+var last := Vector2.ZERO          # the last click (the template menu opens at the cursor)
+
+
+func _gui_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton and ev.pressed:
+		last = ev.position
+	super(ev)
+
+
 func _ready() -> void:
 	chosen.connect(func(r: int):
 		if r >= 0:

@@ -1,6 +1,6 @@
 extends SceneTree
 ## Render the operation plan before a battle and save it: godot --path engine/godot -s
-## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders [list]|xms|list|maps]
+## tests/plan_shot.gd -- pd2 0 out.png [page] [clicks] [orders [list|objective|site]|xms|list|maps]
 ## page: 0-3 (A-D, default 1), clicks: the page's waits clicked through (default 0: the
 ## first blink shown lit); "orders" opens the orders (plan_gb.pac), "xms" the XMS box,
 ## "list" the plans' list (0x4442C0), "maps" the area maps (0x444500).
@@ -27,7 +27,13 @@ func _init() -> void:
 			b._plan_region(5)                 # the plans' list: its first group's text
 		"maps":
 			b._plan_region(7)                 # the area maps: the first
-	if args.size() > 6 and args[5] == "orders":
+	if args.size() > 6 and args[5] == "orders" and args[6] == "objective":
+		b.plan_st.ask = ["objective", 1]          # the objective's question (MES 0x21)
+		b._plan_draw()
+	elif args.size() > 6 and args[5] == "orders" and args[6] == "site":
+		b.plan_st.ask = ["site", Plan.sites(b.w, Plan.SITES_A), -1, Plan.SITES_A]   # the site picker
+		b._plan_draw()
+	elif args.size() > 6 and args[5] == "orders":
 		b._plan_order_region(int(args[6]))       # one of the orders' lists (1 group .. 4 time)
 	elif not (args.size() > 5 and args[5] in ["list", "maps"]):
 		b._plan_draw()

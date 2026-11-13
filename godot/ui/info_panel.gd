@@ -96,6 +96,43 @@ func _sub(x: int, y: int, c: int, r: int, h: int, t: String) -> GameWindow:
 	return gw
 
 
+var _ro: Array = []
+
+
+func readouts(x: int, y: int, occ: int) -> void:
+	## 0x47BF10 (ui_map_click on a hovered hex): WMES 0x1F8 ("%aF8%2d") in 2 x 1 windows of
+	## 8 px (flags 2, no pattern): X at (0x18, 0x17C), Y at (0x38, 0x17C), height_at
+	## (0x46EE00) at (0x18, 0x185), the cover (0x47CD20) of the tile for the occupant's class
+	## (0 with no occupant, or an enemy not spotted: +0 bit 0x10) at (0x38, 0x185)
+	for s in _ro:
+		if is_instance_valid(s):
+			s.queue_free()
+	_ro = []
+	if battle == null:
+		return
+	var w: Pd2World = battle.w
+	var cls := 0
+	if occ != -1 and not (w.is_enemy(occ) and not (w.ub(occ, 0) & 0x10)):
+		cls = w.unit_class(occ)
+	var h := w.layer(w.H, x, y) if not w.H.is_empty() else 0
+	var f: String = battle.msg_raw(0x1F8)
+	for e in [[0x18, 0x17C, x], [0x38, 0x17C, y], [0x18, 0x185, h], [0x38, 0x185, w.cover_at(cls, x, y)]]:
+		var gw := GameWindow.new()
+		gw.cols = 2
+		gw.rows = 1
+		gw.lh = 8
+		gw.framed = false
+		gw.black = true
+		gw.code = 0x79
+		gw.waits = false
+		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gw.position = Vector2(e[0], e[1])
+		gw._layout()
+		add_child(gw)
+		_ro.append(gw)
+		gw.print_text(SortieView.fmt(f, [e[2]]))
+
+
 func _unit() -> void:
 	var w: Pd2World = battle.w
 	var u := unit

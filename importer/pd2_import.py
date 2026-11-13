@@ -227,7 +227,7 @@ BSS_END = 0x526000
 # (0x462390's lists at DS:0x50D6E1 / 0x50D6ED / 0x50D6F9), the armament screen's template
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
 # pickers' words. GameData.exe_text, exe.csv.
-EXE_TEXTS = (0x516728, 0x5157A8, 0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
+EXE_TEXTS = (0x516728, 0x5157A8, 0x5156C0, 0x51FB18, 0x51FB20, 0x51FB28, 0x51FB30, 0x51F8C8, 0x51F8E0, 0x51F8F8, 0x510474, 0x51047C, 0x510488, 0x510494, 0x5104A0, 0x5104B4, 0x5104C8, 0x5104D4,
              0x51571C, 0x51572C, 0x51573C, 0x515B18, 0x515B44, 0x515B64, 0x515B7C, 0x515B90,
              0x515B9C, 0x515BA8, 0x515BB4, 0x515BC4, 0x515BD0, 0x515BDC, 0x515C0C, 0x515C1C,
              0x515C40, 0x515C6C, 0x515CAC, 0x515CC8, 0x515CEC,
@@ -428,7 +428,10 @@ SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pa
                  # machines' second pictures (st07-st12.pac, 0x4561F0) and the slots' blanks
                  'busou_b.pac', 'busou_g0.pac', 'busou_g1.pac', 'busou_g2.pac', 'weapon.pac',
                  'arms.pac', 'blanc.pac', 'st07.pac', 'st08.pac', 'st09.pac', 'st10.pac',
-                 'st11.pac', 'st12.pac', 'k_blanc0.pac', 'k_blanc1.pac', 'k_blanc2.pac')
+                 'st11.pac', 'st12.pac', 'k_blanc0.pac', 'k_blanc1.pac', 'k_blanc2.pac',
+                 # the ending and the credits (0x48FA40): PD2's end0 / staff_g / staff_p, DASH's
+                 # staff2_g / staff2_p and the staff roll
+                 'end0.pac', 'staff_g.pac', 'staff_p.pac', 'staff2_g.pac', 'staff2_p.pac', 's_roll.pac')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
                    # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
                    # the game over, a single mission's end

@@ -1,6 +1,6 @@
 extends SceneTree
 ## The debrief's screens (ui/debrief_view.gd) as pictures: godot --path engine/godot -s
-## tests/debrief_shot.gd -- pd2 out_prefix [ja|en|fr] [cards]
+## tests/debrief_shot.gd -- pd2 out_prefix [ja|en|fr] [cards|credits]
 ## PD2 mission 1 withdrawn (its scenario hook clears it): the debrief runs; its first
 ## screens are saved as <prefix>_1.png (the picture), _2.png (its text), _3.png (the second
 ## text), _4.png (the results), each after a click; with "cards" the first score card
@@ -30,6 +30,24 @@ func _init() -> void:
 			await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_viewport().get_texture().get_image().save_png("%s_card.png" % args[1])
+		quit(0)
+		return
+	if args.size() > 3 and args[3] == "credits":
+		# a frame of the credits (0x48FA40, step 10): PD2's first scene with its first staff_p
+		# picture, or DASH's staff roll part-way
+		var v = load("res://ui/debrief_view.gd").new()
+		v.battle = b
+		b._win_root().add_child(v)
+		if args[0] == "pd2":
+			v._pic = v._shared("staff_g", 0)
+			v._over = [[v._shared("staff_p", 0), 0x198, 0x9E]]
+		else:
+			v._roll = [v._shared("s_roll", 0), 0x200]
+		v.queue_redraw()
+		for i in 10:
+			await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_viewport().get_texture().get_image().save_png("%s_credits.png" % args[1])
 		quit(0)
 		return
 	b._withdraw()
