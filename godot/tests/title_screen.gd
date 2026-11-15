@@ -1,6 +1,6 @@
 extends SceneTree
-## The title screen (ui/boot.gd) driven through its windows: button 0's list, the scenario
-## select's list (DASH's mission 12), then the battle scene it starts.
+## The title screen (ui/boot.gd, ui/title_view.gd) driven through its windows: region 0's list,
+## the scenario select's list (DASH's mission 12), then the battle scene it starts.
 
 func find_button(n: Node, text: String) -> Button:
 	if n is Button and (n as Button).text == text:
@@ -12,22 +12,40 @@ func find_button(n: Node, text: String) -> Button:
 	return null
 
 
+func find_role(n: Node, role: String):
+	if n.get("role") == role:
+		return n
+	for c in n.get_children():
+		var r = find_role(c, role)
+		if r != null:
+			return r
+	return null
+
+
 func _init() -> void:
 	await process_frame
 	var boot = load("res://ui/boot.tscn").instantiate()
 	root.add_child(boot)
 	current_scene = boot
 	await process_frame
-	var gd = root.get_node("/root/GameData")
 	var ok := true
-	var start := find_button(boot, gd.ui_text("UI_TITLE_START"))
-	ok = ok and start != null
-	start.pressed.emit()
-	await process_frame
-	var names: Array = load("res://ui/save_files.gd").choice_texts(0x50D86C)
-	var sel := find_button(boot, names[1])          # シナリオ選択
-	ok = ok and sel != null
-	sel.pressed.emit()
+	# the title's region 0 (the start list, 0x452A10 at (0x120, 0xD8)), its entry 1 (シナリオ選択)
+	var tv = boot.title
+	for i in 50:
+		if tv.menu_on:
+			break
+		await process_frame
+	ok = ok and tv.menu_on
+	tv.pick_region(0)
+	var lst = null
+	for i in 50:
+		await process_frame
+		lst = find_role(tv.holder, "title_list")
+		if lst != null:
+			break
+	ok = ok and lst != null and lst.items.size() == 3
+	if lst != null:
+		lst.answer(1)
 	var mission: String = load("res://ui/save_files.gd").mission_name(12)
 	var pick: Button = null
 	for i in 200:

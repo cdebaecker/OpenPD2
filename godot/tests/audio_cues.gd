@@ -32,12 +32,16 @@ func _init() -> void:
 	GameAudio.log.clear()
 	GameAudio.mode_asked = false
 	GameAudio.title_shown = false
+	load("res://ui/title_view.gd").logos_done = false
 	var boot = load("res://ui/boot.tscn").instantiate()
 	root.add_child(boot)
 	for i in 3:
 		await process_frame
 	var log0: Array = GameAudio.log.duplicate()
-	check("title: title2.wav (sync) then music 5", log0 == [["wave", "title2", true], ["music", 5]], log0)
+	var logos := []
+	for i in 5:
+		logos.append(["wave", "title1", false])          # after each of DETACH's five rounds
+	check("title: the logos' title1.wav x 5, title2.wav (sync), then music 5", log0 == logos + [["wave", "title2", true], ["music", 5]], log0)
 	check("title: the CD there, CD-DA (mode 0)", GameAudio.mode == (0 if GameAudio.cd_present() else 1), GameAudio.mode)
 	boot.queue_free()
 	await process_frame
@@ -45,6 +49,13 @@ func _init() -> void:
 	root.add_child(boot2)
 	await process_frame
 	check("title again: music 5 only", GameAudio.log.slice(log0.size()) == [["music", 5]], GameAudio.log.slice(log0.size()))
+	# the opening (the title's region 3, 0x4783A0): music 12, then the title again with 5
+	var n0: int = GameAudio.log.size()
+	boot2.title.pick_region(3)
+	for i in 5:
+		await process_frame
+	check("opening: music 12, then the title's 5", GameAudio.log.slice(n0) == [["music", 12], ["music", 5]], GameAudio.log.slice(n0))
+	check("opening: ends white, the title shown at once (level 100)", boot2.title.level == 100, boot2.title.level)
 	boot2.queue_free()
 	await process_frame
 	# --- the mission start and the battle

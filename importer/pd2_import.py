@@ -237,6 +237,7 @@ BSS_END = 0x526000
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
 # pickers' words. GameData.exe_text, exe.csv.
 EXE_TEXTS = (0x5142A4, 0x5142B4,  # 一斉 0x429540
+             0x5188E0, 0x518A20,  # the title's version box (0x452200) and its exit question (0x451E30)
              0x510560, 0x510570, 0x510580, 0x510588, 0x510590, 0x510598,  # マップ 0x43A3E0 / 0x43A900
              0x5146F0, 0x514740, 0x514780, 0x514784,  # the area map's question, the height map's texts
              0x51F878,  # cmd_fire option 0x2000: the in-range list (0x4E9AC0)
@@ -450,13 +451,31 @@ SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pa
                  # staff2_g / staff2_p and the staff roll
                  'end0.pac', 'staff_g.pac', 'staff_p.pac', 'staff2_g.pac', 'staff2_p.pac', 's_roll.pac',
                  # the debrief's new items / recruits screens (kabe0) and DASH's hand-over (op2)
-                 'kabe0.pac', 'op2.pac')
+                 'kabe0.pac', 'op2.pac',
+                 # the title (game_mode_loop 0x487D70): the CD-DA / MIDI list's black, the title
+                 # picture; the opening (0x4783A0): its names, pictures, scrolled texts, eyes
+                 'blk.pac', 'pd2title.pac', 'op_name.pac', 'op_wai.pac', 'op_moji.pac',
+                 'op_eye.pac', 'op_yao.pac', 'op_ashi.pac', 'op_selma.pac')
+# The title's logos (0x4EC170): PC-98 GCP pictures, each pixel the colour 0-15 that 0x4EC280
+# draws at DIB index colour + 10; written as 8-bit BMPs of those colours (images/logos).
+LOGOS = ('kogado.gcp', 'usagi.gcp', 'detach.gcp')
 CAMPAIGN_IMAGES = ('smap.pac', 'amap.pac', 'mmap.pac', 'datau.pac',
                    # the debrief (0x48FA40): a cleared mission's pictures (by chunk), the failed,
                    # the game over, a single mission's end
                    'm_clr.pac', 'm_fail.pac', 'gameover.pac', 'single.pac',
                    # the score cards' background and the pilots' names
                    'score_g.pac', 'score_n.pac')    # (amap: the operation plan's area maps, 0x444500)
+
+
+def _bmp8(w, h, px):
+    """an 8-bit BMP (bottom-up, a grey ramp for a palette) of w x h indices, top row first"""
+    stride = (w + 3) & ~3
+    rows = b''.join(bytes(px[y * w:(y + 1) * w]) + bytes(stride - w) for y in range(h - 1, -1, -1))
+    pal = b''.join(bytes((i, i, i, 0)) for i in range(256))
+    off = 14 + 40 + len(pal)
+    head = b'BM' + struct.pack('<IHHI', off + len(rows), 0, 0, off)
+    info = struct.pack('<IiiHHIIiiII', 40, w, h, 1, 8, 0, len(rows), 0, 0, 256, 0)
+    return head + info + pal + rows
 
 
 def export_images(game, out):
@@ -475,6 +494,13 @@ def export_images(game, out):
                 open(os.path.join(dst, '%02d.bmp' % i), 'wb').write(b)
     for name in SHARED_IMAGES:
         save(os.path.join(out, 'images', name[:-4]), write(game, name))
+    fs = {f.lower(): os.path.join(game, f) for f in os.listdir(game)}
+    os.makedirs(os.path.join(out, 'images', 'logos'), exist_ok=True)
+    for name in LOGOS:
+        if name in fs:
+            h, planes, *_ = gcp.decode(open(fs[name], 'rb').read())
+            w, ht, px = gcp.to_indexed(h, planes)
+            open(os.path.join(out, 'images', 'logos', name[:-4] + '.bmp'), 'wb').write(_bmp8(w, ht, px))
     for camp in CAMPAIGNS:
         folder = os.path.join(game, camp)
         for name in CAMPAIGN_IMAGES:

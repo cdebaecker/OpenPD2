@@ -3793,10 +3793,10 @@ its own.
 - DASH mode 3: 1 for single.pac, 10 for m_fail.pac.
 - Result 0xC0 and PD2's mode 3: none.
 
-**Not shown in the engine yet** (their screens are stand-ins): the logos' title1.wav,
-the opening's music_start(12) and the title's exit. The engine's title plays title2.wav
-and then music 5 at its first showing, and music 5 afterwards. It asks CD-DA or MIDI
-when the import has the CD's tracks.
+**In the engine** every caller above is hooked: the title is drawn as the game's
+(`ui/title_view.gd`, 2026-11-15), so the logos' title1.wav after each of DETACH's rounds, the
+opening's music_start(12) and the exit's music_stop play at their places
+(`tests/audio_cues.gd`). It asks CD-DA or MIDI when the import has the CD's tracks.
 
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 

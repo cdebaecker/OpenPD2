@@ -1,10 +1,11 @@
 extends Control
-## The title (game_mode_loop 0x487D70's title menu, core/title.gd): button 0 opens the list
-## DS:0x50D86C (start the campaign, after the question 0x518A08; the scenario select; the
-## rescue mission), button 1 the continue; each runs 0x46D780 (Title.title_start) on a
-## worker thread, its windows answered here, then the mission start with savedata.tmp
-## (the battle scene with Battle.carry). Below, the sandbox's list of every mission chunk
-## (each from its campaign's SAVEDATA.ORG as it is).
+## The title (game_mode_loop 0x487D70, core/title.gd), drawn by ui/title_view.gd: once a run
+## the CD-DA / MIDI list and the logos, then pd2title.pac and its regions (DS:0x50D878): 0 the
+## list DS:0x50D86C (start the campaign after the question 0x518A08, the scenario select,
+## the rescue mission), 1 the continue, 2 the exit, 3 the opening, 4 the version. The starts
+## run 0x46D780 (Title.title_start) on a worker thread, its windows answered here, then the
+## mission start with savedata.tmp (the battle scene with Battle.carry). F2 shows the engine's
+## own list of every mission chunk (each from its campaign's SAVEDATA.ORG as it is).
 
 const BATTLE := "res://ui/battle.tscn"
 
@@ -18,40 +19,63 @@ var busy := false
 
 func _ready() -> void:
 	var bg := ColorRect.new()
-	bg.color = Color(0.06, 0.07, 0.09)
+	bg.color = Color.BLACK
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
-	box = VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_FULL_RECT)
-	box.offset_left = 24
-	box.offset_top = 16
-	box.offset_right = -24
-	box.offset_bottom = -16
-	add_child(box)
-	var title := Label.new()
-	title.text = "POWER DoLLS 2 plus DASH"
-	title.add_theme_font_size_override("font_size", 20)
-	box.add_child(title)
 	if not GameData.available():
+		box = VBoxContainer.new()
+		box.set_anchors_preset(Control.PRESET_FULL_RECT)
+		box.offset_left = 24
+		box.offset_top = 16
+		add_child(box)
 		var msg := Label.new()
 		msg.autowrap_mode = TextServer.AUTOWRAP_WORD
 		msg.text = ("No game data found in %s.\n\nRun the importer on your own copy of "
 			+ "POWER DoLLS 2 plus DASH:\n    python -X utf8 engine/importer/pd2_import.py <CD image or game folder>") % ProjectSettings.globalize_path(GameData.ROOT)
 		box.add_child(msg)
 		return
+	title = TitleView.new()
+	title.fast = DisplayServer.get_name() == "headless"
+	add_child(title)
+	_fit()
+	get_viewport().size_changed.connect(_fit)
+	_sandbox_panel()
+	_sequence()
+
+
+var title: TitleView = null
+
+
+func _fit() -> void:
+	## the 640 x 400 screen scaled into the window (as the battle's main window)
+	if title == null:
+		return
+	var vs := get_viewport().get_visible_rect().size
+	var sc := minf(vs.x / TitleView.W, vs.y / TitleView.H)
+	title.scale = Vector2(sc, sc)
+	title.position = ((vs - Vector2(TitleView.W, TitleView.H) * sc) / 2).floor()
+
+
+func _sandbox_panel() -> void:
+	## the engine's own list of every mission chunk (each from its campaign's SAVEDATA.ORG as
+	## it is), behind F2 (not the game's)
+	var panel := ColorRect.new()
+	panel.color = Color(0.06, 0.07, 0.09, 0.95)
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.visible = false
+	add_child(panel)
+	box = VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 24
+	box.offset_top = 16
+	box.offset_right = -24
+	box.offset_bottom = -16
+	box.visible = false
+	add_child(box)
+	box.visibility_changed.connect(func(): panel.visible = box.visible)
 	var ver := Label.new()
 	ver.text = "Data: %s" % GameData.manifest.get("version", "?")
 	box.add_child(ver)
-	var menu := HBoxContainer.new()
-	box.add_child(menu)
-	var start := Button.new()
-	start.text = ui("UI_TITLE_START")
-	start.pressed.connect(_button0)
-	menu.add_child(start)
-	var cont := Button.new()
-	cont.text = ui("UI_TITLE_CONTINUE")
-	cont.pressed.connect(_run.bind("1"))
-	menu.add_child(cont)
 	var note := Label.new()
 	note.text = ui("UI_TITLE_SANDBOX")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -68,34 +92,161 @@ func _ready() -> void:
 			b.text = "%s  mission chunk %d" % [camp.to_upper(), m]
 			b.pressed.connect(_start.bind(camp, m))
 			grid.add_child(b)
-	_title_audio()
 
 
-func _title_audio() -> void:
-	## game_mode_loop's sounds (RULES.md 5.26): with the CD there, its list DS:0x518918 (CD-DA
-	## or MIDI, DS:0x50CE71) once a run, else MIDI; the first title's title2.wav, waited for
-	## (0x40D440(0, 2)), then music_start(5); later titles music_start(5) only. (The logos'
-	## title1.wav and the opening's music_start(12) wait for those screens.)
-	if not GameAudio.mode_asked:
-		GameAudio.mode_asked = true
-		GameAudio.mode = 1
-		if GameAudio.cd_present():
-			if DisplayServer.get_name() == "headless":
-				GameAudio.mode = 0
-			else:
-				var c: Array = GameAudio.choices()
-				busy = true
-				var pick: Variant = await _ask_async("", [[c[0], 0], [c[1], 1]])
-				busy = false
-				GameAudio.mode = int(pick)
+func _unhandled_key_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and ev.keycode == KEY_F2 and box != null and title != null:
+		box.visible = not box.visible
+
+
+func _sequence() -> void:
+	## game_mode_loop (0x487D70) up to its title loop: once a run the CD-DA / MIDI list (with
+	## the CD there: blk.pac, DS:0x50D6A1's colours, else MIDI) and the logos; then the title.
+	## (userdisk.id's check is the import's: GameData.available.)
+	busy = true
+	if not TitleView.logos_done:
+		title.clear()
+		if not GameAudio.mode_asked:
+			GameAudio.mode_asked = true
+			GameAudio.mode = 1
+			if GameAudio.cd_present():
+				if title.fast:
+					GameAudio.mode = 0
+				else:
+					title.win_palette(0x50D6A1, title.level)
+					title.pac("blk", 0, 0, 0)
+					await title.fade(100)
+					var c: Array = GameAudio.choices()
+					var pick: int = await list_window(0x120, 0xD8, 10, c, false)
+					GameAudio.mode = 0 if pick == 0 else 1
+		await title.logos()
+	await _show_title()
+
+
+func _show_title() -> void:
+	## the title loop's redraw: the first time pd2title.pac fades in from the logos' white and
+	## title2.wav plays to its end (0x40D440(0, 2)); later it is drawn and shown at once
+	## (0x487A20(100)); then music_start(5) and the menu
+	busy = true
+	title.win_palette(0x50D82C, title.level)
+	title.pac("pd2title", 0, 0, 0)
 	if not GameAudio.title_shown:
+		await title.fade(100)
 		GameAudio.title_shown = true
 		var secs := GameAudio.wave("title2", true)
-		if secs > 0.0 and DisplayServer.get_name() != "headless":
-			busy = true                  # (SND_SYNC: the title's menu comes after its end)
+		if secs > 0.0 and not title.fast:
 			await get_tree().create_timer(secs).timeout
-			busy = false
+	else:
+		title.pal_a20(100)
 	GameAudio.music_start(5)
+	_menu()
+
+
+func _menu() -> void:
+	## the title's regions (0x438210(5, DS:0x50D878), 0x437AC0) and game_mode_loop's switch
+	busy = false
+	title.menu_start()
+	var i: int = await title.region_picked
+	busy = true
+	match i:
+		0:
+			var pick: int = await list_window(0x120, 0xD8, 20, SaveFiles.choice_texts(0x50D86C), true)
+			if pick == 0:
+				if await question(SaveFiles.exe(0x518A08), 0):
+					_run("0")
+				else:
+					_menu()
+			elif pick == 1:
+				_run("2")
+			elif pick == 2:
+				_run("3")
+			else:
+				_menu()
+		1:
+			_run("1")
+		2:
+			if await question(SaveFiles.exe(0x518A20), 1):
+				GameAudio.music_stop()            # 0x40AF80, then userinf.dat and WM_CLOSE
+				get_tree().quit()
+			else:
+				_menu()
+		3:
+			await title.opening()                 # 0x4783A0 (its result is not looked at)
+			await _show_title()
+		_:
+			await version_box()
+			_menu()
+
+
+# --- the game's windows over the title ------------------------------------------------------
+
+const BOX_LABELS := [[0x510444, 0x51044C], [0x510454, 0x51045C]]
+
+
+func _window_hold(gw: GameWindow) -> Control:
+	var hold := Control.new()
+	hold.size = Vector2(TitleView.W, TitleView.H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	title.holder.add_child(hold)
+	return hold
+
+
+func list_window(x: int, y: int, cols: int, labels: Array, cancel: bool) -> int:
+	## 0x452A10(NULL, n, list, x, y, cols, .., right click allowed): the pick; -2 on a right
+	## click when allowed
+	var gw := GameWindow.select_window(x, y, cols, 0, 1, labels, cols, [], cancel)
+	gw.pal16 = title.pal16()
+	gw.role = "title_list"
+	var hold := _window_hold(gw)
+	hold.add_child(gw)
+	var v: int = await gw.chosen
+	hold.queue_free()
+	return v
+
+
+func question(text: String, kind: int) -> bool:
+	## 0x451E30(text, kind): the text's line at y 0xAA, its two answers (了解 / 中止 or 実行 /
+	## 中止) under its right end; true for the first
+	var t := text.replace("@", "").strip_edges()
+	var n := GameWindow.text_cols(t)
+	var x := ((80 - (n + 2)) / 2) * 8
+	var mw := GameWindow.text_window(x, 0xAA, n, 1, 1)
+	mw.pal16 = title.pal16()
+	mw.waits = false
+	var l: Array = BOX_LABELS[kind]
+	var labels := [GameData.exe_text("pd2", l[0]), GameData.exe_text("pd2", l[1])]
+	var ic := 4
+	for s in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(s)))
+	var right := (((80 - (n + 2)) / 2) + n + 2) * 8
+	var bw := GameWindow.select_window(right - 16 - ic * 8, 0xAA + 0x20, 0, 0, 0, labels, ic, [], true)
+	bw.pal16 = mw.pal16
+	bw.role = "title_question"
+	var hold := _window_hold(bw)
+	hold.add_child(mw)
+	hold.add_child(bw)
+	mw.print_text(t)
+	var v: int = await bw.chosen
+	hold.queue_free()
+	return v == 0
+
+
+func version_box() -> void:
+	## the title's region 4 (the pixel (639, 0)): 0x452200(DS:0x5188E0, flag 0), a framed line
+	## of 54 columns at (96, 0xAA) whose line end waits for a click
+	var t := SaveFiles.exe(0x5188E0)
+	var n := maxi(54, GameWindow.text_cols(t))
+	var tw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
+	tw.pal16 = title.pal16()
+	tw.role = "title_version"
+	tw.waits = not title.fast
+	var hold := _window_hold(tw)
+	hold.add_child(tw)
+	await tw.print_text(t + "\n")
+	hold.queue_free()
 
 
 func _ask_async(text: String, opts: Array) -> Variant:
@@ -110,26 +261,6 @@ func _ask_async(text: String, opts: Array) -> Variant:
 
 func ui(key: String) -> String:
 	return GameData.ui_text(key)
-
-
-func _button0() -> void:
-	## button 0's list (DS:0x50D86C); the campaign's start asks 0x518A08 first (0x451E30)
-	if busy:
-		return
-	var items := SaveFiles.choice_texts(0x50D86C)
-	var opts := []
-	for i in items.size():
-		opts.append([items[i], i])
-	opts.append([ui("UI_CANCEL"), -2])
-	_show("", opts, func(i):
-		if i == 0:
-			_show(SaveFiles.exe(0x518A08), [[ui("UI_YES"), 1], [ui("UI_NO"), 0]], func(yes):
-				if yes == 1:
-					_run("0"))
-		elif i == 1:
-			_run("2")
-		elif i == 2:
-			_run("3"))
 
 
 # --- the title's windows, asked from the worker thread -----------------------------------
@@ -246,7 +377,7 @@ func ask_slot(saving: bool) -> int:
 
 func _run(entry: String) -> void:
 	## 0x46D780 on the worker thread, over a world of the exe's data
-	if busy:
+	if worker != null:
 		return
 	busy = true
 	var w := SaveFiles.title_world()
@@ -270,9 +401,10 @@ func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 	Title.saved_list = w.title_list
 	var ret: int = res[0]
 	if res[1] or w.fault != "":
-		_show(ui("UI_TITLE_FAULT") % (w.fault if w.fault != "" else "0x%X" % res[1]), [[ui("UI_OK"), 0]], func(_a): pass)
+		_show(ui("UI_TITLE_FAULT") % (w.fault if w.fault != "" else "0x%X" % res[1]), [[ui("UI_OK"), 0]], func(_a): _menu())
 		return
 	if ret < 1:
+		_menu()                               # the title again, not redrawn (game_mode_loop)
 		return
 	var resume := ret & 0x80 != 0
 	ret &= 0x7F
@@ -280,6 +412,7 @@ func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 	ret &= 0x3F
 	var new_campaign := ret == 1 and entry != "1" and not single
 	if ret > 20:
+		_menu()
 		return
 	var scene: PackedScene = load(BATTLE)
 	var battle := scene.instantiate()
