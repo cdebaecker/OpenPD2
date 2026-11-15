@@ -38,8 +38,52 @@ func mission_count(campaign: String) -> int:
 
 
 ## Record tables of a campaign: machines (32 x 31 B), launchers (96 x 17 B), ammo (72 x 12 B),
-## and the names.
+## and the names (in English or French from translations/names.csv: _named).
 func tables(campaign: String) -> Dictionary:
+	var key := campaign + ":" + language
+	if not _tables.has(key):
+		var raw := _raw_tables(campaign)
+		_tables[key] = raw if language == "ja" else _named(campaign, raw)
+	return _tables[key]
+
+
+## The name tables translated: machine_names (DS:0x50C265, "machine.<i>"), launcher_names
+## (DS:0x50BDE5, "launcher.<id>"), ammo_names (DS:0x50C365, "ammo.<id>"), crew_names
+## (DS:0x50BCB5 / 0x50BD4D, "crew.<i>.given" / ".family"), branches and ranks ("branch.<i>",
+## "rank.<i>"); "<campaign>.<key>" first where the campaigns' texts differ. A name without a
+## translation (or without Japanese) stays as Pd2.exe has it.
+func _named(campaign: String, raw: Dictionary) -> Dictionary:
+	var t := raw.duplicate()
+	var nm := func(k: String, ja: Variant) -> Variant:
+		if not (ja is String) or ja == "":
+			return ja
+		var tr := _translated("names", campaign + "." + k)
+		if tr == "":
+			tr = _translated("names", k)
+		return tr if tr != "" else ja
+	var mn := []
+	for i in raw.machine_names.size():
+		mn.append(nm.call("machine.%d" % i, raw.machine_names[i]))
+	t.machine_names = mn
+	for pair in [["launcher_names", "launcher"], ["ammo_names", "ammo"]]:
+		var d := {}
+		for k in raw[pair[0]]:
+			d[k] = nm.call("%s.%s" % [pair[1], k], raw[pair[0]][k])
+		t[pair[0]] = d
+	for pair in [["branches", "branch"], ["ranks", "rank"]]:
+		var a := []
+		for i in raw[pair[0]].size():
+			a.append(nm.call("%s.%d" % [pair[1], i], raw[pair[0]][i]))
+		t[pair[0]] = a
+	var cn := []
+	for i in raw.crew_names.size():
+		var e: Array = raw.crew_names[i]
+		cn.append([nm.call("crew.%d.given" % i, e[0] if e.size() > 0 else ""), nm.call("crew.%d.family" % i, e[1] if e.size() > 1 else "")])
+	t.crew_names = cn
+	return t
+
+
+func _raw_tables(campaign: String) -> Dictionary:
 	if not _tables.has(campaign):
 		var doc: Dictionary = _json("%s/tables/%s.json" % [ROOT, campaign])
 		var t := {
@@ -85,6 +129,24 @@ func reg_unit_shipped(campaign: String) -> PackedByteArray:
 
 ## A text of Pd2.exe's own (the import's exe_text, by address), translated (exe.csv: the
 ## address in hex) and formatted.
+func yes_no_cell(campaign: String, on: bool) -> String:
+	## 有 / 無 (DS:0x50CBB3 / 0x50CBB6) in a list's 2-column cell (the recruits' list, the
+	## roster, the pilot choice: their headers give each 2 columns); engine-side: a wider
+	## translation keeps its first letter, padded to 2
+	var t := exe_text(campaign, 0x50CBB3 if on else 0x50CBB6)
+	var wide := _cols(exe_text(campaign, 0x50CBB3)) > 2 or _cols(exe_text(campaign, 0x50CBB6)) > 2
+	return t.substr(0, 1) + " " if wide else t
+
+
+static func _cols(t: String) -> int:
+	## the text's columns (a full-width character 2, as GameWindow.text_cols counts them)
+	var n := 0
+	for i in t.length():
+		var c := t.unicode_at(i)
+		n += 2 if (c >= 0x2E80 and not (c >= 0xFF61 and c <= 0xFF9F)) else 1
+	return n
+
+
 func exe_text(campaign: String, va: int, args := []) -> String:
 	return format_text(exe_raw(campaign, va), args)
 

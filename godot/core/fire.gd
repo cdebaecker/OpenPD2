@@ -270,6 +270,8 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 			hooks.anim_flight(3)
 	if flight:
 		hooks.anim_flight(4)
+	if anims and hooks.has_method("anim_close"):
+		hooks.anim_close()                  # 0x410510 (display)
 	return result
 
 

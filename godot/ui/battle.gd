@@ -92,8 +92,17 @@ class SandboxHooks extends AiTurnHooks:
 	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
 		battle.anim_view(k, sx, tx, ty)
 
+	func anim_close() -> void:
+		battle.anim_close()
+
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
+
+	func shown(u: int) -> void:
+		battle.step_shown(u)
+
+	func view_to(x: int, y: int) -> void:
+		battle.view_to(x, y)
 
 	func progress_reset() -> void:
 		battle.call_deferred("_think", false)
@@ -424,6 +433,7 @@ func _begin_battle() -> void:
 		return
 	# a transport waits for the player: the first turn start runs on a worker thread
 	busy = true
+	view_w = w.duplicate_world()
 	ai_thread = Thread.new()
 	ai_thread.start(func():
 		_turn_start()
@@ -1749,7 +1759,7 @@ func _sortie_request_win() -> void:
 					r += ("%2d " % v) if v < 0 else ("%2X " % v)
 				var m := Flight.s8(w.ub(c, 0xC))
 				var sk := w.cb(c, 8)
-				var yn := func(bit: int) -> String: return GameData.exe_text(campaign, 0x50CBB3 if sk & bit else 0x50CBB6)
+				var yn := func(bit: int) -> String: return GameData.yes_no_cell(campaign, sk & bit != 0)
 				r += wsp(GameData.base_raw(campaign, 0x1CB, mission_index), [yn.call(1), yn.call(2), yn.call(4), yn.call(8),
 					str(mn[m]) if m >= 0 and m < mn.size() else ""])
 				labels.append(_codes(r))
@@ -3299,16 +3309,49 @@ var _rpress := Vector2(-100, -100)
 var hud_bar := false              # the engine's own command bar and log shown (H)
 
 
+func view_tl(pos: Vector2 = Vector2.INF) -> Vector2:
+	## the world point at the screen's top-left for the camera at pos (Camera2D centres the
+	## screen, within its limits: Camera2D::get_camera_transform)
+	if pos == Vector2.INF:
+		pos = cam.position
+	var size := get_viewport().get_visible_rect().size / cam.zoom
+	var tl := pos - size / 2.0
+	if not cam.limit_enabled:
+		return tl
+	var lo := Vector2(cam.limit_left, cam.limit_top)
+	var hi := Vector2(cam.limit_right, cam.limit_bottom)
+	for i in 2:
+		if lo[i] > hi[i] - size[i]:
+			tl[i] = (lo[i] + hi[i] - size[i]) / 2.0
+		elif tl[i] < lo[i]:
+			tl[i] = lo[i]
+		elif tl[i] + size[i] > hi[i]:
+			tl[i] = hi[i] - size[i]
+	return tl
+
+
 func map_view_cells() -> Rect2i:
 	## the map window's area in cells (the engine's map window: the screen left of the info
-	## panel), for the minimap's frame
+	## panel): its origin (DS:0x551D20 / 0x551D24, the cell at its top-left) and its columns
+	## and rows (window +0x18 / +0x1C)
 	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
 	var mw := 432.0 * sc
 	var mh := get_viewport().get_visible_rect().size.y
-	var cw := TILE_W * cam.zoom.x
-	var ch := TILE_H * cam.zoom.y
-	var tl := hex_at(cam.position - Vector2(mw / 2.0 / cam.zoom.x, mh / 2.0 / cam.zoom.y) + Vector2(1, 1))
-	return Rect2i(clampi(tl.x, 0, 71), clampi(tl.y, 0, 71), int(mw / cw), int(mh / ch))
+	var tl := view_tl()
+	var oy := int(floor((tl.y + 1.0) / TILE_H))
+	var ox := int(floor((tl.x + 1.0 - (TILE_W / 2.0 if oy & 1 else 0.0)) / TILE_W))
+	return Rect2i(clampi(ox, 0, 71), clampi(oy, 0, 71), int(mw / (TILE_W * cam.zoom.x)), int(mh / (TILE_H * cam.zoom.y)))
+
+
+func set_view_origin(ox: int, oy: int) -> void:
+	## 0x4066F0: the map window's origin cell, at most 0x47 less its size, at least 1
+	var v := map_view_cells()
+	ox = maxi(1, mini(ox, 0x47 - v.size.x))
+	oy = maxi(1, mini(oy, 0x47 - v.size.y))
+	var tl := hex_center(Vector2i(ox, oy)) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
+	cam.position = tl + get_viewport().get_visible_rect().size / cam.zoom / 2.0
+	if info_panel and is_instance_valid(info_panel):
+		info_panel.view_frame()
 
 
 func minimap_scroll(px: int, py: int) -> void:
@@ -3317,11 +3360,7 @@ func minimap_scroll(px: int, py: int) -> void:
 	var v := map_view_cells()
 	var ox := clampi(((px - v.size.x - 8) >> 1) + 1, 1, maxi(1, 0x47 - v.size.x))
 	var oy := clampi(((py - v.size.y - 0xE4) >> 1) + 1, 1, maxi(1, 0x47 - v.size.y))
-	var tl := hex_center(Vector2i(ox, oy)) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
-	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
-	cam.position = tl + Vector2(432.0 * sc / 2.0 / cam.zoom.x, get_viewport().get_visible_rect().size.y / 2.0 / cam.zoom.y)
-	if info_panel and is_instance_valid(info_panel):
-		info_panel.view_frame()
+	set_view_origin(ox, oy)
 
 
 func _map_edge_scroll(p: Vector2) -> bool:
@@ -3473,7 +3512,23 @@ func _codes(t: String) -> String:
 	return out + t.substr(last)
 
 
-func open_command_menu(u: int) -> void:
+var _loop_u := -1                  # the unit whose command menu loops (unit_command_menu's while)
+var _loop_back := Callable()      # where its right click goes: the 部隊 / 武装 list again
+var _loop_due := false            # a command from the loop ended: the menu again when idle
+
+
+func _command_over() -> void:
+	## a command from a looping menu ended (done, refused or cancelled): unit_command_menu
+	## shows the menu again (when the engine is idle)
+	if _loop_u != -1:
+		_loop_due = true
+
+
+func _loop_idle() -> bool:
+	return not busy and move_thread == null and react_panel == null and hex_pick.is_empty() 			and (_line_open == null or not is_instance_valid(_line_open)) and FIRE_MODES.get(mode, -1) == -1 			and mode != "carry" and mode != "item" and not mission_over
+
+
+func open_command_menu(u: int, back := Callable()) -> void:
 	## unit_command_menu (0x4EE8D0): a select window of 13 columns at the cursor ((x & ~7) -
 	## 0x10, y; kept inside by 0x452450's size), a right click closing it; the entries:
 	## 0-2 move high speed / normal / careful, 3-5 fire normal / aimed / anti-air (the
@@ -3481,6 +3536,13 @@ func open_command_menu(u: int) -> void:
 	## and machine windows), 8 search, 9 conceal, 10 carry / release, 11 the mission's own
 	if busy or mission_over or auto_react:
 		return
+	if back.is_valid():
+		_loop_u = u
+		_loop_back = back
+	elif u != _loop_u:
+		_loop_u = -1                      # (another unit's menu: not the list's loop)
+		_loop_back = Callable()
+	_loop_due = false
 	var labels := command_menu_labels(u)
 	var n := labels.size()
 	var ww := (13 + (3 if n > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
@@ -3498,6 +3560,14 @@ func open_command_menu(u: int) -> void:
 	react_panel = null                  # (not a question of a waiting thread)
 	gw.chosen.connect(func(v: int):
 		_close_window(gw)
+		if v < 0:
+			# a right click: unit_command_menu returns (the list it came from again)
+			var cb := _loop_back if u == _loop_u else Callable()
+			_loop_u = -1
+			_loop_back = Callable()
+			if cb.is_valid():
+				cb.call()
+			return
 		_command(u, v))
 
 
@@ -3641,6 +3711,7 @@ func _area_map() -> void:
 	if auto_react:
 		_area_map_done(Flight.area_map(w, hk))
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		var res := Flight.area_map(w, hk)
@@ -3650,6 +3721,7 @@ func _area_map() -> void:
 func _area_map_finished(res: Array) -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_area_map_done(res)
 
 
@@ -4014,6 +4086,7 @@ func _all_run(v: int) -> void:
 	if auto_react:
 		_all_done(v, _all_rule(v))
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		var res := _all_rule(v)
@@ -4055,6 +4128,7 @@ func _look_unit(u: int) -> void:
 func _all_finished(v: int, res: Array) -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_all_done(v, res)
 
 
@@ -4207,8 +4281,8 @@ func _arms_who(kind: int, id: int) -> void:
 			return
 		var u: int = who[v]
 		_select(u)
-		cam.position = hex_center(w.pos(u))      # scroll_to
-		open_command_menu(u))
+		scroll_to_hex(w.pos(u).x, w.pos(u).y)    # scroll_to
+		open_command_menu(u, _arms_who.bind(kind, id)))   # (then its list again)
 
 
 func _units_list() -> void:
@@ -4218,8 +4292,9 @@ func _units_list() -> void:
 	## condition (+0xD), 0x7F and the AP, 0x7F and Cover (+0 bit 0x20) / "  --- ", 0x4F and
 	## Stack (+1 & 0xC = 8 or +1 & 0x30 = 0x20) / 0x7F and "  --- ", 0x7F and Carry (+0x34
 	## not 0xFF) / "  --- "; a select window (0x40C090) of 0x36 columns centred in the main
-	## window, a right click closing it; a unit is scrolled to and its command menu opens
-	## (then the list again, as 0x4EFC60 loops)
+	## window, a right click closing it; a unit is scrolled to and its command menu opens,
+	## looping after each command as unit_command_menu does; its right click: the list again
+	## (0x4EFC60 loops)
 	var ids := []
 	for u in 40:
 		if w.active(u) and not w.is_enemy(u):
@@ -4265,8 +4340,8 @@ func _units_list() -> void:
 			return
 		var u: int = ids[v]
 		_select(u)
-		cam.position = hex_center(w.pos(u))      # scroll_to
-		open_command_menu(u))
+		scroll_to_hex(w.pos(u).x, w.pos(u).y)    # scroll_to
+		open_command_menu(u, _units_list))      # (then the list again: 0x4EFC60 loops)
 
 
 func panel_refresh() -> void:
@@ -4293,6 +4368,7 @@ func _fire_command(m: String) -> void:
 	_open_weapon(u, FIRE_MODES[m], 0, func(v: int):
 		if v == -2:
 			_set_mode("move")
+			_command_over()
 		elif v < 4:
 			slot = v
 			_set_mode(m)
@@ -4425,6 +4501,7 @@ func _cmd_move(h: Vector2i) -> void:
 	var why := Action.move_refusal(w, u)
 	if why != -1:
 		say_msg(why)
+		_command_over()
 		return
 	if not h in move_dests:
 		return
@@ -4432,6 +4509,7 @@ func _cmd_move(h: Vector2i) -> void:
 	if auto_react:
 		_move_done(u, h, Action.player_move(w, rng, u, h.x, h.y, move_mode, mm, hooks, false, alert))
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(_move_worker.bind(u, h, mm))
 
@@ -4444,6 +4522,7 @@ func _move_worker(u: int, h: Vector2i, map: Move.MoveMap) -> void:
 func _move_finished(u: int, h: Vector2i, res: Array) -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_move_done(u, h, res)
 
 
@@ -4929,6 +5008,7 @@ func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
 		Action.player_fire(w, rng, u, s, fmode, h.x, h.y, hooks, false, alert)
 		_fire_done(u, before)
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		Action.player_fire(w, rng, u, s, fmode, h.x, h.y, hooks, false, alert)
@@ -4938,6 +5018,7 @@ func _do_fire(u: int, fmode: int, h: Vector2i) -> void:
 func _fire_finished(u: int, before: Dictionary) -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_fire_done(u, before)
 
 
@@ -5166,33 +5247,264 @@ func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 	return anim_skip
 
 
+var view_w: Pd2World = null       # the world the overlay draws while the rules run on a worker
+var view_sem := Semaphore.new()
+var steps_shown := 0               # (tests: the steps the map showed during a worker's turn)
+
+
+func step_shown(u: int) -> void:
+	## Action.ai_walk / ai_path's display after a step of a player's unit or a spotted
+	## computer one (hooks.shown): UpdateWindow; 0x472390 (the hex outside the map window)
+	## -> scroll_to; ui_wait(0x21) (33 ms). Called on the worker thread, which waits.
+	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return
+	call_deferred("_step_shown", u)
+	view_sem.wait()
+
+
+func view_to(x: int, y: int) -> void:
+	## ai_turn's scroll_to (option 8 in an alert): on the worker thread, which waits
+	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return
+	call_deferred("_view_to", x, y)
+	view_sem.wait()
+
+
+func _view_to(x: int, y: int) -> void:
+	_park_view()
+	scroll_to_hex(x, y)
+	view_sem.post()
+
+
+func _step_shown(u: int) -> void:
+	steps_shown += 1
+	_park_view()
+	var p := w.pos(u)
+	if not hex_in_window(p.x, p.y):
+		scroll_to_hex(p.x, p.y)
+	await get_tree().create_timer(0x21 / 1000.0).timeout
+	view_sem.post()
+
+
+func _park_view() -> void:
+	## main thread, while the worker waits on it: the overlay's copy of the world
+	if ai_running or move_thread != null:
+		view_w = w.duplicate_world()
+		overlay.queue_redraw()
+		if info_panel and is_instance_valid(info_panel):
+			info_panel.view_frame()
+
+
+func hex_in_window(x: int, y: int) -> bool:
+	## 0x472390 == 0: x in [left, left + cols - (y & 1)), y in [top, top + rows - 1) of the
+	## map window's cells (DS:0x551D20 / 0x551D24, window +0x18 / +0x1C)
+	var v := map_view_cells()
+	return x >= v.position.x and x < v.position.x + v.size.x - (y & 1) 			and y >= v.position.y and y < v.position.y + v.size.y - 1
+
+
+func scroll_to_hex(x: int, y: int) -> void:
+	## scroll_to (0x4F4730 -> 0x4066F0): the window's origin at (x - (cols - 1) / 2,
+	## y - (rows - 1) / 2), at least 1 (0x4066F0 keeps it at most 0x47 less the size)
+	var v := map_view_cells()
+	set_view_origin(maxi(1, x - ((v.size.x - 1) >> 1)), maxi(1, y - ((v.size.y - 1) >> 1)))
+
+
 func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
-	## 0x40F870 before a shot's animations: with no shooter or an unseen one (a computer
-	## unit not spotted) the view goes to the target (scroll_to); otherwise it is set so that
-	## both show. Engine-side: when they do not fit in the view at once (the game then opens
-	## a second window for the shooter), the view goes to the target.
+	## 0x40F870 before a shot's animations (the record: shooter k at (sx, k's y), target (tx,
+	## ty)). Called on the rules' thread, which waits while the main thread frames the view.
 	if auto_react or _headless() or (options & 0x10) or tx < 0:
 		return
-	call_deferred("_anim_view", k, sx, tx, ty)
-
-
-func _anim_view(k: int, sx: int, tx: int, ty: int) -> void:
-	var t := hex_center(Vector2i(tx, ty))
-	if sx == -1 or k < 0 or (w.is_enemy(k) and not w.ub(k, 0) & 0x10):
-		cam.position = t
+	var unseen: bool = k < 0 or sx == -1 or (w.is_enemy(k) and not w.ub(k, 0) & 0x10)
+	var sy := -1 if unseen else w.sb(k, 10)
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		_anim_view(unseen, sx, sy, tx, ty, false)
 		return
-	var s := hex_center(w.pos(k))
-	var vis := get_viewport().get_visible_rect().size / cam.zoom
-	vis.x = minf(vis.x, 432.0 * get_viewport().get_visible_rect().size.y / 400.0 / cam.zoom.x)   # (the map's part, left of the panel)
-	if absf(s.x - t.x) < vis.x - 3 * TILE_W and absf(s.y - t.y) < vis.y - 3 * TILE_H:
-		cam.position = (s + t) / 2
+	call_deferred("_anim_view", unseen, sx, sy, tx, ty, true)
+	view_sem.wait()
+
+
+var split_box: SubViewportContainer = null   # 0x40F870's second window: the target's half
+var split_band: ColorRect = null             # the MisD window between the halves (0x405330)
+var split_origin := Vector2i(-1, -1)         # the target's half's origin (window +0x98 / +0x9C)
+var split_shooter_origin := Vector2i(-1, -1) # the shooter's half's (window +0x88 / +0x8C)
+
+
+func _anim_view(unseen: bool, sx: int, sy: int, tx: int, ty: int, post: bool) -> void:
+	## 0x40F870: no shooter or an unseen one: scroll_to the target. Else with dx = |sx - tx|,
+	## dy = |sy - ty|: when dx >= cols - 3 - (both rows odd) or dy >= rows - 3 the window
+	## splits (the shooter's half on top, the target's below: 0x40FCE0 / 0x40FD70, 0x40F300,
+	## the band 0x405330); otherwise the origin frames both: x from the left one less
+	## (cols - dx) / 2 (+2 from the shooter when dx > 3), y from the upper one less
+	## (rows - dy) / 2 (+2 from the shooter above when dy > 5), at least 1 (0x4066F0).
+	_park_view()
+	if unseen:
+		split_close()
+		scroll_to_hex(tx, ty)
 	else:
-		cam.position = t
+		var v := map_view_cells()
+		var cols := v.size.x
+		var rows := v.size.y
+		var dx := absi(sx - tx)
+		var dy := absi(sy - ty)
+		var odd := 1 if (sy & 1) and (ty & 1) else 0
+		if dx >= cols - odd - 3 or dy >= rows - 3:
+			split_open(sx, sy, tx, ty)
+		else:
+			split_close()
+			var ox: int
+			var oy: int
+			if tx < sx:
+				ox = tx - (cols - dx) / 2
+			else:
+				ox = sx - (cols - dx) / 2 + (2 if dx > 3 else 0)
+			if sy < ty:
+				oy = sy - (rows - dy) / 2 + (2 if dy > 5 else 0)
+			else:
+				oy = ty - (rows - dy) / 2
+			ox = maxi(1, ox)
+			oy = maxi(1, oy)
+			if Vector2i(ox, oy) != v.position:
+				set_view_origin(ox, oy)
+	if post:
+		view_sem.post()
+
+
+func _half_origin(x: int, y: int, cols: int, hr: int) -> Vector2i:
+	## 0x40FCE0(x, y, 1, n) -> 0x40FD70: (x - (cols - 1) / 2, y - 2), at least 1, at most 0x47
+	## less the size, its last cell before 0x46
+	var ox := maxi(1, x - ((cols - 1) >> 1))
+	var oy := maxi(1, y - 2)
+	if 0x47 < cols + ox:
+		ox = 0x47 - cols
+	if 0x47 < hr + oy:
+		oy = 0x47 - hr
+	ox = maxi(1, ox)
+	oy = maxi(1, oy)
+	if cols - 1 + ox >= 0x46:
+		ox = 0x46 - cols
+	if hr - 1 + oy >= 0x46:
+		oy = 0x46 - hr
+	return Vector2i(maxi(1, ox), maxi(1, oy))
+
+
+func split_open(sx: int, sy: int, tx: int, ty: int) -> void:
+	## the split map window: (rows >> 1) - 1 rows a half; the shooter's half at the window's
+	## top, a band of 0x24 px at half the height less 0x12 (0x405330's window, filled by
+	## 0x46C370 mode 1: DIB index 10, the colour 0), the target's half under it (the window's
+	## paint with +0x40 set). The engine shows both halves live (the game keeps the one not
+	## being animated in a memory DC: 0x40F300).
+	var v := map_view_cells()
+	var hr := (v.size.y >> 1) - 1
+	var so := _half_origin(sx, sy, v.size.x, hr)
+	split_shooter_origin = so
+	split_origin = _half_origin(tx, ty, v.size.x, hr)
+	var vs := get_viewport().get_visible_rect().size
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0
+	var mw := 432.0 * sc
+	var band_y := vs.y / 2.0 - 0x12 * cam.zoom.y
+	var band_h := 0x24 * cam.zoom.y
+	cam.limit_enabled = false
+	var tl_s := hex_center(so) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
+	cam.position = tl_s + vs / cam.zoom / 2.0
+	if split_box == null or not is_instance_valid(split_box):
+		split_box = SubViewportContainer.new()
+		split_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sv := SubViewport.new()
+		sv.world_2d = get_viewport().world_2d
+		sv.handle_input_locally = false
+		sv.canvas_item_default_texture_filter = get_viewport().canvas_item_default_texture_filter
+		var c2 := Camera2D.new()
+		sv.add_child(c2)
+		split_box.add_child(sv)
+		hud_layer.add_child(split_box)
+		hud_layer.move_child(split_box, 0)
+		split_band = ColorRect.new()
+		split_band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_layer.add_child(split_band)
+		hud_layer.move_child(split_band, 1)
+	var sub: SubViewport = split_box.get_child(0)
+	var hsize := Vector2(mw, vs.y - (band_y + band_h))
+	# rendered at the window's resolution (the stretch's scale f), as the main view is: the
+	# striped hexes mask every other pixel
+	var f := get_viewport().get_final_transform().x.x
+	split_box.position = Vector2(0, band_y + band_h)
+	split_box.scale = Vector2(1.0 / f, 1.0 / f)
+	split_box.size = hsize * f
+	sub.size = Vector2i(hsize * f)
+	var c: Camera2D = sub.get_child(0)
+	c.zoom = cam.zoom * f
+	var tl_t := hex_center(split_origin) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
+	c.position = tl_t + hsize / cam.zoom / 2.0
+	split_band.color = GameWindow.color(0)
+	split_band.position = Vector2(0, band_y)
+	split_band.size = Vector2(mw, band_h)
+	split_box.visible = true
+	split_band.visible = true
+	overlay.queue_redraw()
+
+
+func flight_window() -> Dictionary:
+	## the map window's fields 0x41B320 reads, in the map bitmap's pixels (the engine's world
+	## less (48, 36)): +0x20 .. +0x2C the window's rect (L, T, R, B), +0x14 its height (H);
+	## split: +0x68 .. +0x74 the shooter's half (S), +0x78 .. +0x84 the target's (Q)
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0
+	var ww := int(432.0 * sc / cam.zoom.x)
+	var hh := int(get_viewport().get_visible_rect().size.y / cam.zoom.y)
+	var tl := view_tl() - Vector2(48, 36)
+	var out := {"L": int(tl.x), "T": int(tl.y), "R": int(tl.x) + ww - 1, "B": int(tl.y) + hh - 1,
+			"H": hh, "split": split_view_rect().has_area()}
+	if out.split:
+		for pair in [["S", split_shooter_origin], ["Q", split_origin]]:
+			var o: Vector2i = pair[1]
+			var l := (o.x - 1) * 48 + (o.y & 1) * 24
+			var t := (o.y - 1) * 36
+			out[pair[0]] = [l, t, l + ww - 1, t + (hh >> 1) - 0x13]
+	return out
+
+
+func split_view_rect() -> Rect2:
+	## the world rect the target's half shows (empty when the window is not split)
+	if split_box == null or not is_instance_valid(split_box) or not split_box.visible:
+		return Rect2()
+	var c: Camera2D = split_box.get_child(0).get_child(0)
+	var size := split_box.size / c.zoom
+	return Rect2(c.position - size / 2.0, size)
+
+
+func split_close() -> void:
+	## 0x40F4F0: the band goes, the window is whole again
+	if split_box and is_instance_valid(split_box) and split_box.visible:
+		split_box.visible = false
+		split_band.visible = false
+		cam.limit_enabled = true
+		overlay.queue_redraw()
+
+
+func anim_close() -> void:
+	## 0x410510 after a shot's animations: a split window closes and the view goes to the
+	## target's half's origin, 3 rows up (unsplit, the framed origin, where the view is)
+	if auto_react or _headless() or (options & 0x10):
+		return
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		_anim_close(false)
+		return
+	call_deferred("_anim_close", true)
+	view_sem.wait()
+
+
+func _anim_close(post: bool) -> void:
+	if split_box and is_instance_valid(split_box) and split_box.visible:
+		_park_view()
+		split_close()
+		set_view_origin(split_origin.x, split_origin.y - 3)
+	if post:
+		view_sem.post()
 
 
 func anim_flight(stage: int, rec: Array) -> void:
 	## the missile's flight stage (0x410160 -> 0x41B320: kind 8 only, no waits in the game,
-	## each step drawn; engine-side pace: 8 steps a frame); 4 erases it
+	## each step drawn; engine-side pace: 8 steps a frame; its lines: AnimeView.flight_segments);
+	## 4 erases it
 	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return
 	if anime_view == null or rec.size() < 5 or int(rec[0]) != 8:
@@ -5202,6 +5514,7 @@ func anim_flight(stage: int, rec: Array) -> void:
 
 
 func _flight_step(stage: int, rec: Array) -> void:
+	_park_view()
 	if stage == 4:
 		anime_view.clear_missile()
 		anim_sem.post()
@@ -5228,6 +5541,7 @@ func anim_player(player: int, x: int, y: int) -> bool:
 
 func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Array) -> void:
 	var spec: Dictionary = AnimeView.PLAYERS[player]
+	_park_view()
 	if spec.get("turn", false):
 		# 0x410020's waits (a click does not stop the turn): the facing is the map's drawing
 		await get_tree().create_timer((int(spec.first_ms) if i == 0 else int(spec.ms)) / 1000.0).timeout
@@ -5261,8 +5575,20 @@ func _input(ev: InputEvent) -> void:
 
 
 func _process(_delta: float) -> void:
+	if _loop_due and _loop_idle():
+		_loop_due = false
+		var u := _loop_u
+		if u != -1 and w.active(u) and not w.is_enemy(u):
+			_select(u)
+			open_command_menu(u, _loop_back)
+		elif _loop_back.is_valid():
+			var cb := _loop_back
+			_loop_u = -1
+			_loop_back = Callable()
+			cb.call()
 	if hooks:
 		hooks.anims = options & 0x10 == 0     # (DS:0x551D29 bit 0x10: the system menu's アニメ)
+		hooks.follow = options & 8 != 0        # (bit 3: ai_turn scrolls to each unit in an alert)
 
 
 func _headless() -> bool:
@@ -5312,6 +5638,9 @@ func _next_line() -> void:
 class BattleItemHooks extends Item.Hooks:
 	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
 		battle.anim_view(k, sx, tx, ty)
+
+	func anim_close() -> void:
+		battle.anim_close()
 
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
@@ -5494,6 +5823,7 @@ func _show_safe() -> void:
 
 
 func _after_command() -> void:
+	_command_over()
 	_script_state()
 	_show_safe()
 	if w.fault != "":
@@ -5769,6 +6099,7 @@ func _end_turn() -> void:
 		_end_turn_finish(r[0], r[1], r[2])
 		return
 	ai_running = true
+	view_w = w.duplicate_world()
 	ai_thread = Thread.new()
 	ai_thread.start(_ai_phase)
 
@@ -5893,6 +6224,7 @@ func _ai_done(res: int, undefined: Array, end_code := 0) -> void:
 	ai_thread.wait_to_finish()
 	ai_thread = null
 	ai_running = false
+	view_w = null
 	overlay.queue_redraw()
 	_end_turn_finish(res, undefined, end_code)
 
@@ -6124,6 +6456,9 @@ class BattleStrikeHooks extends Strike.Hooks:
 	func anim_view(k: int, sx: int, tx: int, ty: int) -> void:
 		battle.anim_view(k, sx, tx, ty)
 
+	func anim_close() -> void:
+		battle.anim_close()
+
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
 		return battle.anim_frame(player, x, y, i, dy, dx, anim_rec)
 
@@ -6229,6 +6564,7 @@ func _cmd_support_request() -> void:
 	if auto_react:
 		_support_done(u, Strike.support_request(w, u, sh))
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		var res: Variant = Strike.support_request(w, u, sh)
@@ -6238,6 +6574,7 @@ func _cmd_support_request() -> void:
 func _support_finished(u: int, res: Variant) -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_support_done(u, res)
 
 
@@ -6674,6 +7011,7 @@ func _cmd_mission() -> void:
 		MissionScripts.run_command(w, rng, u, mission_hooks)
 		_mission_cmd_done()
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		MissionScripts.run_command(w, rng, u, mission_hooks)
@@ -6709,6 +7047,7 @@ func _cmd_explosives() -> void:
 		run.call()
 		_mission_cmd_done()
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		run.call()
@@ -6912,6 +7251,7 @@ func _pocket_run(job: Callable) -> void:
 		job.call()
 		_mission_cmd_done()
 		return
+	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
 		job.call()
@@ -7049,6 +7389,7 @@ func _pocket_pick(u: int) -> void:
 func _mission_cmd_finished() -> void:
 	move_thread.wait_to_finish()
 	move_thread = null
+	view_w = null
 	_mission_cmd_done()
 
 
@@ -7110,11 +7451,7 @@ func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
 		var v := Pd2World.s8(wd.crew[c * 16 + f])
 		t += ("%2X " % v) if v >= 0 else ("%2d " % v)
 	var sk := wd.crew[c * 16 + 8]
-	var yn := func(b: int) -> String:
-		# (engine-side: a translation wider than the column's 2 keeps its first letters)
-		var yt := GameData.exe_text(campaign, 0x50CBB3 if sk & b else 0x50CBB6)
-		var wide := GameWindow.text_cols(GameData.exe_text(campaign, 0x50CBB3)) > 2 or GameWindow.text_cols(GameData.exe_text(campaign, 0x50CBB6)) > 2
-		return yt.substr(0, 1) + " " if wide else yt
+	var yn := func(b: int) -> String: return GameData.yes_no_cell(campaign, sk & b != 0)
 	t += "%s %s %s %s" % [yn.call(1), yn.call(2), yn.call(4), yn.call(8)] + "\u0001" + char(0xFF)
 	return t
 
@@ -7500,10 +7837,27 @@ func _draw_overlay() -> void:
 	## (the F layer's and the engine's sets the game marks the same way: the move, fire,
 	## carry, pick and reaction hexes), smoke, the units with their numbers and icons, the
 	## mines and strikes (option 0x8000, DASH)
-	if w == null or ((ai_running or move_thread != null) and react_panel == null):
+	if w == null:
 		return
+	var dw := w
+	if (ai_running or move_thread != null) and react_panel == null:
+		# the rules run on a worker thread: draw the world as it was when the worker last
+		# stopped for the display (a step, an animation's frame, a question)
+		if view_w == null:
+			return
+		dw = view_w
 	var inv := overlay.get_viewport().get_canvas_transform().affine_inverse()
 	var vr: Rect2 = inv * Rect2(Vector2.ZERO, overlay.get_viewport().get_visible_rect().size)
+	var rects := [vr]
+	var sr := split_view_rect()
+	if sr.has_area():
+		rects.append(sr)
+	var done_cells := {}
+	for r in rects:
+		_draw_cells(dw, r, done_cells)
+
+
+func _draw_cells(dw: Pd2World, vr: Rect2, done_cells: Dictionary) -> void:
 	var y0 := maxi(0, int(vr.position.y / TILE_H) - 2)
 	var y1 := mini(MAP - 1, int(vr.end.y / TILE_H) + 1)
 	var x0 := maxi(0, int(vr.position.x / TILE_W) - 2)
@@ -7524,48 +7878,49 @@ func _draw_overlay() -> void:
 		for hx in move_dests:
 			marked[hx] = true
 	if react_target != -1:
-		marked[w.pos(react_target)] = true
+		marked[dw.pos(react_target)] = true
 		for b in react_menu:
-			marked[w.pos(b)] = true
+			marked[dw.pos(b)] = true
 	var see_all := (options & 0x40) != 0
 	var large := (options & 0x1000) != 0
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
-			if not w.on_map(x, y):
+			if not dw.on_map(x, y) or done_cells.has(x + MAP * y):
 				continue
+			done_cells[x + MAP * y] = true
 			var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
-			if not Ai.in_view(w, x, y, 0):
+			if not Ai.in_view(dw, x, y, 0):
 				overlay.draw_texture(MapPieces.stripes(), o)
-			if MissionScripts.target_mark_at(w, x, y) or marked.has(Vector2i(x, y)):
+			if MissionScripts.target_mark_at(dw, x, y) or marked.has(Vector2i(x, y)):
 				overlay.draw_texture(MapPieces.hexmark(), o)
-			var f := w.layer(w.F, x, y)
+			var f := dw.layer(dw.F, x, y)
 			if f & 1:
 				overlay.draw_texture(MapPieces.smoke(campaign), o)
-			var u := w.O[x + MAP * y] - 1
-			if u >= 0 and w.active(u):
-				_draw_unit(u, o, see_all, large)
+			var u := dw.O[x + MAP * y] - 1
+			if u >= 0 and dw.active(u):
+				_draw_unit(dw, u, o, see_all, large)
 			if campaign == "dash" and options & 0x8000:
 				if f & 0x80:
 					overlay.draw_texture(MapPieces.mark(0), o + Vector2(24, 8))
-				if f & 0x10:
+				if f & 0x10 and dw.phase == 0:     # (a strike only in the player's phase)
 					overlay.draw_texture(MapPieces.mark(1), o + Vector2(24, 10))
 
 
-func _draw_unit(u: int, o: Vector2, see_all: bool, large: bool) -> void:
+func _draw_unit(dw: Pd2World, u: int, o: Vector2, see_all: bool, large: bool) -> void:
 	## 0x4F17F0 at the cell's origin o
-	var enemy := w.is_enemy(u)
-	var spotted := (w.ub(u, 0) & 0x10) != 0
-	if enemy and not spotted and not see_all:
-		return
-	var t := MapPieces.sprite(campaign, w.umachine(u, 26), w.ub(u, 5) & 7)
+	var enemy := dw.is_enemy(u)
+	var spotted := (dw.ub(u, 0) & 0x10) != 0
+	if enemy and not spotted and not see_all and not (dw.phase == 3 and options & 8):
+		return                              # (0x4F17F0's mode is the phase DS:0x50DDC8)
+	var t := MapPieces.sprite(campaign, dw.umachine(u, 26), dw.ub(u, 5) & 7)
 	if t:
 		overlay.draw_texture(t, o + Vector2(8, 4))
-	var dmg := 100 - w.ub(u, 0xD)
+	var dmg := 100 - dw.ub(u, 0xD)
 	var cc := 7 if dmg < 0x32 else (4 if dmg > 0x4A else 15)
 	MapPieces.number(overlay, o + Vector2(8, 8), dmg, cc, large)
 	if enemy and not (options & 8):
 		return
-	MapPieces.number(overlay, o + Vector2(8, 28), w.sb(u, 0xE), 4 if spotted and options & 0x80 else 7, large)
-	var ic := (2 if w.ub(u, 0) & 0x20 else 0) | (1 if w.ub(u, 0x34) != 0xFF else 0)
+	MapPieces.number(overlay, o + Vector2(8, 28), dw.sb(u, 0xE), 4 if spotted and options & 0x80 else 7, large)
+	var ic := (2 if dw.ub(u, 0) & 0x20 else 0) | (1 if dw.ub(u, 0x34) != 0xFF else 0)
 	if ic:
 		MapPieces.icons(overlay, o + Vector2(32, 28), ic)

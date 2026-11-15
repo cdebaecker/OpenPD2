@@ -46,6 +46,18 @@ func mine_blast(x: int, y: int) -> void:
 	pass
 
 
+## Display only (rules.StepHooks.shown): after a step of a player's unit or a spotted
+## computer one, the map shows it, scrolls to u when its hex is outside the map window
+## (0x472390 -> scroll_to) and waits 0x21 ms (ui_wait).
+func shown(u: int) -> void:
+	pass
+
+
+## Display only: option 8 in an alert, ai_turn's scroll_to before each unit's orders.
+func view_to(x: int, y: int) -> void:
+	pass
+
+
 ## The player's phase (w.phase 0): "mine found!" (0x1A6), in careful mode before any question.
 func mine_found(u: int) -> void:
 	pass

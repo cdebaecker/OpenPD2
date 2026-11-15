@@ -280,7 +280,7 @@ func _recruits(data: Array) -> void:
 	## 0x80), 47 columns: "%-14s %s %s%s %2d " of "given family", 地 / 空 (crew +3), %a4F (+6
 	## bits 0 / 1) or %a7F, 不 (+6 bit 0) / 負 (bit 1) / 未 (+5 = 0xFF) / 編, +9; then +0xA,
 	## +0xB, +0xC, +0xD each "%2X " ("%2d " below 0); then "%s %s %s %s" of 有 / 無 by +8 bits
-	## 0, 1, 2, 3
+	## 0, 1, 2, 3 (2 columns each: GameData.yes_no_cell)
 	var w: Pd2World = battle.w
 	var camp: String = battle.campaign
 	await _kabe()
@@ -296,9 +296,8 @@ func _recruits(data: Array) -> void:
 			var v := Pd2World.s8(w.cb(c, f))
 			r += ("%2d " % v) if v < 0 else ("%2X " % v)
 		var sk := w.cb(c, 8)
-		r += battle.wsp("%s %s %s %s", [GameData.exe_text(camp, 0x50CBB3 if sk & 1 else 0x50CBB6),
-			GameData.exe_text(camp, 0x50CBB3 if sk & 2 else 0x50CBB6), GameData.exe_text(camp, 0x50CBB3 if sk & 4 else 0x50CBB6),
-			GameData.exe_text(camp, 0x50CBB3 if sk & 8 else 0x50CBB6)])
+		r += battle.wsp("%s %s %s %s", [GameData.yes_no_cell(camp, sk & 1 != 0), GameData.yes_no_cell(camp, sk & 2 != 0),
+			GameData.yes_no_cell(camp, sk & 4 != 0), GameData.yes_no_cell(camp, sk & 8 != 0)])
 		rows.append(r)
 	await _kabe_list(0x78, 0x50, 0x2F, 2, GameData.exe_text(camp, 0x5199E0), rows)
 

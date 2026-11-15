@@ -5,6 +5,10 @@ extends SceneTree
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	await process_frame
+	for a in args.duplicate():
+		if a.begins_with("lang="):                 # (lang=ja|en|fr anywhere: the language)
+			root.get_node("GameData").language = a.substr(5)
+			args.erase(a)
 	var b = load("res://ui/battle.tscn").instantiate()
 	b.campaign = args[0]
 	b.mission_index = int(args[1])

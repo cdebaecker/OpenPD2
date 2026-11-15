@@ -249,38 +249,136 @@ static func corner(x: int, y: int) -> Vector2i:
 	return Vector2i((cx - 1) * 48 + (cy & 1) * 24, (cy - 1) * 36)
 
 
-func flight_points(rec: Array, stage: int) -> Array:
-	## the steps 0x41B320 draws for a stage (the shooter seen and in the same view: from its
-	## cell's corner to the target's; n the longer axis): 0: 1 .. n/4 + n%4, 1: .. n/2 + n%4,
-	## 2: .. n/4 + n/2 + n%4, 3: .. n. Engine-side: an unseen or off-map shooter (the game
-	## starts at its view's edge) starts 6 cells above the target.
+func flight_dir(rec: Array) -> int:
+	## 0x41B320's direction (local_24): the shooter's (record +0x16) on the map, 0x47E440 from
+	## its hex to the target's; off the map, 0x47E380 from its group's position (+0x16 /
+	## +0x17) to the fire point (DS:0x50AD95 / 0x50AD97), 0 outside 0-7
 	var w: Pd2World = battle.w
-	var t := corner(int(rec[3]), int(rec[4]))
-	var s := t - Vector2i(0, 6 * 36)
 	var k: int = rec[5] if rec.size() > 5 else -1
-	if int(rec[1]) != -1 and k >= 0 and not (w.is_enemy(k) and not w.ub(k, 0) & 0x10):
-		s = corner(int(rec[1]), int(rec[2]))
-	var n := maxi(absi(t.x - s.x), absi(t.y - s.y))
-	var q := n >> 2
-	var h := n >> 1
-	var r := n & 3
-	var spans := [[1, q + r], [q + r, h + r], [r + h, q + r + h], [q + h + r, n]]
+	if k < 0 or k >= w.n_units:
+		return 0
+	var kx := w.sb(k, 9)
+	var ky := w.sb(k, 10)
+	if w.on_map(kx, ky):
+		return direction(kx, ky, int(rec[3]), int(rec[4]))
+	var g := Ai.unit_group(w, k)
+	if g < 0:
+		return 0
+	var d := Strike.direction(Pd2World.s8(Ai.gb(w, g, 0x16)), Pd2World.s8(Ai.gb(w, g, 0x17)), w.fire_point.x, w.fire_point.y)
+	return d if d >= 0 and d <= 7 else 0
+
+
+func flight_segments(rec: Array) -> Array:
+	## 0x41B320's lines in the map bitmap's pixels: [[from, to]] or, when the map window is
+	## split (0x40F870), [[the shooter's line to its half's edge], [the target's half's edge
+	## to the target]]. The shooter unseen (record +6 = -1, or a computer unit not spotted):
+	## the line starts at the map window's edge (window +0x20 .. +0x2C) on the direction's
+	## side; seen in one view: from its cell's corner.
+	var w: Pd2World = battle.w
+	var k: int = rec[5] if rec.size() > 5 else -1
+	var t := corner(int(rec[3]), int(rec[4]))
+	var unseen := int(rec[1]) == -1 or k < 0 or (w.is_enemy(k) and not w.ub(k, 0) & 0x10)
+	var s := t if int(rec[1]) == -1 else corner(int(rec[1]), int(rec[2]))
+	var win: Dictionary = battle.flight_window()
+	var d := flight_dir(rec)
+	var L: int = win.L
+	var T: int = win.T
+	var R: int = win.R
+	var B: int = win.B
+	if unseen:
+		var a := s
+		match d:
+			0: a = Vector2i(mini(0xD00, R + 0x10), mini(0x9C0, B + 0xC))
+			1: a = Vector2i(t.x, mini(0x9C0, B + 0xC))
+			2: a = Vector2i(L, mini(0x9C0, B + 0xC))
+			3: a = Vector2i(L, t.y)
+			4: a = Vector2i(L, T)
+			5: a = Vector2i(t.x, T)
+			6: a = Vector2i(mini(0xD00, R + 0x18), T)
+			7: a = Vector2i(mini(0xD00, R + 0x18), t.y)
+		return [[a, t]]
+	if not win.split:
+		return [[s, t]]
+	var S: Array = win.S       # the shooter's half (+0x68 .. +0x74): left, top, right, bottom
+	var Q: Array = win.Q       # the target's half (+0x78 .. +0x84)
+	var H: int = win.H         # the window's height (+0x14)
+	var b := t
+	var c := t
+	match d:
+		0:
+			b = Vector2i(maxi(0, s.x - t.y + Q[1]), S[1])
+			c = Vector2i(Q[2] - 0x20 if t.y == Q[1] else mini(0xD00, t.y + t.x - Q[1]), mini(0x9C0, Q[3] + 0xC))
+		1:
+			b = Vector2i(s.x, S[1])
+			c = Vector2i(t.x, mini(0x9C0, Q[3] - 0x18))
+		2:
+			b = Vector2i(mini(0xD00, s.x + s.y - S[1]), S[1])
+			c = Vector2i(Q[0] if t.y == Q[1] else mini(0xD00, t.x - t.y + Q[1]), mini(0x9C0, Q[3] + 0xC))
+		3:
+			b = Vector2i(mini(0xD00, S[2] - 0x20), s.y)
+			c = Vector2i(Q[0], t.y)
+		4:
+			b = Vector2i(mini(0xD00, (H >> 1) + S[1] + s.x - s.y - 0x12), S[3] - 0x18)
+			c = Vector2i(Q[0] if t.y == Q[1] else maxi(0, t.x - t.y + Q[1]), Q[1])
+		5:
+			b = Vector2i(s.x, S[3] - 0x18)
+			c = Vector2i(t.x, Q[1])
+		6:
+			b = Vector2i(maxi(0, s.y - S[1] - (H >> 1) + 0x12 + s.x), S[3] - 0x18)
+			c = Vector2i(Q[2] - 0x20 if t.y == Q[1] else mini(0xD00, t.x + t.y - Q[1]), Q[1])
+		7:
+			b = Vector2i(S[0], s.y)
+			c = Vector2i(mini(0xD00, Q[2] - 0x20), t.y)
+		_:
+			return [[s, t]]
+	return [[s, b], [c, t]]
+
+
+func flight_points(rec: Array, stage: int) -> Array:
+	## the steps 0x41B320 draws for a stage along its lines (flight_segments; n a line's longer
+	## axis). One line: 0: 1 .. n/4 + n%4, 1: .. n/2 + n%4, 2: .. n/4 + n/2 + n%4, 3: .. n.
+	## Split: 0: the first line's 1 .. n/2 + n%2, 1: .. n; 2: the second's 1 .. n/2 + n%2,
+	## 3: .. n.
+	var segs := flight_segments(rec)
 	var out := []
-	if stage >= 0 and stage < 4:
-		for i in range(spans[stage][0], spans[stage][1] + 1):
-			out.append(line_point(s.x, s.y, t.x, t.y, i))
+	if stage < 0 or stage > 3:
+		return out
+	var seg: Array
+	var span: Array
+	if segs.size() == 1:
+		seg = segs[0]
+		var n := _axis(seg)
+		var q := n >> 2
+		var h := n >> 1
+		var r := n & 3
+		span = [[1, q + r], [q + r, h + r], [r + h, q + r + h], [q + h + r, n]][stage]
+	else:
+		seg = segs[0] if stage < 2 else segs[1]
+		var n := _axis(seg)
+		var half := (n >> 1) + (n & 1)
+		span = [1, half] if stage % 2 == 0 else [half, n]
+	var a: Vector2i = seg[0]
+	var b: Vector2i = seg[1]
+	for i in range(span[0], span[1] + 1):
+		out.append(line_point(a.x, a.y, b.x, b.y, i))
 	return out
 
 
+func _axis(seg: Array) -> int:
+	var a: Vector2i = seg[0]
+	var b: Vector2i = seg[1]
+	return maxi(absi(b.x - a.x), absi(b.y - a.y))
+
+
 func flight_sprite(rec: Array) -> Texture2D:
-	## the record's +2 entry (kind 8: entry 8), sub-entry the direction & 3: 24 x 24, mask and
-	## four planes of 3 bytes a row (0x168 bytes)
+	## the record's +2 entry (kind 8: entry 8), sub-entry the direction (flight_dir) & 3:
+	## 24 x 24, mask and four planes of 3 bytes a row (0x168 bytes)
 	var w: Pd2World = battle.w
 	var akind: int = rec[0]
 	var e := w.mem8(ANIM_TABLE + 4 * akind + 1)
 	if e == 0:
 		return null
-	var d := direction(int(rec[1]), int(rec[2]), int(rec[3]), int(rec[4])) if int(rec[1]) != -1 else 0
+	var d := flight_dir(rec)
 	var key := ["flight", e, d & 3]
 	if not _cache.has(key):
 		var b := entry_bytes(entry_bytes(_pack, e), d & 3)

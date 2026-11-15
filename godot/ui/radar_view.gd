@@ -237,15 +237,31 @@ func _answer(v: Variant) -> void:
 func _draw_pick() -> void:
 	## 0x4380C0: the hovered region XORed in its colour (+0x11: 15) by its type (+0x10: rows
 	## an outline, the close button a fill); 0x440670: the hovered cell's inside XOR 7
-	## ((x 0x18 + 9, y 0x18 + 0x21)-(x 0x18 + 0x1F, y 0x18 + 0x37), type 2). (Drawn over the
-	## pictures in the colour, not XORed: the engine keeps no indices for them.)
+	## ((x 0x18 + 9, y 0x18 + 0x21)-(x 0x18 + 0x1F, y 0x18 + 0x37), type 2). XORed over the
+	## pictures' own indices (GameWindow.xor_patch)
 	if pick == "region" and _hover_r != -1:
 		if _hover_r == 20:
-			draw_rect(Rect2(0x24A, 0x181, 0x2E, 0xD), Color(pal(15), 0.5))
+			_xor([[0x24A, 0x181, 0x24A + 0x2D, 0x181 + 0xC, 2]], 15)
 		else:
-			draw_rect(Rect2(400, 0x1A + 0x12 * _hover_r, 96, 0xC), pal(15), false)
+			var ry := 0x1A + 0x12 * _hover_r
+			_xor([[400, ry, 400 + 95, ry + 0xB, 1]], 15)
 	elif pick == "cell" and _hover_c.x != -1:
-		draw_rect(Rect2(_hover_c.x * 0x18 + 9, _hover_c.y * 0x18 + 0x21, 0x17, 0x17), Color(pal(7), 0.5))
+		var cx := _hover_c.x * 0x18 + 9
+		var cy := _hover_c.y * 0x18 + 0x21
+		_xor([[cx, cy, cx + 0x16, cy + 0x16, 2]], 7)
+
+
+func _xor(ops: Array, c: int) -> void:
+	var root: String = GameData.ROOT
+	var mi: int = battle.mission_index if battle else 0
+	var camp: String = battle.campaign if battle else "dash"
+	var layers := [[root + "/images/ido_g/00.bmp", 0, 0], ["%s/%s/images/smap/%02d.bmp" % [root, camp, mi], 8, 0x20]]
+	var pal16 := []
+	for i in 16:
+		pal16.append(pal(i))
+	var r: Array = load("res://ui/game_window.gd").xor_patch(layers, ops, c, pal16)   # (not static: -s tools compile this before the GameData autoload)
+	if not r.is_empty():
+		draw_texture(r[0], r[1])
 
 
 func _gui_input(ev: InputEvent) -> void:

@@ -179,6 +179,7 @@ static func run(w: Pd2World, rng: Pd2Random, hooks: AiTurnHooks = null, alert :=
 					continue
 				if alert and hooks.follow:
 					stale = STALE_FOLLOW
+					hooks.view_to(w.pos(k).x, w.pos(k).y)   # display: scroll_to the unit (0x42AC40)
 				var res := dispatch(w, rng, k, order, sight, hooks, alert, stale)
 				esi = 0
 				if res == Ai.UNDEFINED:

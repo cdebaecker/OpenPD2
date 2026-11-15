@@ -63,6 +63,20 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
+func _xor(ops: Array, c: int) -> void:
+	## XOR over the plan's pictures (plan_g at 0, the mission's smap at (8, 0x20)) as the
+	## game's DIB has them (GameWindow.xor_patch)
+	var root: String = GameData.ROOT
+	var camp: String = battle.campaign if battle else "dash"
+	var layers := [[root + "/images/plan_g/00.bmp", 0, 0], ["%s/%s/images/smap/%02d.bmp" % [root, camp, chunk - 1], 8, 0x20]]
+	var pal16 := []
+	for i in 16:
+		pal16.append(pal(i))
+	var r: Array = load("res://ui/game_window.gd").xor_patch(layers, ops, c, pal16)   # (not static: -s tools compile this before the GameData autoload)
+	if not r.is_empty():
+		draw_texture(r[0], r[1])
+
+
 func tex(path: String) -> Texture2D:
 	if not _tex.has(path):
 		var img := Image.load_from_file(path) if FileAccess.file_exists(path) else null
@@ -204,10 +218,13 @@ func _draw() -> void:
 		draw_rect(f, fill_col)
 	if cell_frame != null:
 		# 0x446320: the target cell's frame, XOR 15 (an outer and an inner fill: a 2 px ring)
-		var r := Rect2(cell_frame[0] * 24 + 9, cell_frame[1] * 24 + 0x21, 0x17, 0x17)
-		draw_rect(r, pal(15), false, 2.0)
+		var fx: int = cell_frame[0] * 24 + 9
+		var fy: int = cell_frame[1] * 24 + 0x21
+		_xor([[fx, fy, fx + 0x16, fy + 0x16, 2], [fx + 2, fy + 2, fx + 0x14, fy + 0x14, 2]], 15)
 	if _flash != null and _flash_on:
-		draw_rect(Rect2(_flash[0] * 0x18 + 9, _flash[1] * 0x18 + 0x21, 0x17, 0x17), pal(15))
+		var fx: int = _flash[0] * 0x18 + 9
+		var fy: int = _flash[1] * 0x18 + 0x21
+		_xor([[fx, fy, fx + 0x16, fy + 0x16, 2]], 15)
 	if blink != null and _on:
 		_draw_blink(blink)
 	if note != "":
@@ -222,7 +239,7 @@ var _flash_on := false
 
 func flash_camera(x: int, y: int) -> void:
 	## 0x446E80: the camera's cell (x 0x18 + 9, y 0x18 + 0x21, 0x17 x 0x17) XORed in colour
-	## 15 four times, 50 ms apart (drawn in colour 15)
+	## 15 four times, 50 ms apart
 	flashed = true
 	_flash = [x, y]
 	for i in 4:

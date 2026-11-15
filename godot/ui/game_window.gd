@@ -205,10 +205,42 @@ func _draw_window(x: int, y: int, c: int, r: int, h: int, f: bool) -> void:
 	_tile("br", x + 8 + 8 * c, yy)
 
 
+func _dib(x: int, y: int) -> int:
+	## the DIB's index at (x, y): a picture's own, or the window's colour + 10
+	if x < 0 or y < 0 or x >= _w or y >= _h:
+		return 10
+	var r := _raw[y * _w + x]
+	return r if r != 0 else _buf[y * _w + x] + 10
+
+
+func _set_dib(x: int, y: int, v: int) -> void:
+	v &= 0xFF
+	if x < 0 or y < 0 or x >= _w or y >= _h:
+		return
+	if v >= 10 and v <= 25:
+		_buf[y * _w + x] = v - 10
+		_raw[y * _w + x] = 0
+	else:
+		_buf[y * _w + x] = 0
+		_raw[y * _w + x] = v
+
+
 func _rect(x0: int, y0: int, x1: int, y1: int, mode: int, c: int, type: int) -> void:
-	## 0x46C370: type 1 an outline, 2 a fill, 0 a line; mode 0 sets the colour, 4 XORs it
+	## 0x46C370: type 1 an outline, 2 a fill, 0 a line; on the DIB's bytes: mode 0 sets
+	## colour + 10, 1 sets 10, 2 / 3 / 4 AND / OR / XOR the byte less 10 with the colour (+ 10
+	## again): over a picture its own indices
 	var put := func(x: int, y: int) -> void:
-		_px(x, y, (_ix(x, y) ^ c) if mode == 4 else c)
+		match mode:
+			1:
+				_set_dib(x, y, 10)
+			2:
+				_set_dib(x, y, ((_dib(x, y) - 10) & c) + 10)
+			3:
+				_set_dib(x, y, ((_dib(x, y) - 10) | c) + 10)
+			4:
+				_set_dib(x, y, (((_dib(x, y) - 10) & 0xFF) ^ c) + 10)
+			_:
+				_px(x, y, c)
 	var ax := mini(x0, x1)
 	var bx := maxi(x0, x1)
 	var ay := mini(y0, y1)
@@ -260,6 +292,63 @@ static func bmp(path: String) -> Array:
 		for i in 256:
 			_pal256.append(Color8(d[po + 4 * i + 2], d[po + 4 * i + 1], d[po + 4 * i]) if po + 4 * i + 2 < d.size() else Color.BLACK)
 	return [bw, bh, px]
+
+
+static var _xor_pics := {}
+
+
+static func xor_patch(layers: Array, ops: Array, c: int, pal16: Array) -> Array:
+	## 0x46C370 mode 4 over pictures drawn as textures (the plan's and the flight window's):
+	## the DIB's byte under each pixel is the topmost picture's own index (layers: [path, x,
+	## y], bottom first; none: 10, the colour 0), XORed as ((v - 10) ^ c) + 10; ops [x0, y0,
+	## x1, y1, type] (inclusive; type 1 an outline, 2 a fill) in turn. Returns [texture,
+	## position] of the touched pixels (the others transparent), or [] when none.
+	var idx := {}
+	var lo := Vector2i(1 << 20, 1 << 20)
+	var hi := Vector2i(-1, -1)
+	for op in ops:
+		var ax := mini(int(op[0]), int(op[2]))
+		var bx := maxi(int(op[0]), int(op[2]))
+		var ay := mini(int(op[1]), int(op[3]))
+		var by := maxi(int(op[1]), int(op[3]))
+		for y in range(ay, by + 1):
+			for x in range(ax, bx + 1):
+				if int(op[4]) == 1 and y != ay and y != by and x != ax and x != bx:
+					continue
+				var k := Vector2i(x, y)
+				var v: int = idx[k] if idx.has(k) else _under(layers, x, y)
+				idx[k] = ((((v - 10) & 0xFF) ^ c) + 10) & 0xFF
+				lo = Vector2i(mini(lo.x, x), mini(lo.y, y))
+				hi = Vector2i(maxi(hi.x, x), maxi(hi.y, y))
+	if idx.is_empty():
+		return []
+	var img := Image.create(hi.x - lo.x + 1, hi.y - lo.y + 1, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for k in idx:
+		var v: int = idx[k]
+		var col: Color
+		if v >= 10 and v <= 25:
+			col = pal16[v - 10] if v - 10 < pal16.size() else color(v - 10)
+		else:
+			col = _pal256[v] if v < _pal256.size() else Color.BLACK
+		img.set_pixel(k.x - lo.x, k.y - lo.y, col)
+	return [ImageTexture.create_from_image(img), Vector2(lo)]
+
+
+static func _under(layers: Array, x: int, y: int) -> int:
+	for i in range(layers.size() - 1, -1, -1):
+		var L: Array = layers[i]
+		var path: String = L[0]
+		if not _xor_pics.has(path):
+			_xor_pics[path] = bmp(path)
+		var b: Array = _xor_pics[path]
+		if b.is_empty():
+			continue
+		var px := x - int(L[1])
+		var py := y - int(L[2])
+		if px >= 0 and py >= 0 and px < int(b[0]) and py < int(b[1]):
+			return (b[2] as PackedByteArray)[py * int(b[0]) + px]
+	return 10
 
 
 func blit(path: String, x: int, y: int, mirror := false) -> Vector2i:
@@ -606,9 +695,15 @@ func _draw() -> void:
 		return
 	var buf := _buf
 	var lit := _hover >= 0 and _hover < _all_regions.size() and int(_all_regions[_hover][4]) in [1, 2]
-	var xor_on := lit or (_bar and _waiting)
+	var blinks := blink_on and not blink_rects.is_empty()
+	var xor_on := lit or (_bar and _waiting) or blinks
 	if xor_on:
 		var keep := _buf.duplicate()
+		var keep_raw := _raw.duplicate()
+		if blinks:
+			# a blink's rects (0x445750: XOR colour 15 fills toggled every 0x85 ms)
+			for r in blink_rects:
+				_rect(r[0], r[1], r[2], r[3], 4, 0xF, 2)
 		if lit:
 			# 0x409010: the region outlined (type 1) or filled (type 2) in XOR 15
 			var r: Array = _all_regions[_hover]
@@ -618,9 +713,11 @@ func _draw() -> void:
 			var top := (mini(_row, rows - 1) + 1) * lh + o.y - 2     # (the line the wait is on)
 			_rect(o.x, top, o.x + cols * 8, top + 1, 4, 0xF, 2)
 		buf = _buf
-		_buf = keep
 		_xtex = _texture(buf)             # (kept: the canvas draws it after _draw returns)
-		draw_texture(_xtex, Vector2.ZERO)
+		_buf = keep
+		_raw = keep_raw
+		if not transparent or lit or _bar:
+			draw_texture(_xtex, Vector2.ZERO)
 		_dirty = true
 	else:
 		if _dirty or _tex == null:
@@ -628,11 +725,6 @@ func _draw() -> void:
 			_dirty = false
 		if not transparent:
 			draw_texture(_tex, Vector2.ZERO)
-	if blink_on:
-		# a blink's rects (0x445750: XOR colour 15 fills toggled every 0x85 ms; drawn in
-		# colour 15, the pictures' indices not being kept for an XOR)
-		for r in blink_rects:
-			draw_rect(Rect2(r[0], r[1], r[2] - r[0] + 1, r[3] - r[1] + 1), colour(15))
 	var o := _origin()
 	for c in _cells:
 		# (the 8 px font's half-width characters, FONT_ANK, step 8 px a column; TextOut's lh / 2)

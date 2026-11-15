@@ -167,6 +167,8 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 					anim_kill(w, rng, hooks, tx, ty)
 				if Fire.apply_hit(w, rng, o, dmg2, -1, 12, easy) == "destroyed":
 					hooks.destroy(o)
+	if anims and hooks.has_method("anim_close"):
+		hooks.anim_close()                  # 0x410510 (display: a split window closes)
 	if shooter_dies:
 		hooks.destroy(s)
 	return 0
@@ -598,6 +600,8 @@ static func ai_walk(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 	if res != 4:
 		if not step_search(w, u, mmode).is_empty():
 			res |= 1
+		if not w.is_enemy(u) or w.ub(u, 0) & 0x10:
+			hooks.shown(u)
 		if w.ub(u, 0) & 0x10 and not (w.ub(u, 0) & 0x40):
 			res |= hooks.react(u)
 	return res
@@ -649,6 +653,8 @@ static func ai_path(w: Pd2World, rng: Pd2Random, u: int, x: int, y: int, mmode: 
 		if res != 4:
 			if not step_search(w, u, mmode).is_empty() and under == -1:
 				res |= 1
+			if not w.is_enemy(u) or w.ub(u, 0) & 0x10:
+				hooks.shown(u)
 			if under == -1 and w.ub(u, 0) & 0x10 and not (w.ub(u, 0) & 0x40):
 				res |= hooks.react(u)
 	return res
