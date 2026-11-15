@@ -24,6 +24,14 @@ reads, under import/:
   ui.json, font_ank.dat          the windows' frame tiles, background and scroll bar (from
                                  Pd2.exe), the 8 px font
   images/, <campaign>/images/    the screens' pictures (PAC entries as BMP)
+  audio/audio.json, audio/se/    the sounds as the game plays them (RULES.md 5.26): the
+                                 WAVs as they are; the tables of Pd2.exe's music_start
+  audio/cd/trackNN.ogg|wav       the CD-DA tracks 2-13, when SOURCE is the CD image (or
+                                 with --cd IMAGE): raw 44.1 kHz stereo PCM, whole tracks
+  audio/midi/<name>.ogg|wav      the MIDI tunes rendered with FluidSynth (--fluidsynth, or
+                                 on PATH) and a SoundFont (--soundfont; Windows' own
+                                 gm.dls by default), cut at the sequence's end (the loop)
+  OGG needs the Python soundfile package (libsndfile); without it the audio is WAV.
 The format readers are in formats/.
 """
 import argparse
@@ -201,7 +209,8 @@ SCRIPT_CHOICES.update({0x517EF0: 11})
 PLAN_TEXTS = {0x50E029, 0x50E032, 0x50E03B, 0x50E046, 0x50E053, 0x50E060, 0x514BB8, 0x514AA4, 0x514A98}
 # ... and its notes (0x46D780, the pickers 0x4985A0 / 0x4983A0, the save 0x497F60 and the
 # slot's header line 0x498070).
-TITLE_TEXTS = {0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517474, 0x517458,
+TITLE_TEXTS = {0x518920, 0x51892C,   # game_mode_loop's music choice (list DS:0x518918): CD-DA, MIDI
+               0x518A08, 0x517448, 0x5174F8, 0x5174D8, 0x517490, 0x5174AC, 0x517474, 0x517458,
                0x517508, 0x517534, 0x517560, 0x51759C, 0x517574, 0x5175C8, 0x517644, 0x517664,
                0x519EB0, 0x519F24, 0x519F44, 0x519ED8, 0x519EE8, 0x519EF0, 0x519F0C,
                0x50CBF2, 0x50CBFB, 0x50CC04, 0x50CBD1,
@@ -567,6 +576,221 @@ def export_map_pieces(game, out):
         json.dump(units, open(os.path.join(out, camp, 'units.json'), 'w'))
 
 
+# --- the sounds and the music (RULES.md 5.26) ---------------------------------------
+
+MUSIC_FILES = 0x5127EC      # music_start (0x40AFA0) n = 1-13: a pointer to the MIDI file name
+CD_TRACKS = 0x512690        # the MIDI window (0x40A1B0): the CD track by the name's 2 digits
+MISSION_TUNES = 0x50DDC5    # 0x436530 / 0x4847C0: music_start(dword [chunk + 1] x 4 + this)
+WAVES = ('PD2_SE1.WAV', 'PD2_SE2.WAV', 'PD2_SE3.WAV', 'PD2_SE4.WAV', 'PD2_SE5.WAV',
+         'TITLE1.WAV', 'TITLE2.WAV')
+CD_SECTOR = 2352
+
+
+def _find(folder, name):
+    for f in os.listdir(folder):
+        if f.lower() == name.lower():
+            return os.path.join(folder, f)
+    return None
+
+
+def midi_seconds(data):
+    """The time of a Standard MIDI File's last end of track: where MCI's sequencer reports
+    the end (MM_MCINOTIFY) and the game plays it again from the start."""
+    if data[:4] != b'MThd':
+        raise ValueError('not a MIDI file')
+    ntr, div = struct.unpack_from('>HH', data, 10)
+    if div & 0x8000:
+        raise ValueError('SMPTE time division')
+    pos, tracks = 8 + struct.unpack_from('>I', data, 4)[0], []
+    for _ in range(ntr):
+        n = struct.unpack_from('>I', data, pos + 4)[0]
+        tracks.append(data[pos + 8:pos + 8 + n])
+        pos += 8 + n
+    tempos, ends = [(0, 500000)], []
+    for t in tracks:
+        i, tick, run = 0, 0, 0
+        while i < len(t):
+            d = 0
+            while True:
+                b = t[i]
+                i += 1
+                d = d << 7 | b & 0x7F
+                if b < 0x80:
+                    break
+            tick += d
+            st = t[i]
+            if st >= 0x80:
+                i += 1
+            else:
+                st = run
+            if st == 0xFF:
+                kind, i = t[i], i + 1
+                ln = 0
+                while True:
+                    b = t[i]
+                    i += 1
+                    ln = ln << 7 | b & 0x7F
+                    if b < 0x80:
+                        break
+                if kind == 0x51:
+                    tempos.append((tick, int.from_bytes(t[i:i + 3], 'big')))
+                i += ln
+                if kind == 0x2F:
+                    break
+            elif st in (0xF0, 0xF7):
+                ln = 0
+                while True:
+                    b = t[i]
+                    i += 1
+                    ln = ln << 7 | b & 0x7F
+                    if b < 0x80:
+                        break
+                i += ln
+            else:
+                run = st
+                i += 1 if st & 0xF0 in (0xC0, 0xD0) else 2
+        ends.append(tick)
+    end = max(ends)
+    tempos.sort(key=lambda x: x[0])
+    sec, last, us = 0.0, 0, 500000
+    for tk, tp in tempos:
+        if tk >= end:
+            break
+        sec += (tk - last) * us / div / 1e6
+        last, us = tk, tp
+    return sec + (end - last) * us / div / 1e6
+
+
+def _write_pcm(path_noext, frames, rate, channels):
+    """16-bit PCM as OGG Vorbis (soundfile) or else WAV; returns the file name written."""
+    try:
+        import numpy
+        import soundfile
+    except ImportError:
+        soundfile = None
+    if soundfile is not None:
+        a = numpy.frombuffer(frames, '<i2').reshape(-1, channels)
+        with soundfile.SoundFile(path_noext + '.ogg', 'w', rate, channels, format='OGG', subtype='VORBIS') as f:
+            for i in range(0, len(a), 1 << 15):         # (libsndfile's Vorbis writer: in blocks)
+                f.write(a[i:i + (1 << 15)])
+        return os.path.basename(path_noext) + '.ogg'
+    import wave
+    with wave.open(path_noext + '.wav', 'wb') as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(frames)
+    return os.path.basename(path_noext) + '.wav'
+
+
+def cd_tracks(image):
+    """[(track, first sector, sectors)] of the audio tracks, from the image's .cue or .ccd
+    (INDEX 1 of each track; a track runs to the next one's INDEX 1, the last to the image's
+    end: what MCI's cdaudio plays from track:0:0:0 to the track's length)."""
+    base = os.path.splitext(image)[0]
+    starts, audio = {}, set()
+    if os.path.exists(base + '.cue'):
+        tr = None
+        for line in open(base + '.cue', encoding='latin-1'):
+            p = line.split()
+            if p[:1] == ['TRACK']:
+                tr = int(p[1])
+                if p[2] == 'AUDIO':
+                    audio.add(tr)
+            elif p[:2] == ['INDEX', '01'] or p[:2] == ['INDEX', '1']:
+                m, s, f = (int(x) for x in p[2].split(':'))
+                starts[tr] = (m * 60 + s) * 75 + f
+    elif os.path.exists(base + '.ccd'):
+        tr = None
+        for line in open(base + '.ccd', encoding='latin-1'):
+            line = line.strip()
+            if line.startswith('[TRACK '):
+                tr = int(line[7:-1])
+            elif tr is not None and line == 'MODE=0':
+                audio.add(tr)
+            elif tr is not None and line.startswith('INDEX 1='):
+                starts[tr] = int(line[8:])
+    else:
+        return []
+    total = os.path.getsize(image) // CD_SECTOR
+    order = sorted(starts)
+    out = []
+    for k, tr in enumerate(order):
+        if tr in audio:
+            end = starts[order[k + 1]] if k + 1 < len(order) else total
+            out.append((tr, starts[tr], end - starts[tr]))
+    return out
+
+
+def find_fluidsynth(given):
+    import shutil
+    if given:
+        return given
+    return shutil.which('fluidsynth')
+
+
+def default_soundfont():
+    p = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'drivers', 'gm.dls')
+    return p if os.name == 'nt' and os.path.exists(p) else None
+
+
+def export_audio(game, out, image, fluidsynth, soundfont):
+    """audio/: the WAVs, the CD-DA tracks, the MIDI renders and audio.json (the tables)."""
+    import subprocess
+    import wave
+    exe = open(os.path.join(game, 'Pd2.exe'), 'rb').read()
+    root = os.path.join(out, 'audio')
+    for d in ('se', 'cd', 'midi'):
+        os.makedirs(os.path.join(root, d), exist_ok=True)
+    tunes = {}
+    for n in range(1, 14):
+        va = struct.unpack_from('<I', exe_va(exe, MUSIC_FILES + 4 * n, 4))[0]
+        tunes[str(n)] = _exe_str(exe, va).lower()
+    track_of = {}
+    for name in set(tunes.values()):
+        track_of[name] = exe_va(exe, CD_TRACKS + int(name[4:6]), 1)[0]   # (name[4], name[5]: '0'-'9')
+    mission = [struct.unpack_from('<i', exe_va(exe, MISSION_TUNES + 4 * m, 4))[0] for m in range(1, 17)]   # (by DS:0x50663D, chunk + 1; past 12 the words after the table)
+    meta = {'tunes': tunes, 'cd_track': track_of, 'mission_tune': mission, 'se': {}, 'cd': {}, 'midi': {}}
+    for f in WAVES:
+        p = _find(game, f)
+        if p:
+            data = open(p, 'rb').read()
+            open(os.path.join(root, 'se', f.lower()), 'wb').write(data)
+            with wave.open(p) as w:
+                meta['se'][f.lower()[:-4]] = {'file': 'se/' + f.lower(), 'seconds': w.getnframes() / w.getframerate()}
+    if image and os.path.exists(image):
+        with open(image, 'rb') as f:
+            for tr, first, n in cd_tracks(image):
+                f.seek(first * CD_SECTOR)
+                name = _write_pcm(os.path.join(root, 'cd', 'track%02d' % tr), f.read(n * CD_SECTOR), 44100, 2)
+                meta['cd'][str(tr)] = {'file': 'cd/' + name, 'seconds': n / 75}
+        print('  CD-DA: %d tracks' % len(meta['cd']))
+    fs = find_fluidsynth(fluidsynth)
+    sf = soundfont or default_soundfont()
+    if fs and sf:
+        meta['soundfont'] = os.path.basename(sf)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in sorted(set(tunes.values())):
+                p = _find(game, name)
+                if not p:
+                    continue
+                secs = midi_seconds(open(p, 'rb').read())
+                wav = os.path.join(tmp, name + '.wav')
+                subprocess.run([fs, '-ni', '-q', '-r', '44100', '-T', 'wav', '-O', 's16', '-F', wav, sf, p],
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                with wave.open(wav) as w:
+                    ch, rate = w.getnchannels(), w.getframerate()
+                    frames = w.readframes(w.getnframes())
+                want = int(round(secs * rate)) * 2 * ch          # cut (or pad) at the sequence's end
+                frames = frames[:want] + bytes(max(0, want - len(frames)))
+                fn = _write_pcm(os.path.join(root, 'midi', name[:-4]), frames, rate, ch)
+                meta['midi'][name] = {'file': 'midi/' + fn, 'seconds': secs}
+        print('  MIDI: %d tunes rendered with %s' % (len(meta['midi']), os.path.basename(sf)))
+    else:
+        print('  MIDI: not rendered (no %s)' % ('FluidSynth' if not fs else 'SoundFont'))
+    json.dump(meta, open(os.path.join(root, 'audio.json'), 'w'), indent=1)
+
+
 def default_out():
     if os.name == 'nt':
         base = os.path.join(os.environ['APPDATA'], 'Godot', 'app_userdata')
@@ -581,6 +805,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('source')
     ap.add_argument('--out', default=default_out())
+    ap.add_argument('--cd', help='the CD image for the CD-DA tracks, when SOURCE is not the image')
+    ap.add_argument('--fluidsynth', help='fluidsynth executable to render the MIDI music (default: on PATH)')
+    ap.add_argument('--soundfont', help='SoundFont (.sf2 / .dls) for the MIDI music (default: gm.dls on Windows)')
     a = ap.parse_args()
     with tempfile.TemporaryDirectory() as work:
         game = extract_game(a.source, work)
@@ -595,6 +822,8 @@ def main():
         export_images(game, a.out)
         export_ui(game, a.out)
         export_map_pieces(game, a.out)
+        image = a.cd or (None if os.path.isdir(a.source) else find_image(a.source))
+        export_audio(game, a.out, image, a.fluidsynth, a.soundfont)
         manifest = {'format': 1, 'version': version, 'pd2_exe_sha256': h, 'missions': count}
         json.dump(manifest, open(os.path.join(a.out, 'manifest.json'), 'w'), indent=1)
     print('imported %s: %s into %s' % (version, count, a.out))

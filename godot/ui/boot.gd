@@ -68,6 +68,44 @@ func _ready() -> void:
 			b.text = "%s  mission chunk %d" % [camp.to_upper(), m]
 			b.pressed.connect(_start.bind(camp, m))
 			grid.add_child(b)
+	_title_audio()
+
+
+func _title_audio() -> void:
+	## game_mode_loop's sounds (RULES.md 5.26): with the CD there, its list DS:0x518918 (CD-DA
+	## or MIDI, DS:0x50CE71) once a run, else MIDI; the first title's title2.wav, waited for
+	## (0x40D440(0, 2)), then music_start(5); later titles music_start(5) only. (The logos'
+	## title1.wav and the opening's music_start(12) wait for those screens.)
+	if not GameAudio.mode_asked:
+		GameAudio.mode_asked = true
+		GameAudio.mode = 1
+		if GameAudio.cd_present():
+			if DisplayServer.get_name() == "headless":
+				GameAudio.mode = 0
+			else:
+				var c: Array = GameAudio.choices()
+				busy = true
+				var pick: Variant = await _ask_async("", [[c[0], 0], [c[1], 1]])
+				busy = false
+				GameAudio.mode = int(pick)
+	if not GameAudio.title_shown:
+		GameAudio.title_shown = true
+		var secs := GameAudio.wave("title2", true)
+		if secs > 0.0 and DisplayServer.get_name() != "headless":
+			busy = true                  # (SND_SYNC: the title's menu comes after its end)
+			await get_tree().create_timer(secs).timeout
+			busy = false
+	GameAudio.music_start(5)
+
+
+func _ask_async(text: String, opts: Array) -> Variant:
+	var box_done := [false, null]
+	_show(text, opts, func(i):
+		box_done[0] = true
+		box_done[1] = i)
+	while not box_done[0]:
+		await get_tree().process_frame
+	return box_done[1]
 
 
 func ui(key: String) -> String:

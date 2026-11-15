@@ -3671,6 +3671,113 @@ kind 8: no waits), the interception's explosion (0x41CA70), the other hit / miss
 - 0x4E5AA0 (another copy of the strike's fire) is dead code. Its only caller, 0x4E4CB0,
   is reached by a thunk (0x4013BB) that nothing calls, and no pointer to either is stored.
 
+### 5.26 The sounds and the music (display / audio): Code; the debrief's order Emulated
+
+Every call to Pd2.exe's sound and music code, read in the decompilation and the
+disassembly. The calls draw no random numbers and wait for nothing but one sound (the
+title's title2.wav, below). The rules never depend on them. The only order that needed
+emulating is the debrief's, which `verify_debrief` checks: 0x40AFA0 is logged, not
+stubbed, and compared with `rules.debrief`'s `hooks.music` (1000 / 1000 at seed 3). The
+fixtures (suite `debrief`) carry the same order among the screens. Engine:
+`data/game_audio.gd` (the autoload `GameAudio`) and the call sites below.
+Test: `tests/audio_cues.gd`.
+
+**The waves.** 0x40D440(slot, how) calls PlaySoundA on a WAV held in memory: table
+DS:0x5547A0, 12 B a slot, 24 slots. how = 1 plays it asynchronously (flags 0x2007),
+2 synchronously (0x2006, which returns at the sound's end), and −1 loops it (0x200F;
+nothing uses this). One sound plays at a time: a new one stops the last. It plays only
+while DS:0x554902 has bits 1, 2 and 4 set. 0x40D410 sets all three and nothing clears
+them, so no option turns the sound off. 0x40D5B0(slot, file) loads a slot and 0x40D550
+frees one. 0x40AE40 (the game window's set-up) loads slots 1–5 with `Pd2_se1.wav` …
+`Pd2_se5.wav` (DS:0x512758, the digit patched in).
+- **0x40AFF0(n)** = 0x40D440(n + 1, 1): PD2_SE<n + 1>.WAV, from the animation players
+  only (so only with the animations on, §5.25). Each plays it before its wait:
+
+| Player | n (WAV) | When |
+|---|---|---|
+| 0x41EFF0 (kind 0 shot) | 0 (SE1) | before each of its 6 flashes (waits 0, 2, …, 10) |
+| 0x41FD60 (kind 1 shot) | 0 (SE1) | before each of its 12 flashes |
+| 0x418B20, 0x41DB00 (kinds 2–4 shots) | 3 (SE4) | once, before the first wait |
+| 0x419870 (kinds 5, 6 shots) | 3 (SE4) | before each of its 3 rounds of 4 frames |
+| 0x41E850 (kind 7 shot) | 3 (SE4) | before each of its 3 rounds of 5 frames |
+| 0x41A5B0 (kinds 7, 8 shots) | 2 (SE3) | once |
+| 0x4200D0, 0x4203D0 (kind 0 hit / miss) | 4 (SE5) | before each of the 6 frames |
+| 0x4206D0, 0x4209D0 (kind 1 hit; kinds 1, 2, 5 miss) | 4 (SE5) | before each of the 12 frames |
+| 0x419BE0, 0x419E20 (kinds 2–8 hit / miss), 0x4180C0 (kind 9) | 3 (SE4) | once |
+| 0x420CD0 (a kill), 0x417410 (anime_bomb), 0x41CA70 (a missile shot down) | 1 (SE2) | once |
+
+  A click that skips a player skips its later sounds. The missile's flight (0x41B320) and
+  the turn (0x410020) play none.
+- **The title** (game_mode_loop 0x487D70): slot 0 holds `title1.wav`, played (how 1)
+  after each of the 5 rounds of the KOGADO / USAGI / DETACH logos' fade (a click ends
+  the fade, after that round's title1.wav). Then the slot holds
+  `title2.wav`, played once a run (DS:0x524094) after `pd2title.pac` has faded in, with
+  how 2: the title waits for its end (1.76 s) before its menu and the music. The slot is
+  freed after each.
+
+**The music.** music_start(n) is 0x40AFA0. It accepts n = 1–13; any other n shows
+"Select Error  music_start()" and returns 0x10000, with no change. It sends 0xC03C
+with the name at DS:0x5127EC + 4n to the MIDI window (class "POWER DoLLS2 plus DASH MIDI",
+proc 0x40A1B0). music_stop is 0x40AF80 (0xC03D).
+
+| n | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| file | 08 | 09 | 06 | 02 | 04 | 05 | 10 | 14 | 07 | 11 | 03 | 13 | 12 |
+| CD track | 9 | 8 | 3 | 4 | 13 | 5 | 7 | 6 | 2 | 10 | 12 | 11 | 6 |
+
+(file NN is `Pd2_NNgm.mid`. The CD track is DS:0x512690 + NN, by the name's two
+digits. `Pd2_12gm` and `Pd2_14gm` both play track 6.)
+
+- **The window** (0x40A1B0). WM_CREATE looks for a MIDI out device (DS:0x554F7D) and a
+  CD-ROM drive whose volume is "PD2". It opens that drive's cdaudio with the time format
+  TMSF, then closes it; DS:0x50CE71 = 2 when that worked, else 0. On 0xC03C, the same
+  name while it plays changes nothing. Otherwise it stores the name and stops what plays.
+  With DS:0x50CE71 = 0 it opens cdaudio and plays the track from its start to its length
+  (MCI_STATUS_LENGTH), with MCI_NOTIFY. Otherwise, with a MIDI device, it opens the
+  game folder's file as a "sequencer" and plays it from the start, with MCI_NOTIFY. On
+  MM_MCINOTIFY (successful) it plays the same tune again from the start, so every tune
+  loops. No volume is set anywhere: there are no auxSetVolume, midiOutSetVolume or
+  waveOutSetVolume calls.
+- **CD or MIDI** (game_mode_loop): with DS:0x50CE71 = 2 (the CD is there) the title shows
+  `blk.pac` and the list DS:0x518918 (ＣＤ－ＤＡ, ＭＩＤＩ) at (0x120, 0xD8). Its answer
+  (0 CD, 1 MIDI) goes to DS:0x50CE71; −12 / −11 are the aborts (any other answer is
+  not 0, so it plays MIDI). Without the CD,
+  DS:0x50CE71 = 1 (MIDI). It is asked once a run, before the logos.
+
+**The callers**
+
+| Where | Call |
+|---|---|
+| the title, after title2.wav (first time) or the title picture, and after each menu entry that comes back to it | music_start(5) (`Pd2_04gm`) |
+| the title's entry 2 (exit), confirmed | music_stop |
+| the opening (0x4783A0, the title's entry 3) | music_start(12) |
+| the mission start 0x416CF0, first thing (its loop of briefing, plan, sortie and armament plays on) | music_start(9) |
+| the battle 0x436530, after load_messages, before mission_loop; also the title's resume (bit 0x80) and the sortie's load | music_start(dword at DS:0x50DDC5 + 4 × DS:0x50663D) |
+| the battle's system menu 0x4847C0, after a load | the same |
+| the debrief 0x48FA40 | below |
+
+By the chunk + 1 (DS:0x50663D, 1–12), that dword is 3, 13, 7, 13, 6, 4, 4, 8, 2, 8, 2, 7.
+Both campaigns use the same table. No code writes those bytes; 0x50DDC8 is a byte of
+its own.
+
+**The debrief** (`rules.debrief`, `hooks.music`):
+- Mode 1, a clear: music_start(1), then the picture (M_CLR.pac). PD2's step 1 is the
+  exception: no call before the picture, and music_start(5) after the results, before
+  op2.pac's pictures and the texts 0x20–0x25.
+- A failure: 10 (m_fail.pac, or gameover.pac at step 10). The end checks' game over: 10.
+- PD2's last step cleared: 1, then the ending (end0.pac and its texts), then 11 just
+  before the score screen 0x468490.
+- DASH's step 10 cleared: the clear's 1, the results, 1 again, then 11 before the score
+  screen.
+- Mode 2: 1 for single.pac, 2 for gameover.pac.
+- DASH mode 3: 1 for single.pac, 10 for m_fail.pac.
+- Result 0xC0 and PD2's mode 3: none.
+
+**Not shown in the engine yet** (their screens are stand-ins): the logos' title1.wav,
+the opening's music_start(12) and the title's exit. The engine's title plays title2.wav
+and then music 5 at its first showing, and music 5 afterwards. It asks CD-DA or MIDI
+when the import has the CD's tracks.
+
 ## 6. Plus Dash vs Advanced (PC‑98): discrepancies found so far
 
 | Area | Result |

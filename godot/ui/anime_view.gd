@@ -16,28 +16,30 @@ extends Node2D
 ## The players (frames, wait in ms, entry, size): PLAYERS. Frame i is drawn after the wait
 ## of call i and shows during the next wait; the last one is cleared at once (0x41F680
 ## restores the map after the loop), as is the picture after a click.
+## Their sounds (RULES.md 5.26): "se" n for 0x40AFF0(n) (PD2_SE<n + 1>.WAV), played before
+## the wait i when i % "se_every" is 0 ("se_every" 0: before the first wait only).
 
 const PLAYERS := {
-	0x4200D0: {"frames": 6, "ms": 50, "entry": "hit", "nested": true, "size": 32},     # kind 0 hit
-	0x4206D0: {"frames": 12, "ms": 17, "entry": "hit", "nested": true, "size": 32},    # kind 1 hit
-	0x4203D0: {"frames": 6, "ms": 50, "entry": "miss", "nested": true, "size": 32},    # kind 0 miss
-	0x4209D0: {"frames": 12, "ms": 17, "entry": "miss", "nested": true, "size": 32},   # kinds 1, 2, 5 miss
-	0x419BE0: {"frames": 6, "ms": 67, "entry": "hit", "size": 32},                      # kinds 2-8 hit
-	0x419E20: {"frames": 6, "ms": 33, "entry": "miss", "size": 32},                     # kinds 3, 4, 6-8 miss
-	0x4180C0: {"frames": 8, "ms": 50, "entry": "hit", "size": 32},                      # kind 9
-	0x420CD0: {"frames": 8, "ms": 50, "entry": 7, "size": 40},                          # a kill
-	0x417410: {"frames": 14, "ms": 33, "entry": 6, "size": 40},                         # anime_bomb
-	0x41CA70: {"frames": 8, "ms": 50, "entry": 7, "size": 40, "at_missile": true},      # a missile shot down
+	0x4200D0: {"frames": 6, "ms": 50, "entry": "hit", "nested": true, "size": 32, "se": 4, "se_every": 1},     # kind 0 hit
+	0x4206D0: {"frames": 12, "ms": 17, "entry": "hit", "nested": true, "size": 32, "se": 4, "se_every": 1},    # kind 1 hit
+	0x4203D0: {"frames": 6, "ms": 50, "entry": "miss", "nested": true, "size": 32, "se": 4, "se_every": 1},    # kind 0 miss
+	0x4209D0: {"frames": 12, "ms": 17, "entry": "miss", "nested": true, "size": 32, "se": 4, "se_every": 1},   # kinds 1, 2, 5 miss
+	0x419BE0: {"frames": 6, "ms": 67, "entry": "hit", "size": 32, "se": 3, "se_every": 0},                      # kinds 2-8 hit
+	0x419E20: {"frames": 6, "ms": 33, "entry": "miss", "size": 32, "se": 3, "se_every": 0},                     # kinds 3, 4, 6-8 miss
+	0x4180C0: {"frames": 8, "ms": 50, "entry": "hit", "size": 32, "se": 3, "se_every": 0},                      # kind 9
+	0x420CD0: {"frames": 8, "ms": 50, "entry": 7, "size": 40, "se": 1, "se_every": 0},                          # a kill
+	0x417410: {"frames": 14, "ms": 33, "entry": 6, "size": 40, "se": 1, "se_every": 0},                         # anime_bomb
+	0x41CA70: {"frames": 8, "ms": 50, "entry": 7, "size": 40, "at_missile": true, "se": 1, "se_every": 0},      # a missile shot down
 	# the shooter's (0x40F730 by the record's kind): the sub-entry of the shooter's direction
 	# (0x47E440(shooter, target)) at the shooter's hex moved by DIR_OFFSETS; "flash": the
 	# sprite drawn after the odd waits, cleared after the even ones; "seq": frames in turn
-	0x41EFF0: {"frames": 12, "ms": 33, "entry": "shot", "shooter": true, "flash": true, "size": 32},
-	0x41FD60: {"frames": 24, "ms": 17, "entry": "shot", "shooter": true, "flash": true, "size": 32},
-	0x418B20: {"frames": 4, "ms": 33, "entry": "shot", "shooter": true, "seq": 4, "size": 32},
-	0x41DB00: {"frames": 5, "ms": 33, "entry": "shot", "shooter": true, "seq": 5, "size": 32},
-	0x419870: {"frames": 12, "ms": 17, "entry": "shot", "shooter": true, "seq": 4, "size": 32},
-	0x41E850: {"frames": 15, "ms": 17, "entry": "shot", "shooter": true, "seq": 5, "size": 32},
-	0x41A5B0: {"frames": 4, "ms": 33, "entry": "shot", "shooter": true, "seq": 4, "size": 32},
+	0x41EFF0: {"frames": 12, "ms": 33, "entry": "shot", "shooter": true, "flash": true, "size": 32, "se": 0, "se_every": 2},
+	0x41FD60: {"frames": 24, "ms": 17, "entry": "shot", "shooter": true, "flash": true, "size": 32, "se": 0, "se_every": 2},
+	0x418B20: {"frames": 4, "ms": 33, "entry": "shot", "shooter": true, "seq": 4, "size": 32, "se": 3, "se_every": 0},
+	0x41DB00: {"frames": 5, "ms": 33, "entry": "shot", "shooter": true, "seq": 5, "size": 32, "se": 3, "se_every": 0},
+	0x419870: {"frames": 12, "ms": 17, "entry": "shot", "shooter": true, "seq": 4, "size": 32, "se": 3, "se_every": 4},
+	0x41E850: {"frames": 15, "ms": 17, "entry": "shot", "shooter": true, "seq": 5, "size": 32, "se": 3, "se_every": 5},
+	0x41A5B0: {"frames": 4, "ms": 33, "entry": "shot", "shooter": true, "seq": 4, "size": 32, "se": 2, "se_every": 0},
 	# the turn toward the target (0x410020): its waits only (167 ms, then 67 ms)
 	0x410020: {"frames": 0, "ms": 67, "first_ms": 167, "turn": true},
 }
@@ -53,6 +55,15 @@ var _pack := PackedByteArray()
 var _cache := {}          # [entry, sub] -> decoded bytes
 var _tex: Texture2D = null
 var _at := Vector2.ZERO
+
+
+static func sound_at(player: int, i: int) -> bool:
+	## the player plays its sound (0x40AFF0) before its wait i
+	var spec: Dictionary = PLAYERS.get(player, {})
+	if not spec.has("se"):
+		return false
+	var every := int(spec.se_every)
+	return i == 0 if every == 0 else i % every == 0
 
 
 func load_pack(campaign: String) -> void:

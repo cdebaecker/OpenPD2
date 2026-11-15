@@ -260,6 +260,7 @@ func _ready() -> void:
 		# the mission start's loop (0x416CF0, Plan): DS:0x50663A and the mission turn 0, the
 		# briefing (0x4DD2F0: the SCN_MIS record, the mission's init), the plan, the sortie
 		Plan.pre_battle_begin(w)
+		GameAudio.music_start(9)         # 0x416CF0's first call: music_start(9) (RULES.md 5.26)
 	if not resume:
 		brief_code = Plan.briefing(w, doc.get("record", PackedByteArray()), mission_hooks)
 		pre_battle_rounds += 1
@@ -332,6 +333,7 @@ func _ready_loaded(carried: Dictionary) -> void:
 	script_no = w.script_no
 	_battle_hooks()
 	_scene_setup()
+	GameAudio.mission_music(Debrief.chunk(w))     # 0x4847C0's load: the mission's tune (5.26)
 	_resumed_phase()
 
 
@@ -355,6 +357,7 @@ func _resume_battle() -> void:
 	## (Title.mission_resume: the load script, KEMURInn.DAT, the start script; no
 	## start_units nor upkeep), and the player's phase goes on.
 	w.mode_663a = 1
+	GameAudio.mission_music(Debrief.chunk(w))     # 0x436530: the mission's tune (RULES.md 5.26)
 	Debrief.fire_point_from_ds(w)
 	var rh := ResumeHooks.new()
 	rh.battle = self
@@ -403,6 +406,7 @@ class ResumeHooks extends Title.BattleSaveHooks:
 
 func _begin_battle() -> void:
 	w.mode_663a = 1                      # game_mode_loop: DS:0x50663A = 1, then the battle (0x436530)
+	GameAudio.mission_music(Debrief.chunk(w))     # 0x436530: the mission's tune (RULES.md 5.26)
 	# the sortie's squad: the player's groups as the sortie screen left them; with none
 	# formed (the sortie refused, or left) the stand-in squad
 	squad = Mission.player_units(w)
@@ -5551,6 +5555,8 @@ func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 		return
 	if i == 0:
 		anim_click = false
+	if AnimeView.sound_at(player, i):
+		GameAudio.se(int(spec.se))           # 0x40AFF0 before this wait (RULES.md 5.26)
 	anim_listen = true
 	await get_tree().create_timer(int(spec.ms) / 1000.0).timeout
 	if anim_click:
@@ -6868,6 +6874,9 @@ class BattleDebriefHooks extends Debrief.Hooks:
 	var lines := []
 	var screens := []           # the screens the game shows (DebriefView replays them)
 
+	func music(n: int) -> void:
+		screens.append(["music", n])        # (music_start, in its order among the screens)
+
 	func screen(kind: String, data: Variant = null) -> int:
 		if kind in ["clear", "fail", "gameover", "single", "results", "ending", "new_items", "recruits", "recovered", "drop_error", "handover"]:
 			screens.append([kind, data.duplicate() if data is Array else data])
@@ -6949,6 +6958,10 @@ func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
 		_win_root().add_child(dv)
 		await dv.play()
 		dv.queue_free()
+	else:
+		for s in screens:                # (no screens shown: the tunes still start in turn)
+			if s[0] == "music":
+				GameAudio.music_start(int(s[1]))
 	if debrief_panel:
 		debrief_panel.queue_free()
 	debrief_panel = PanelContainer.new()

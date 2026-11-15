@@ -27,12 +27,16 @@ const EXP_ADDR := 0x506B34           # record r's experience counters: EXP_ADDR 
 ## ("recovered", "drop_error", "handover"), 0 or an abort code; load_save(flag) SAVEDATA.ORG's image (pd2\ for 1,
 ## dash\ for 0); new_campaign(w) 0x421B90 on the loaded save; campaign_set(w) the record
 ## set of w.campaign (load_campaign_set 0x409240); clear_flag(i) clearinf.bin's byte i.
-## disk: USERDISK.ID's third word (0 on the CD).
+## disk: USERDISK.ID's third word (0 on the CD). music(n): 0x40AFA0, music_start(n)
+## (RULES.md 5.26), in its order among the screens.
 class Hooks:
 	var disk := 0
 
 	func screen(kind: String, data: Variant = null) -> int:
 		return 0
+
+	func music(n: int) -> void:
+		pass
 
 	func load_save(flag: int) -> PackedByteArray:
 		return PackedByteArray()
@@ -522,15 +526,22 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 				w.set_ds8(0x50AD41 + step, 1)
 				if step == 10:
 					w.mode_663a = 3
+					hooks.music(1)
 					hooks.screen("ending", [0x66, 0x67, 0x68, 0x69])
+					hooks.music(11)                 # (right before the score screen, inside "ending")
 					return 0x81
 				var b := base + (0 if result == 0x80 else 2)
+				if step != 1:
+					hooks.music(1)
 				res = hooks.screen("clear", [0x20, 0x21, 0x22, 0x23, 0x24, 0x25] if step == 1 else [b + 0x20, b + 0x21])
 				if res in AI_ABORT:
 					return res
 				hooks.screen("results", results_screen(w, rng))
+				if step == 1:
+					hooks.music(5)                  # (then op2.pac and the 0x20-0x25 texts)
 			elif result == 0x82:
 				w.set_ds8(0x50AD41 + step, 0)
+				hooks.music(10)
 				if step == 10:
 					hooks.screen("gameover", [base + 0x24])
 					return 0x81
@@ -538,6 +549,7 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 				hooks.screen("results", results_screen(w, rng))
 			var over := _game_over(w, step, 0x42)
 			if over != -1:
+				hooks.music(10)
 				hooks.screen("gameover", [over + 0x20])
 				return 0x81
 			if step < 10:
@@ -574,6 +586,7 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 			_strip_wrecks(w)
 			w.set_ds8(0x50AD94, 0)
 		elif mode == 2:
+			hooks.music(1 if result == 0x80 else 2)
 			hooks.screen("single" if result == 0x80 else "gameover", [])
 			hooks.screen("results", results_screen(w, rng))
 		if w.ds16(0x50AD8E) == 8 and campaign_mode(w) == 1:
@@ -587,15 +600,20 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 					hooks.clear_flag(chunk(w) + 10)
 					w.set_ds8(0x50AD41 + step, 1)
 					var b := chunk(w) * 6 + (0 if result == 0x80 else 2)
+					hooks.music(1)
 					hooks.screen("clear", [b + 0x20, b + 0x21])
 					hooks.screen("results", results_screen(w, rng))
 					if step == 10:
 						w.mode_663a = 3
+						hooks.music(1)
 						hooks.screen("ending", [])
+						hooks.music(11)
 				else:
+					hooks.music(1)
 					hooks.screen("single", [])
 					hooks.screen("results", results_screen(w, rng))
 			elif result == 0x82:
+				hooks.music(10)
 				if mode == 1:
 					w.set_ds8(0x50AD41 + step, 0)
 					if step == 10:
@@ -611,6 +629,7 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 						w.setb(k, 0x36, 0)
 				var over := _game_over(w, step, 0x4E)
 				if over != -1:
+					hooks.music(10)
 					hooks.screen("gameover", [over + 0x20])
 					return 0x81
 			if step < 11:
@@ -654,8 +673,10 @@ static func _debrief(w: Pd2World, result: int, rng: Pd2Random, crt: Campaign.Crt
 			if result == 0x80 or result == 0x83:
 				if chunk(w) == 3:
 					hooks.clear_flag(14)
+				hooks.music(1)
 				hooks.screen("single", [])
 			else:
+				hooks.music(2)
 				hooks.screen("gameover", [])
 	return 0x80
 

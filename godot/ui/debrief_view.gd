@@ -546,10 +546,17 @@ func _clear_windows() -> void:
 
 
 func play() -> void:
-	for s in screens:
+	var tune_11 := false            # the ending's music_start(11), played before the score cards
+	for k in screens.size():
+		var s: Array = screens[k]
 		var kind: String = s[0]
 		var data: Variant = s[1]
 		match kind:
+			"music":
+				# music_start (0x40AFA0, RULES.md 5.26) where the debrief calls it
+				if not (tune_11 and int(data) == 11):
+					GameAudio.music_start(int(data))
+				tune_11 = false
 			"clear", "fail", "gameover", "single":
 				var dir: String = {"clear": "m_clr", "fail": "m_fail", "gameover": "gameover", "single": "single"}[kind]
 				_clear_windows()
@@ -588,6 +595,9 @@ func play() -> void:
 					_clear_windows()
 				else:
 					await _fade(0.0)
+				if k + 1 < screens.size() and screens[k + 1][0] == "music":
+					GameAudio.music_start(int(screens[k + 1][1]))      # (0x40AFA0(11), then 0x468490)
+					tune_11 = true
 				await _cards()
 				await _fade(0.0)
 				_blank()
