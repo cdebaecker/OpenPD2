@@ -64,7 +64,14 @@ var options := 0                     # DS:0x551D29 (u16): the battle's options (
 var script_no := 0                   # DS:0x50CE72: the mission number (the scripts' tables; the debrief sets it)
 var stash: Array = []                # DS:0x50CE73 / 0x50D023: PD2's 27 crews and units while DASH plays
 var title_list := PackedByteArray()  # DS:0x523EE0: the title's scenario list (24 B, kept between visits; Title)
-var fire_point := Vector2i(0, 0)  # DS:0x50AD95: the point fire support is called on
+## DS:0x50AD95 / 0x50AD97 (signed words): the point fire support is called on, the mission
+## scripts' camera point. One place, as in the game: the scripts write it, the AI, strikes
+## and drops read it, and a new battle starts with the image's value.
+var fire_point: Vector2i:
+	get: return Vector2i(ds16(0x50AD95), ds16(0x50AD97))
+	set(v):
+		set_ds16(0x50AD95, v.x)
+		set_ds16(0x50AD97, v.y)
 var drop_saved := [-1, 0, 0]      # DS:0x514D18 / 0x523E34 / 0x523E38: the unit a transport displaced, its hex
 var reinf_saved := [-1, 0, 0]     # DS:0x514E04 / 0x523E48 / 0x523E4C: the unit an arriving member displaced, its hex
 var strike_saved := [-1, 0, 0]    # DS:0x51F3B4 / 0x5243B0 / 0x5243B4: the unit a striker flying in displaced, its hex
@@ -125,7 +132,6 @@ func duplicate_world() -> Pd2World:
 	c.memory = memory.duplicate()
 	c.groups = groups.duplicate()
 	c.combat = combat.duplicate()
-	c.fire_point = fire_point
 	c.strike_saved = strike_saved.duplicate()
 	c.reinf_saved = reinf_saved.duplicate()
 	c.drop_saved = drop_saved.duplicate()

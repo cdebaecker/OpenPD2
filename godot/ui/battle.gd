@@ -268,9 +268,11 @@ func _ready() -> void:
 		for p in doc.get("exits", []):       # its load script's exit table (0x519FE8)
 			w.exits.append(Vector2i(int(p[0]), int(p[1])))
 	w.phase = 0
-	rng = Pd2Random.new(int(Time.get_ticks_usec()) & 0xFFFF)
+	rng = Pd2Random.new(start_seed if start_seed >= 0 else int(Time.get_ticks_usec()) & 0xFFFF)
 	hooks = SandboxHooks.new(w, false, rng)
 	hooks.battle = self
+	hooks.anims = options & 0x10 == 0         # set here too, not only per frame (_process): a turn
+	hooks.follow = options & 8 != 0           # started before the next frame would play without them
 	names = {"crew": tables.crew_names, "machine": tables.machine_names}
 	var tex := GameData.map_texture(campaign, mission_index)
 	if tex:
@@ -347,6 +349,8 @@ func _battle_hooks() -> void:
 	mission_hooks.options = options
 	hooks = SandboxHooks.new(w, false, rng)
 	hooks.battle = self
+	hooks.anims = options & 0x10 == 0         # set here too, not only per frame (_process): a turn
+	hooks.follow = options & 8 != 0           # started before the next frame would play without them
 	names = {"crew": GameData.tables(campaign).crew_names, "machine": GameData.tables(campaign).machine_names}
 	w.map_chg = GameData.tables(campaign).get("map_chg", []) if campaign == "dash" else []
 
@@ -358,7 +362,6 @@ func _resume_battle() -> void:
 	## start_units nor upkeep), and the player's phase goes on.
 	w.mode_663a = 1
 	GameAudio.mission_music(Debrief.chunk(w))     # 0x436530: the mission's tune (RULES.md 5.26)
-	Debrief.fire_point_from_ds(w)
 	var rh := ResumeHooks.new()
 	rh.battle = self
 	var r := Title.mission_resume(w, rng, rh)
@@ -4376,7 +4379,7 @@ func _fire_command(m: String) -> void:
 		elif v < 4:
 			slot = v
 			_set_mode(m)
-			_fire_range_question()
+			_fire_range_question(_fire_start.bind(m))
 		else:
 			_set_mode(m)
 			slot = v - 4
@@ -4909,6 +4912,9 @@ func _open_choice(text: String, options: Array, kind := "list") -> void:
 			gw.chosen.connect(func(v: int): _answer_reaction(cancel if v == -2 else vals[v]))
 
 
+var start_seed := -1              # tests: the RNG's seed at the battle's start (-1: the clock's)
+
+
 const FIRE_MODES := {"fire": 0, "aimed": 1, "aa": 6}
 func _cmd_fire(h: Vector2i, fmode: int) -> void:
 	## The player's fire command (Action.fire_target_map / fire_check / player_fire,
@@ -4944,14 +4950,36 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 var fire_list := false            # option 0x2000 answered yes: the in-range list before each click
 
 
-func _fire_range_question() -> void:
+func _fire_range_question(then := Callable()) -> void:
 	## option 0x2000 (範囲内表) in cmd_fire (0x425AF0), after the target map: WMES 0x1EE in a
-	## message box (kind 0); yes: before each map click the list of the enemies in range
+	## message box (kind 0); yes: before each map click the list of the enemies in range.
+	## then runs after either answer (at once without the option)
 	if not options & 0x2000 or auto_react:
+		if then.is_valid():
+			then.call()
 		return
-	_confirm(msg(0x1EE), func():
-		fire_list = true
-		_fire_range_list(), 0)
+	var l: Array = BOX_LABELS[0]
+	var gw := open_box(msg(0x1EE), [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])])
+	gw.chosen.connect(func(v: int):
+		_close_window(gw)
+		fire_list = v == 0
+		if then.is_valid():
+			then.call())
+
+
+func _fire_start(m: String) -> void:
+	## cmd_fire after the target map and option 0x2000's question: no map goes back to the
+	## weapon picker; a map with nothing marked (move_destinations(map, 0) 0x47CED0 returns
+	## 0) prints WMES 0x1EF and goes back to the picker after its click
+	## (Action.fire_no_target, emulated); else the target loop, the list first when asked
+	if fire_map == null or Action.fire_no_target(fire_map):
+		if fire_map != null:
+			say_msg(0x1EF)
+		fire_list = false
+		after_lines(_fire_command.bind(m))
+		return
+	if fire_list:
+		_fire_range_list()
 
 
 func _fire_range_list() -> void:
@@ -4961,13 +4989,18 @@ func _fire_range_list() -> void:
 	## scrolls the map to it and the list comes again, a right click ends it; none: 0x1EF
 	if fire_map == null:
 		return
+	var occupied := 0                             # cmd_fire opens the list only with one
 	var units := []
 	for y in MAP:
 		for x in MAP:
-			if fire_map.cell(x, y) == 1:
+			if fire_map.cell(x, y) != 0xFF and fire_map.cell(x, y) != -1:
 				var o := w.O[x + MAP * y] - 1
-				if o != -1 and w.is_enemy(o) and w.ub(o, 0) & 0x10:
-					units.append(o)
+				if o != -1:
+					occupied += 1
+					if w.is_enemy(o) and w.ub(o, 0) & 0x10:
+						units.append(o)
+	if occupied == 0:
+		return
 	if units.is_empty():
 		say_msg(0x1EF)
 		return
@@ -5613,9 +5646,21 @@ func show_line(text: String, red := false) -> void:
 		_next_line()
 
 
+signal lines_done                 # the message lines' queue emptied (each clicked)
+
+
+func after_lines(then: Callable) -> void:
+	## runs then once the message lines up now are clicked away (at once when none is up)
+	if _line_open != null and is_instance_valid(_line_open):
+		lines_done.connect(then, CONNECT_ONE_SHOT)
+	else:
+		then.call()
+
+
 func _next_line() -> void:
 	_line_open = null
 	if _lines.is_empty() or hud_layer == null:
+		lines_done.emit()
 		return
 	var it: Array = _lines.pop_front()
 	var t: String = it[0]
@@ -5923,7 +5968,6 @@ func _cmd_system() -> void:
 
 func _menu_advance() -> void:
 	var dry := MenuDriveHooks.new(menu_answers, self, true)
-	Debrief.fire_point_to_ds(w)
 	Title.battle_menu(w.duplicate_world(), dry)
 	if dry.request != null:
 		if not menu_answers_scripted.is_empty():
@@ -5942,7 +5986,6 @@ func _menu_advance() -> void:
 		return
 	mission_hooks.options = w.options
 	if real.loaded:
-		Debrief.fire_point_from_ds(w)
 		_reload_scene()
 		return
 	_update_move_map()

@@ -30,6 +30,7 @@ func _battle(auto: bool):
 	b.mission_index = 1
 	b.auto_react = auto
 	b.sortie_window = false
+	b.start_seed = SEED                       # the mission start draws from it too
 	root.add_child(b)
 	await process_frame
 	b.rng = Pd2Random.new(SEED)

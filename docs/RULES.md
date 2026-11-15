@@ -453,6 +453,17 @@ whole commands with the UI scripted, and the target map 60 / 60 on its own.
      Armour type 4 counts only in mode 6, and mode 6 only at armour type 4.
 
    Only hexes of this map can be clicked.
+
+   Then, with option 0x2000 (範囲内表), the question 0x1EE in a message box (asked even
+   without a map). Its yes shows, before each click, the list of the spotted enemies on the
+   marked hexes (0x4E9AC0). The list opens only when a marked hex holds a unit; with units
+   but none of them a spotted enemy it prints 0x1EF instead.
+
+   Each pass of the target loop marks the map's hexes first (`move_destinations(map, 0)`,
+   0x47CED0: every cell that is not 0xFF). **With nothing marked** the command prints 0x1EF
+   (a message line) and goes back to the weapon picker without a click
+   (`rules.fire_no_target`; Emulated with the whole command: 44 / 44 empty maps at seeds 1 and 9). Without a map (an unknown
+   launcher kind, a one-hex window) it goes back to the picker at once.
 3. **Decision** for the clicked hex. Its unit counts as none if it is an unspotted enemy.
    - **Direct fire:**
      - a smoke round fires at any hex;
@@ -1269,6 +1280,13 @@ F layer, the heights and the AI memory afterwards.
 and the RNG; the missile, area, memory and no‑target paths all occur.
 
 u calls in fire support on the point at DS:0x50AD95 / 97.
+- **The point is one place** (two signed words): the mission scripts write it (their camera
+  point; mission 13 also from a map click, 0x48BA40), and the AI, the strikes, the drops and
+  the reinforcements read it. Nothing resets it at a battle's start, so a new battle starts
+  with the value in the image (savedata.tmp's DS block). Both ports keep it there:
+  `World.fire_point` reads and writes DS:0x50AD95 / 0x50AD97. Before, the ports kept a
+  separate copy that only a battle's save or load synced, so a point a script set never
+  reached its readers.
 - **Cost:** 12 AP per order, 6 with crew +8 bit 2. u's own AP is only
   **checked**: each **member** that takes an order pays the cost, so one call can
   order every member up to `limit` (−1 = all). PC‑98 does the same.
@@ -3647,8 +3665,10 @@ return at once.
   (+1 stays 0xFF).
 - Checked by verify_fire_anims, verify_strike_anims and verify_items with 0x40F730 run
   for real (only its view framing 0x40F870 stubbed), wait by wait. 0x40FFC0 matches the
-  port on 300 random turns. Mission 13's turn is read from its call; verify_missions
-  stubs the window chain whole and skips it (`windows_stubbed`).
+  port on 300 random turns. Mission 13's turn (0x2F toward 0x2E): verify_missions stubs
+  the window chain whole (`windows_stubbed`); with `PD2_REAL_SHOOTER=1` it runs the
+  record and 0x40F730 for real (the players' loads and blits stubbed), and the m13 turn
+  script matches: 1,905 / 1,905 (seeds 5 and 7, 1,000 cases each; 95 skipped).
 - The bombs' "start" (0x40F730) can never be skipped in the game: their record has no
   shooter.
 

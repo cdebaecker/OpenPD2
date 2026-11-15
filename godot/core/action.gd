@@ -721,6 +721,18 @@ static func _fire_target_map(w: Pd2World, u: int, slot: int, mode: int, up: Vect
 	return mm
 
 
+## cmd_fire (0x425AF0) after fire_target_map: move_destinations(map, 0) (0x47CED0) marks
+## every cell that is not 0xFF and returns whether it marked any; with a map and none the
+## command prints WMES 0x1EF and goes back to the weapon picker (no map: back silently).
+static func fire_no_target(m: Move.MoveMap) -> bool:
+	if m == null:
+		return false
+	for c in m.cells:
+		if c != 0xFF:
+			return false
+	return true
+
+
 ## cmd_fire's decision for a clicked hex: [FIRE_FIRE / FIRE_CONFIRM / FIRE_REFUSED, message id or -1].
 static func fire_check(w: Pd2World, u: int, slot: int, mode: int, x: int, y: int) -> Array:
 	if slot >= 2 and Ai.manipulator_state(w, u) == 2:

@@ -1,6 +1,7 @@
 extends SceneTree
 ## cmd_fire's options: 0x2000 (範囲内表: WMES 0x1EE, then the enemies in range, 0x4E9AC0)
-## and 0x4000 (命中率: WMES 0x211 after a direct-fire click), with an enemy set in range.
+## and 0x4000 (命中率: WMES 0x211 after a direct-fire click), with an enemy set in range;
+## then a target map with nothing marked (WMES 0x1EF, back to the weapon picker).
 
 func _top(b):
 	var hold = b.win_root.get_child(b.win_root.get_child_count() - 1)
@@ -40,7 +41,7 @@ func _init() -> void:
 	b.options = b.options | 0x2000 | 0x4000
 	b._set_mode("fire")
 	ok = ok and b.fire_map != null
-	b._fire_range_question()
+	b._fire_range_question(b._fire_start.bind("fire"))
 	var box = _top(b)
 	box.answer(0)                                  # 了解: the list
 	await process_frame
@@ -52,5 +53,15 @@ func _init() -> void:
 	print("in-range list: %s (%d rows)" % [listed, lst.items.size() if lst.role == "in_range" else 0])
 	b._fire_hit_line(u, 0, spot)
 	print("hit line: done")
+	# a target map with nothing marked: 0x1EF, then the weapon picker again (cmd_fire)
+	b.fire_map.cells.fill(0xFF)
+	ok = ok and Action.fire_no_target(b.fire_map)
+	b._fire_start("fire")
+	for i in 30:
+		await process_frame
+	var again = _top(b)
+	var picker: bool = again.get("role") == "weapon"
+	ok = ok and picker and not b.fire_list
+	print("no target: 0x1EF, picker again %s" % picker)
 	print("fire options: %s" % ok)
 	quit(0 if ok else 1)
