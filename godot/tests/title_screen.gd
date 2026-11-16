@@ -47,15 +47,21 @@ func _init() -> void:
 	if lst != null:
 		lst.answer(1)
 	var mission: String = load("res://ui/save_files.gd").mission_name(12)
-	var pick: Button = null
-	for i in 200:
+	var sc = null                                   # the scenario list (0x452A10 at (0xF0, 0x70))
+	for i in 300:
 		await process_frame
-		pick = find_button(boot, mission)
-		if pick != null:
+		sc = find_role(tv.holder, "title_list")
+		if sc != null and sc != lst and is_instance_valid(sc):
 			break
-	ok = ok and pick != null
-	if pick != null:
-		pick.pressed.emit()
+		sc = null
+	var at := -1
+	if sc != null:
+		for i in sc.items.size():
+			if str(sc.items[i]).strip_edges() == mission.strip_edges():
+				at = i
+	ok = ok and at != -1
+	if at != -1:
+		sc.answer(at)
 	var b = null
 	for i in 400:
 		await process_frame

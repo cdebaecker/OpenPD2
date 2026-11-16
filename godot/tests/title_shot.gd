@@ -1,6 +1,6 @@
 extends SceneTree
 ## A shot of the title (not a test; windowed): godot --path engine/godot -s tests/title_shot.gd --
-## out.png <seconds> [hover|list|version|exit|opening <seconds in>]
+## out.png <seconds> [hover|list|version|exit|continue|scenario|opening <seconds in>]
 ## The title runs as in play (the logos first); after <seconds> the shot is saved. hover /
 ## list / version / exit act once the menu is up; opening starts it and shoots after its
 ## own seconds.
@@ -30,6 +30,15 @@ func _init() -> void:
 				boot.title.pick_region(4)
 			"exit":
 				boot.title.pick_region(2)
+			"continue":                              # the save list, or MES0 0xD's note
+				boot.title.pick_region(1)
+			"scenario":                              # the start list's entry 1, its list
+				boot.title.pick_region(0)
+				var l = null
+				while l == null:
+					await process_frame
+					l = _find(boot.title.holder, "title_list")
+				l.answer(1)
 			"opening":
 				boot.title.pick_region(3)
 				secs = float(args[3]) if args.size() > 3 else 5.0
@@ -40,3 +49,13 @@ func _init() -> void:
 	root.get_viewport().get_texture().get_image().save_png(out)
 	print("saved ", out)
 	quit(0)
+
+
+func _find(n: Node, role: String):
+	if n.get("role") == role:
+		return n
+	for c in n.get_children():
+		var r = _find(c, role)
+		if r != null:
+			return r
+	return null

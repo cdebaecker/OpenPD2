@@ -12,7 +12,6 @@ const BATTLE := "res://ui/battle.tscn"
 var box: VBoxContainer
 var dialog: PanelContainer = null
 var sem := Semaphore.new()
-var answer: Variant = null
 var worker: Thread = null
 var busy := false
 
@@ -249,16 +248,6 @@ func version_box() -> void:
 	hold.queue_free()
 
 
-func _ask_async(text: String, opts: Array) -> Variant:
-	var box_done := [false, null]
-	_show(text, opts, func(i):
-		box_done[0] = true
-		box_done[1] = i)
-	while not box_done[0]:
-		await get_tree().process_frame
-	return box_done[1]
-
-
 func ui(key: String) -> String:
 	return GameData.ui_text(key)
 
@@ -296,15 +285,6 @@ func _show(text: String, opts: Array, done: Callable) -> void:
 		list.add_child(b)
 
 
-func ask(text: String, opts: Array) -> Variant:
-	## on the worker thread: the window on the main thread, then its answer
-	call_deferred("_show", text, opts, func(a):
-		answer = a
-		sem.post())
-	sem.wait()
-	return answer
-
-
 func note_text(text: Variant) -> String:
 	## a title note: an exe address, a MES0.SLD id (below 0x100) or [address, n]
 	if text is Array:
@@ -318,20 +298,18 @@ class BootTitleHooks extends Title.Hooks:
 	var boot
 
 	func box(text: Variant) -> int:
-		boot.ask(boot.note_text(text), [[boot.ui("UI_OK"), 0]])
-		return 0
+		return int(boot.on_main(boot.note_window.bind(boot.note_text(text))))
 
 	func pick(kind: String, items: Array) -> int:
-		var opts := []
+		## 0x46D780's lists: the scenarios (DS:0x523E88) at (0xF0, 0x70), 23 columns; the data
+		## (DS:0x5173A0) at (0xD8, 0xB0), 24 columns; a right click cancels both (-2)
+		var labels := []
 		if kind == "scenario":
-			for i in items.size():
-				opts.append([SaveFiles.mission_name(items[i]), i])
-		else:
-			var t: Array = SaveFiles.choice_texts(0x5173A0)
-			for i in t.size():
-				opts.append([t[i], i])
-		opts.append([boot.ui("UI_CANCEL"), -2])
-		return int(boot.ask("", opts))
+			for m in items:
+				labels.append(SaveFiles.mission_name(m))
+			return int(boot.on_main(boot.list_window.bind(0xF0, 0x70, 0x17, labels, true)))
+		labels = SaveFiles.choice_texts(0x5173A0)
+		return int(boot.on_main(boot.list_window.bind(0xD8, 0xB0, 0x18, labels, true)))
 
 	func savedata_org(flag: int) -> Variant:
 		var img: Array = GameData.save_image("pd2" if flag else "dash")
@@ -350,10 +328,12 @@ class BootTitleHooks extends Title.Hooks:
 		return n
 
 	func slot() -> int:
-		return boot.ask_slot(false)
+		return int(boot.on_main(boot.slot_list))
 
 	func confirm(s: int) -> int:
-		return int(boot.ask(SaveFiles.slot_line(s, 0x519EE8), [[boot.ui("UI_YES"), 1], [boot.ui("UI_NO"), 0]]))
+		## 0x498070(slot, 1): its line as 0x451E30's question (kind 1)
+		var yes: bool = boot.on_main(boot.question.bind(SaveFiles.slot_line(s, 0x519EE8).substr(4), 1))
+		return 1 if yes else 0
 
 	func save_file(s: int) -> Variant:
 		return SaveFiles.read("PD2REC%02d.BIN" % s)
@@ -365,14 +345,67 @@ class BootTitleHooks extends Title.Hooks:
 		SaveFiles.write("savedata.tmp", data)
 
 
-func ask_slot(saving: bool) -> int:
-	## 0x498290 / 0x497A10: the 41 slots; 0x29 none
-	var opts := []
-	for s in Title.SLOTS:
-		if saving or SaveFiles.read("PD2REC%02d.BIN" % s) != null:
-			opts.append([SaveFiles.slot_line(s, 0x519ED8 if saving else 0x519EE8), s])
-	opts.append([ui("UI_CANCEL"), 0x29])
-	return int(ask("", opts))
+var _main_answer: Variant = null
+
+
+func on_main(fn: Callable) -> Variant:
+	## on the worker thread: fn (a window's coroutine) on the main thread, then its answer
+	call_deferred("_main_call", fn)
+	sem.wait()
+	return _main_answer
+
+
+func _main_call(fn: Callable) -> void:
+	_main_answer = await fn.call()
+	sem.post()
+
+
+func note_window(text: String) -> int:
+	## 0x452170 -> 0x452200(text, flag 1): a framed line as wide as the text (its bytes) at
+	## x ((80 - (n + 2)) / 2) x 8, y 0xAA, "%a4F" first, the line end waiting for a click
+	var t := text.replace("@", "").strip_edges()
+	var n := GameWindow.text_cols(t)
+	var rows := 1
+	if n > 76:
+		t = GameWindow.fit(t, 76)
+		rows = t.split("\n").size()
+		n = 0
+		for l in t.split("\n"):
+			n = maxi(n, GameWindow.text_cols(l))
+	var tw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, rows, 1)
+	tw.pal16 = title.pal16()
+	tw.role = "title_note"
+	tw.waits = not title.fast
+	var hold := _window_hold(tw)
+	hold.add_child(tw)
+	await tw.print_text("\u0001" + char(0x4F) + t + "\n")
+	hold.queue_free()
+	return 0
+
+
+func slot_list() -> int:
+	## 0x498290: 0x497BC0's rows of the saves (as the sortie's load), 0x452A10 at (0x78, 0x70),
+	## 0x35 columns, a right click leaving (0x29); none: MES0 0xD in 0x452170, then 0x29
+	var nums := []
+	for sl in Title.SLOTS:
+		if Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sl), 0xFF, true) is Array:
+			nums.append(sl)
+	if nums.is_empty():
+		await note_window(GameData.title_note(0xD))
+		return 0x29
+	var wsp: Callable = load("res://ui/battle.gd").wsp
+	var rows := []
+	for sl in nums:
+		var line: Array = Title.slot_line(SaveFiles.read("PD2REC%02d.BIN" % sl), 0xFF, false)
+		var when: String = line[2] if line[2] != null else SaveFiles.exe(Title.SLOT_SORTIE_TIME)
+		var t := SaveFiles.modified_time("PD2REC%02d.BIN" % sl)
+		rows.append(wsp.call(GameData.exe_raw("dash", 0x519E84), [sl, SaveFiles.exe(line[0]), SaveFiles.saved_name(line[1]), when,
+			int(t.get("year", 1980)) - 1980 + 0x50, int(t.get("month", 1)), int(t.get("day", 1)), int(t.get("hour", 0)), int(t.get("minute", 0))]))
+	var ic := 0x35
+	for r in rows:
+		ic = maxi(ic, GameWindow.text_cols(str(r)))
+	var v: int = await list_window(0x78, 0x70, ic, rows, true)
+	return nums[v] if v >= 0 and v < nums.size() else 0x29
 
 
 func _run(entry: String) -> void:
