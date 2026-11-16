@@ -137,6 +137,12 @@ static func support_units(w: Pd2World) -> Array:
 				row = [k, 2, SUPPORT_STATE_TEXTS[0], 0xFF] if t == 0x50 else [k, 1, SUPPORT_STATE_TEXTS[0], 0x4F]
 			else:
 				row = [k, 1, SUPPORT_STATE_TEXTS[1], 0x4F]
+			if out.size() == 80:
+				# its arrays hold 80 rows: the 81st is written past them, over its own stack
+				if w.safe_hit("C2", "more than 80 support rows (0x4DFE70 overflows its arrays): the rest are not listed"):
+					return out
+				w.fault = "0x4DFE70: more than 80 support rows overflow its arrays"
+				return out
 			out.append(row)
 	return out
 

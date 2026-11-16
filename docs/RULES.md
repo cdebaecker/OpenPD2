@@ -3496,6 +3496,7 @@ guard). Every division by zero takes **a zero divisor as 1**:
 | ID | Where | What the game does | Reach | Engine in play |
 |---|---|---|---|---|
 | C1 | bomb hooks of missions 7, 9, 10 (0x4A4520, 0x4A88F0, 0x4AA190) | a charge whose hook byte is no site (one laid off the sites through the generic fuse rule), past the first entry: the entry number is used as a table address in low memory, an access violation | N | nothing breaks (as for entry 0) |
+| C2 | the support request's unit picker (0x4DFE70) | more than 80 rows (members of groups 0–19 of types 3–5): its arrays (local_190, local_140, the 0x140 B list) hold 80, so the 81st is written past them over its own stack, its result pointer included (an access violation at 0x4E041E in the emulator) | not counted per mission (groups 0–19 hold the player's units) | the first 80 are listed |
 | D1 | the hit chance's range term (0x413250) | weapon range 0 (a cleared pocket reads ammo −1, range 0): idiv by 0 | R | range taken as 1 |
 | D2 | the debrief's restock (`_refill`) | restock size 0: rand() % 0 | U | taken as 1 |
 | D3 | the group flight's time | machine speed 0 (machine 31): idiv by 0 | U | taken as 1 |
