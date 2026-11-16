@@ -1,6 +1,6 @@
 extends SceneTree
 ## The game's windows over a battle, saved as a picture: godot --path engine/godot -s
-## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction|command|units|arms|all|map|height|relief|orders|confirm|support [ja|en|fr]
+## tests/window_shot.gd -- pd2 0 out.png prompt|box|line|select|status|menu|weapon|reaction|command|units|arms|all|map|height|relief|orders|confirm|support|sysmenu|sysload|syssave|sysbox [ja|en|fr]
 ##   all: 一斉's popup (0x429540); map: マップ's (0x43A3E0); height: its corners (0x43A900);
 ##   relief: the height map from the south-east, its last text up; orders: 指令書 (0x43BA20,
 ##   WMES 0x1A2); confirm: the area map's question (0x5146F0); support: the support
@@ -112,6 +112,22 @@ func _init() -> void:
 					await process_frame
 				for i in 3:
 					await process_frame
+		"sysmenu", "sysload", "syssave", "sysbox":
+			# the system menu (0x4847C0): its 0x40C090 menu; then LOAD's / SAVE's list or an
+			# option's question
+			b._cmd_system()
+			for i in 3:
+				await process_frame
+			gw = b.react_panel.get_child(b.react_panel.get_child_count() - 1)
+			var pick: int = {"sysload": 1, "syssave": 0, "sysbox": 2}.get(args[3], -1)
+			if pick >= 0:
+				gw.answer(pick)
+				for i in 5:
+					await process_frame
+				var top = b.react_panel if b.react_panel else b.win_root.get_child(b.win_root.get_child_count() - 1)
+				gw = top.get_child(top.get_child_count() - 1)
+			if gw.get("_hover") != null:
+				gw._hover = 0
 		"orders":
 			b._orders_sheet()
 			gw = b.win_root.get_child(b.win_root.get_child_count() - 1).get_child(0)

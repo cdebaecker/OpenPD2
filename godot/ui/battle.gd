@@ -6033,7 +6033,7 @@ class MenuDriveHooks extends Title.BattleSaveHooks:
 
 
 var menu_answers: Array = []
-var sysmenu_panel: PanelContainer = null
+var sysmenu_panel: Control = null
 var menu_answers_scripted: Array = []      # tests: the system menu's answers, taken in turn
 
 
@@ -6093,9 +6093,11 @@ func _reload_scene() -> void:
 
 
 func _menu_close() -> void:
-	if sysmenu_panel:
+	if sysmenu_panel and is_instance_valid(sysmenu_panel):
+		if react_panel == sysmenu_panel:
+			react_panel = null
 		sysmenu_panel.queue_free()
-		sysmenu_panel = null
+	sysmenu_panel = null
 
 
 func _sysmenu_pick(v: int) -> void:
@@ -6118,66 +6120,83 @@ func menu_slot_line(line: Array) -> String:
 
 
 func _menu_ask(req: Array) -> void:
+	## 0x4847C0's windows (Title.battle_menu's questions, answered through menu_answers):
+	## - the menu: 0x40C090 of its 8 entries (DS:0x518224 ..), 8 columns, at the info panel's
+	##   client (x + 0x48, bottom - 0xB6), kept inside the main window; a right click cancels;
+	## - an option's question: ui_message_box (kind 0), its first answer 1;
+	## - the save's / load's lists (0x477580 / 0x477770): 0x477B10's rows ("%2d:%8s %-18s %-5s
+	##   %02d/%02d/%02d %02d:%02d", DS:0x517930; New File DS:0x4FD008 first to save while
+	##   there are at most 0x27), 0x40C090 of 0x35 columns centred, a right click 0x29; none:
+	##   WMES 10 / 0xD as a red message line (0x4521C0), then 0x29;
+	## - the slot's line (0x477EB0): wsprintfA of DS:0x517990 in ui_message_box (kind 1)
 	_menu_close()
-	sysmenu_panel = PanelContainer.new()
-	var theme := Theme.new()
-	theme.default_font_size = 8
-	sysmenu_panel.theme = theme
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.08, 0.09, 0.12, 0.97)
-	bg.set_content_margin_all(8)
-	sysmenu_panel.add_theme_stylebox_override("panel", bg)
-	sysmenu_panel.position = Vector2(240, 40)
-	hud_layer.add_child(sysmenu_panel)
-	var box := VBoxContainer.new()
-	sysmenu_panel.add_child(box)
-	var add := func(text: String, v: int) -> void:
-		var b := Button.new()
-		b.text = text
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.pressed.connect(_sysmenu_pick.bind(v))
-		box.add_child(b)
 	match req[0]:
 		"menu":
+			var labels := []
 			for i in Title.SYSTEM_LABELS.size():
-				var t := SaveFiles.exe(Title.SYSTEM_LABELS[i])
-				if Title.SYSTEM_TOGGLES.has(i):
-					t += "  " + (ui("UI_ON") if w.options & Title.SYSTEM_TOGGLES[i] else ui("UI_OFF"))
-				add.call(t, i)
-			var c := Button.new()
-			c.text = ui("UI_CANCEL")
-			c.pressed.connect(_menu_cancel)
-			box.add_child(c)
-		"box":
-			var l := Label.new()
-			l.text = msg(req[1]).replace("@", "
-").strip_edges()
-			box.add_child(l)
-			add.call(ui("UI_YES"), 1)
-			add.call(ui("UI_NO"), 0)
+				labels.append(SaveFiles.exe(Title.SYSTEM_LABELS[i]))
+			var ic := 8                         # (engine-side: wider for longer translations)
+			for t in labels:
+				ic = maxi(ic, GameWindow.text_cols(str(t)))
+			var gw := GameWindow.select_window(0, 0, ic, 0, 0, labels, ic, [], true)
+			var x := 432 + 0x48
+			var y := MAIN_H - 0xB6
+			if x + int(gw.size.x) - 1 > MAIN_W:
+				x = MAIN_W - int(gw.size.x)
+			if y + int(gw.size.y) - 1 > MAIN_H:
+				y = MAIN_H - int(gw.size.y)
+			gw.position = Vector2((maxi(x, 0) >> 3) << 3, maxi(y, 0))
+			gw.role = "system_menu"
+			sysmenu_panel = _hold([gw])
+			gw.chosen.connect(func(v: int):
+				if v < 0:
+					_menu_cancel()
+				else:
+					_sysmenu_pick(v))
+		"box", "ask":
+			var text := msg(req[1]) if req[0] == "box" else menu_slot_line(req[1])
+			var l: Array = BOX_LABELS[0 if req[0] == "box" else 1]
+			var gw := open_box(text, [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])])
+			gw.role = "system_box"
+			sysmenu_panel = gw.get_parent()
+			gw.chosen.connect(func(v: int): _sysmenu_pick(1 if v == 0 else 0))
 		"slot":
-			## 0x477770 (load): the saves there are; 0x477580 (save): a new slot first (the
-			## saves' count + 1, while there are at most 0x27) and the saves
+			var loading: bool = req[1]
 			var saved := []
-			for s in Title.SLOTS:
-				var d: Variant = SaveFiles.read(Title.rec_name(s))
+			for sl in Title.SLOTS:
+				var d: Variant = SaveFiles.read(Title.rec_name(sl))
 				if d != null and (d as PackedByteArray).size() >= 8 and (d as PackedByteArray).slice(0, 8) == Title.magic():
-					saved.append(s)
-			if not req[1] and saved.size() <= 0x27:
-				add.call(ui("UI_SLOT_NEW"), saved.size() + 1)
-			for s in saved:
-				add.call(SaveFiles.slot_line(s, 0x519EE8 if req[1] else 0x519ED8), s)
-			if saved.is_empty() and req[1]:
-				var l := Label.new()
-				l.text = msg(0xD)
-				box.add_child(l)
-			add.call(ui("UI_CANCEL"), 0x29)
-		"ask":
-			var l := Label.new()
-			l.text = menu_slot_line(req[1])
-			box.add_child(l)
-			add.call(ui("UI_YES"), 1)
-			add.call(ui("UI_NO"), 0)
+					saved.append(sl)
+			var rows := []
+			var picks := []
+			if not loading and saved.size() <= 0x27:
+				rows.append(GameData.exe_text(campaign, 0x4FD008))
+				picks.append(saved.size() + 1)
+			for sl in saved:
+				var line: Variant = Title.slot_line(SaveFiles.read(Title.rec_name(sl)), 0xFF, false)
+				if not line is Array:
+					continue
+				var when: String = line[2] if line[2] != null else SaveFiles.exe(Title.SLOT_SORTIE_TIME)
+				var t := SaveFiles.modified_time(Title.rec_name(sl))
+				rows.append(wsp(GameData.exe_raw("dash", 0x517930), [sl, SaveFiles.exe(line[0]), SaveFiles.saved_name(line[1]), when,
+					int(t.get("year", 1980)) - 1980 + 0x50, int(t.get("month", 1)), int(t.get("day", 1)), int(t.get("hour", 0)), int(t.get("minute", 0))]))
+				picks.append(sl)
+			if rows.is_empty():
+				show_line(msg(0xD if loading else 10), true)
+				_sysmenu_pick(0x29)
+				return
+			var ic := 0x35
+			for r in rows:
+				ic = maxi(ic, GameWindow.text_cols(str(r)))
+			var gw := GameWindow.select_window(0, 0, ic, 0, 0, rows, ic, [], true)
+			gw.position = Vector2((maxi((MAIN_W - int(gw.size.x)) >> 1, 0) >> 3) << 3, maxi((MAIN_H - int(gw.size.y)) >> 1, 0))
+			gw.role = "system_slots"
+			sysmenu_panel = _hold([gw])
+			gw.chosen.connect(func(v: int):
+				_sysmenu_pick(picks[v] if v >= 0 and v < picks.size() else 0x29))
+		_:
+			_menu_cancel()
+
 
 # --- the turn --------------------------------------------------------------------
 

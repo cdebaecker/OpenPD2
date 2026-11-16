@@ -238,6 +238,7 @@ BSS_END = 0x526000
 # pickers' words. GameData.exe_text, exe.csv.
 EXE_TEXTS = (0x5142A4, 0x5142B4,  # 一斉 0x429540
              0x5188E0, 0x518A20,  # the title's version box (0x452200) and its exit question (0x451E30)
+             0x4FD008, 0x517930,  # the battle's save list (0x477B10): New File and its rows' format
              0x510560, 0x510570, 0x510580, 0x510588, 0x510590, 0x510598,  # マップ 0x43A3E0 / 0x43A900
              0x5146F0, 0x514740, 0x514780, 0x514784,  # the area map's question, the height map's texts
              0x51F878,  # cmd_fire option 0x2000: the in-range list (0x4E9AC0)
