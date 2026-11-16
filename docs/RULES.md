@@ -1612,9 +1612,23 @@ sortie's refusal), the explosion window 0x40F590 / 0x40F730 / 0x417410 / 0x41051
 returns 0x80000 when the player skips; its end empties the hex of a unit at condition 0),
 the radio's talk windows (0x488DE0 / 0x489140 / 0x489390; 0x489430 the portrait of a crew, 0 for crew −1), the
 radar map's close (0x43F060) and redraws (0x466790, 0x4830E0, 0x4361C0, a hex 0x4F2150)
-and the speech window 0x4403D0
-(the approach: the speech hook in a loop until a transport lands; not ported, the
-battle's own drop handling stands in). `occupant_at` 0x46EC80, as the scripts call it,
+and the speech window 0x4403D0.
+
+**The approach (0x4403D0, `rules.speech_window`; Emulated, verify_speech_window 730 / 730
+at seeds 1 and 7, fixtures `speech_window`).** It opens the flight window (0x43E510(0)) and
+its status list (0x43E9D0). Then, pass by pass:
+- the mission's speech hook runs (table 0x51EEB8);
+- of groups 0, 2, 4 with +5 set, it counts those without +3 bit 0 (still flying) and those
+  with it whose next group's +5 is set;
+- none of either: the dialog MES 0x1D, the end code 0x82, the window closed. The game then
+  returns a local never set on that path; the ports return 0, which every caller only
+  tests for an abort code;
+- else a 17 ms wait, and 0x4405B0 picks the landing group: the first of 1, 3, 5 with someone
+  alive (0x441FF0) and +2 bits 4–5 = 2, bits 6–7 = 0; else the first of 0, 2, 4 of type 7 or
+  8 under the same tests. A group closes the window and is returned;
+- none: the mission turn DS:0x50663B + 1, the status list, the next pass.
+The battle runs it with the sortie's groups; with the engine's stand-in squad (no group
+formed) it is skipped as before. `occupant_at` 0x46EC80, as the scripts call it,
 has no bounds check (x = −1 reads the row before's last hex).
 
 0x51F218 is per‑mission data rather than code.
@@ -3854,7 +3868,7 @@ opening's music_start(12) and the exit's music_stop play at their places
      clearing, "enemy discovered" — are ported);
    - the event scripts mission by mission (226 KB in all): all ten PD2 missions and
      DASH's missions 2-7 (scripts 12, 14-18) are ported and emulated; left: DASH's other 6 (scripts 11–22), and the
-     approach loop 0x4403D0 (the operation plan and its pages are ported, §5.22).
+     approach loop 0x4403D0 (ported 2026-11-16, §5.8; the operation plan and its pages, §5.22).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.
 4. The remaining action costs: conceal, lay mines, throw, reload and item use.

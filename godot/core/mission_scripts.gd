@@ -38,9 +38,15 @@ class Hooks:
 	func speech() -> int:
 		return 0
 
-	## 0x4403D0
+	## 0x4403D0 stubbed whole (a harness's; MissionScripts.speech_window answers through it
+	## when stub_speech_window is set)
+	var stub_speech_window := false
 	func speech_window() -> int:
 		return 0
+
+	## 0x43E9D0, the flight window's status list (display)
+	func air_report() -> int:
+		return flight.air_report() if flight != null else 0
 
 	func scroll(x: int, y: int) -> int:
 		return 0
@@ -262,6 +268,77 @@ static func m01_init(w: Pd2World, table_524130 := PackedByteArray()) -> void:
 
 ## 0x49A190, the turn script: stage 0 in the computer's turn, 1 after the player's, 2 at a
 ## new mission (rules.m01_turn). Returns 0.
+## 0x4405B0 (rules.landing_group): the first of groups 1, 3, 5 with someone alive (0x441FF0)
+## and +2 bits 4-5 = 2, bits 6-7 = 0; else the first of 0, 2, 4 of type 7 or 8 (+0x21's high
+## nibble) under the same tests; else 0xFF.
+static func landing_group(w: Pd2World) -> int:
+	for g in [1, 3, 5]:
+		if _landing_ready(w, g):
+			return g
+	for g in [0, 2, 4]:
+		if (Flight.gb(w, g, 0x21) & 0xF0) in [0x70, 0x80] and _landing_ready(w, g):
+			return g
+	return 0xFF
+
+
+static func _landing_ready(w: Pd2World, g: int) -> bool:
+	var f := Flight.gb(w, g, 2)
+	return Flight.group_alive(w, g) != 0 and f & 0x30 == 0x20 and f & 0xC0 == 0
+
+
+## 0x4403D0 (rules.speech_window), the approach: the flight window (0x43E510(0)), the
+## status list (0x43E9D0); then each pass the mission's speech hook, groups 0, 2, 4 with +5
+## counted (without +3 bit 0, or with it and the next group's +5); none: 0x43BA20 of MES
+## 0x1D, DS:0x50ADF2 = 0x82, the window closed, 0 (the game: a local never set); else a 17
+## ms wait, landing_group's group closes the window and is returned, none: the mission turn
+## + 1 and the status list again. Emulated (verify_speech_window).
+static func speech_window(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
+	if hooks.stub_speech_window:
+		return hooks.speech_window()
+	var rr: Variant = hooks.radar_open()
+	var res: int = int(rr) if rr != null else Flight.grid_init(w, hooks.flight, 0)
+	if res in AI_ABORT:
+		return res
+	res = hooks.air_report()
+	if res == 0x10000:
+		return res
+	while true:
+		if res == 0x20000 or res == 0x40000:
+			return res
+		res = hooks.speech()
+		if res in AI_ABORT:
+			return res
+		var landed := 0
+		var flying := 0
+		for g in [0, 2, 4]:
+			if Flight.gb(w, g, 5):
+				if not Flight.gb(w, g, 3) & 1:
+					flying += 1
+				elif Flight.gb(w, g + 1, 5):
+					landed += 1
+		if landed == 0 and flying == 0:
+			res = hooks.message(0x1D)
+			if res in AI_ABORT:
+				return res
+			w.set_ds8(0x50ADF2, 0x82)
+			hooks.radar_close()
+			return 0
+		var r := hooks.ui_wait(0x11)
+		if r == 1:
+			return 0x40000
+		if r == 2:
+			return 0x20000
+		var g := landing_group(w)
+		if g != 0xFF:
+			hooks.radar_close()
+			return g
+		w.mission_turn = (w.mission_turn + 1) & 0xFFFF
+		res = hooks.air_report()
+		if res == 0x10000:
+			return res
+	return 0
+
+
 static func m01_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> int:
 	var n_units := mini(w.units.size() / 55, 254)
 	if stage == 0:
@@ -334,7 +411,7 @@ static func m01_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 				set_g(w, grp, f + 1, py)
 			set_g(w, grp, G_F28, 0)
 			set_g(w, grp, G_F34, 0)
-		hooks.speech_window()
+		speech_window(w, rng, hooks)
 		w.set_ds16(0x50AD4E, w.ds16(0x50AD4E) | 1)
 	for u in n_units:
 		if w.ub(u, 0xD) and w.sb(u, 0x36) <= 2 and w.ub(u, 0) & 4 and w.ub(u, 9) != 0xFF:
@@ -1162,7 +1239,7 @@ static func m02_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 				w.mem_write(UNITS_ADDR + 55 * k + 0xA, w.mem8(0x51A0AA + 0x40 * v + 4 * i))
 				var f := w.mem8(UNITS_ADDR + 55 * k + 5)
 				w.mem_write(UNITS_ADDR + 55 * k + 5, (w.mem8(0x51A1A8 + 0x10 * v + i) ^ f) & 7 ^ f)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		w.set_ds16(0x50AD4E, w.ds16(0x50AD4E) | 1)
@@ -1564,7 +1641,7 @@ static func m03_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 	if not w.ds16(0x50AD4E) & 1:
 		group_scan(w)
 		place_groups_at_camera(w)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		w.set_ds16(0x50AD4E, w.ds16(0x50AD4E) | 1)
@@ -1849,7 +1926,7 @@ static func m04_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 				return res
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		ds_or(w, 0x50AD4E, 1)
@@ -1928,7 +2005,7 @@ static func m05_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			w.set_ds8(0x50ADF2, code)
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		ds_or(w, 0x50AD4E, 1)
@@ -2122,7 +2199,7 @@ static func m06_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			ds_or(w, 0x50AD76, 1)
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		ds_or(w, 0x50AD4E, 1)
@@ -2664,7 +2741,7 @@ static func m09_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			w.set_ds8(0x50ADF2, m09_end(w, rng, false))
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var res := hooks.speech_window()
+		var res := speech_window(w, rng, hooks)
 		if res in AI_ABORT:
 			return res
 		ds_or(w, 0x50AD4E, 1)
@@ -5001,7 +5078,7 @@ static func m16_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			return 0
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var r7 := hooks.speech_window()
+		var r7 := speech_window(w, rng, hooks)
 		if r7 in AI_ABORT:
 			return r7
 		for grp in range(12, 20):
@@ -5336,7 +5413,7 @@ static func m17_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			w.set_ds8(0x50ADF2, m17_end_code(w, rng))
 		return 0
 	group_scan(w)
-	var r2 := hooks.speech_window()
+	var r2 := speech_window(w, rng, hooks)
 	if r2 in AI_ABORT:
 		return r2
 	for grp in range(12, 20):
@@ -5557,7 +5634,7 @@ static func m18_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 			return res
 		return 0
 	group_scan(w)
-	var r2 := hooks.speech_window()
+	var r2 := speech_window(w, rng, hooks)
 	if r2 in AI_ABORT:
 		return r2
 	ds_or(w, 0x50AD4E, 1)
@@ -7659,7 +7736,7 @@ static func m21_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 		w.set_ds8(0x50AD4E, (arr & 0x1F) << 1 | w.ds8(0x50AD4E) & 0xC1)
 		group_scan(w)
 		if not Flight.group_alive(w, 4):
-			var r0 := hooks.speech_window()
+			var r0 := speech_window(w, rng, hooks)
 			if r0 in AI_ABORT:
 				return r0
 		ds_or(w, 0x50AD4E, 1)
@@ -8211,7 +8288,7 @@ static func m11_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 				ds_or(w, 0x50AD5E, 1)
 	if not w.ds8(0x50AD4E) & 1:
 		group_scan(w)
-		var r7 := hooks.speech_window()
+		var r7 := speech_window(w, rng, hooks)
 		if r7 in AI_ABORT:
 			return r7
 		ds_or(w, 0x50AD4E, 1)
@@ -8552,7 +8629,7 @@ static func m22_turn(w: Pd2World, rng: Pd2Random, stage: int, hooks: Hooks) -> i
 	if w.ds8(0x50AD4E) & 1:
 		return 0
 	group_scan(w)
-	var r4 := hooks.speech_window()
+	var r4 := speech_window(w, rng, hooks)
 	if r4 in AI_ABORT:
 		return r4
 	for i in 12:
@@ -9845,7 +9922,7 @@ static func m13_first_call(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		w.units[o] = w.units[o] & 0xC0
 	for p: int in [2, 3, 4, 5]:
 		w.setb(0x2F, 27 + 2 * p, 0xFF)
-	var res := hooks.speech_window()
+	var res := speech_window(w, rng, hooks)
 	if res in AI_ABORT:
 		return res
 	var R := func(o: int) -> int: return g(w, 0, o)

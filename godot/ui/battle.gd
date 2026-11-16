@@ -416,6 +416,9 @@ func _begin_battle() -> void:
 	sandbox = squad.is_empty()
 	if sandbox:
 		squad = Mission.sandbox_squad(w, 4)
+	# the approach (0x4403D0) needs the sortie's groups: with the stand-in squad (no group
+	# formed) it is skipped, as before; with them, the game's loop runs
+	mission_hooks.stub_speech_window = sandbox
 	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the loader's layer reset
 	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
 	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
