@@ -451,7 +451,7 @@ SHARED_IMAGES = ('ido_g.pac', 'ido_gb.pac', 'evkao.pac', 'event.pac', 'plan_g.pa
                  # staff2_g / staff2_p and the staff roll
                  'end0.pac', 'staff_g.pac', 'staff_p.pac', 'staff2_g.pac', 'staff2_p.pac', 's_roll.pac',
                  # the debrief's new items / recruits screens (kabe0) and DASH's hand-over (op2)
-                 'kabe0.pac', 'op2.pac',
+                 'kabe0.pac', 'kabe4.pac', 'op2.pac',
                  # the title (game_mode_loop 0x487D70): the CD-DA / MIDI list's black, the title
                  # picture; the opening (0x4783A0): its names, pictures, scrolled texts, eyes
                  'blk.pac', 'pd2title.pac', 'op_name.pac', 'op_wai.pac', 'op_moji.pac',

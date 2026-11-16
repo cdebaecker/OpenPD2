@@ -319,8 +319,8 @@ func _rmes_window(x: int, y: int, c: int, r: int, ids: Array, pics: Array = []) 
 	gw.queue_free()
 
 
-func _handover() -> void:
-	## PD2's hand-over to DASH (0x48FA40 after step 7): scenes on colour 0 (0x0A), each faded
+func _op2_scenes() -> void:
+	## PD2's step 1 cleared (0x48FA40, DS:0x50AD8E = 1, after the results and music 5): scenes on colour 0 (0x0A), each faded
 	## in and out: op2 0 at (8, 0x38) with RMES 0x20 in (0x188, 0x3C) 30 x 15; op2 3 at
 	## (0x188, 0) with 0x21 in (0x30, 0xE0) 42 x 9; op2 1 at (0x20, 8) with 0x22 in (0x118,
 	## 0xD8) 40 x 10, then op2 2 at (0x118, 0x18) and 0x23, op2 4 at (0x20, 0x10) and 0x24;
@@ -547,6 +547,7 @@ func _clear_windows() -> void:
 
 func play() -> void:
 	var tune_11 := false            # the ending's music_start(11), played before the score cards
+	var op2_next := false           # PD2's step 1: op2.pac's scenes come at the music 5 after the results
 	for k in screens.size():
 		var s: Array = screens[k]
 		var kind: String = s[0]
@@ -554,6 +555,15 @@ func play() -> void:
 		match kind:
 			"music":
 				# music_start (0x40AFA0, RULES.md 5.26) where the debrief calls it
+				if op2_next and int(data) == 5:
+					# PD2's step 1 after its results: faded out, cleared, music 5, then op2.pac's
+					# scenes with RMES 0x20-0x25 (0x48FA40)
+					op2_next = false
+					await _fade(0.0)
+					_blank()
+					GameAudio.music_start(5)
+					await _op2_scenes()
+					continue
 				if not (tune_11 and int(data) == 11):
 					GameAudio.music_start(int(data))
 				tune_11 = false
@@ -562,6 +572,9 @@ func play() -> void:
 				_clear_windows()
 				_picture(dir, Debrief.chunk(battle.w) - 1 if kind == "clear" else 0)
 				await _click()
+				if kind == "clear" and battle.campaign == "pd2" and data == [0x20, 0x21, 0x22, 0x23, 0x24, 0x25]:
+					op2_next = true          # PD2's step 1: its texts come with op2.pac after the results
+					continue
 				if data is Array and not data.is_empty():
 					_bright = 0.5
 					queue_redraw()
@@ -618,7 +631,13 @@ func play() -> void:
 				await _kabe()
 				await _note(GameData.exe_text(battle.campaign, 0x519A40))
 			"handover":
-				await _handover()
+				# PD2's step 8 into DASH: faded out, kabe4.pac with DS:0x518F48's window colours
+				# faded in, then the new campaign's pilot choice (0x421B90)
+				await _fade(0.0)
+				_blank()
+				_on_kabe = false
+				_pic = _shared("kabe4", 0)
+				await _fade(1.0)
 			"results":
 				_bright = 0.5
 				queue_redraw()

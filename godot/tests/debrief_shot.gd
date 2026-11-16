@@ -2,8 +2,8 @@ extends SceneTree
 ## The debrief's screens (ui/debrief_view.gd) as pictures: godot --path engine/godot -s
 ## tests/debrief_shot.gd -- pd2 out_prefix [ja|en|fr] [cards|credits|items N|recruits N|handover N]
 ## PD2 mission 1 withdrawn (its scenario hook clears it): the debrief runs; its first
-## screens are saved as <prefix>_1.png (the picture), _2.png (its text), _3.png (the second
-## text), _4.png (the results), each after a click; with "cards" the first score card
+## screens are saved as <prefix>_1.png .. _6.png, each after a click: the picture, the
+## results, then op2.pac's scenes with RMES 0x20-0x25 (step 1's order); with "cards" the first score card
 ## (0x468490) as <prefix>_card.png.
 
 func _init() -> void:
@@ -87,8 +87,8 @@ func _init() -> void:
 		print("no debrief view")
 		quit(1)
 		return
-	for k in 4:
-		for i in 20:
+	for k in 6:
+		for i in 60:
 			await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_viewport().get_texture().get_image().save_png("%s_%d.png" % [args[1], k + 1])
