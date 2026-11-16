@@ -5618,9 +5618,15 @@ func _anim_close(post: bool) -> void:
 		view_sem.post()
 
 
+## the missile's flight pace (engine-side: the game has no waits there, its pace was the
+## machine's drawing speed): 2 steps a frame, about 120 a second at 60 fps, slower than
+## the engine's first 8 to read as a period PC's redraws
+const FLIGHT_STEPS_PER_FRAME := 2
+
+
 func anim_flight(stage: int, rec: Array) -> void:
 	## the missile's flight stage (0x410160 -> 0x41B320: kind 8 only, no waits in the game,
-	## each step drawn; engine-side pace: 8 steps a frame; its lines: AnimeView.flight_segments);
+	## each step drawn; engine-side pace: FLIGHT_STEPS_PER_FRAME; its lines: AnimeView.flight_segments);
 	## 4 erases it
 	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return
@@ -5644,7 +5650,7 @@ func _flight_step(stage: int, rec: Array) -> void:
 	for p in pts:
 		anime_view.show_missile(p, tex)
 		k += 1
-		if k % 8 == 0:
+		if k % FLIGHT_STEPS_PER_FRAME == 0:
 			await get_tree().process_frame
 	anim_sem.post()
 
