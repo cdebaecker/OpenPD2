@@ -2671,6 +2671,22 @@ target machine's ground armour) / 100.
   - a unit is picked (0x4E3230) and a slot (0x4E0450), and that unit is ordered;
   - "さらに、攻撃を加えますか？" (0x204) asks again until the candidate count is used up.
 
+**The pickers' rows** (`rules.cb_unit_refused` / `cb_slot_refused`, `Strike.*`; Emulated
+2026-11-16: verify_cb_pickers runs 0x4E3230 / 0x4E0450 with each row clicked, 1908 / 1908
+units and 3600 / 3600 slots at seeds 1 and 5; fixtures in the strike suite). A refused row
+keeps the list open.
+- **Units (0x4E3230):** a row is refused unless its group's +2 bits 6–7 are 0 and its
+  order is not 1 or 2. A unit in no group reads the bytes before the group table. The pick
+  answers the list's i‑th entry, counting the 0xFF entries that have no row.
+- **Slots (0x4E0450, against its third argument: 0 the fire point, else group arg − 1; the
+  counter‑battery passes its group + 1, the support request 0):** a slot is refused when:
+  - it is empty;
+  - the group is of type 5 or the launcher of kind 2, and it is out of range (10 × range
+    below the grid distance);
+  - with a group target, the kind doesn't fit the type (5: kind 1; 3 / 4: kind 2);
+  - the ground accuracy or ground attack is 0, without warhead 8;
+  - it has no rounds, or it is broken.
+
 Edge cases kept from the game:
 - an aimed unit already off the map is struck at (−1, −1); the port reads nothing there;
 - an entry row of 72 clears a byte past the occupancy layer, which the port skips.

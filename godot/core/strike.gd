@@ -225,6 +225,42 @@ static func support_request(w: Pd2World, u: int, hooks: SupportHooks) -> Variant
 	return orders
 
 
+## 0x4E3230's row for unit k (rules.cb_unit_refused; emulated): refused unless its group
+## (unit_group; -1 reads the bytes before the table) has +2 bits 6-7 = 0 and k's order (+6)
+## is not 1 or 2.
+static func cb_unit_refused(w: Pd2World, k: int) -> bool:
+	return Flight.gb(w, Ai.unit_group(w, k), 2) & 0xC0 != 0 or w.ub(k, 6) == 1 or w.ub(k, 6) == 2
+
+
+## 0x4E0450's row for slot s of unit u in group g against tg, the game's argument (0 the fire
+## point, else group tg - 1; rules.cb_slot_refused; emulated): an empty slot; type 5 or a
+## kind-2 launcher out of range (10 x range below the grid distance from g); with tg, a kind
+## not fitting g's type (5: kind 1, 3 / 4: kind 2); ground accuracy 0 or ground attack 0
+## without warhead 8; no rounds; a broken slot.
+static func cb_slot_refused(w: Pd2World, u: int, g: int, tg: int, s: int) -> bool:
+	var lid := w.launcher_id(u, s)
+	if lid == -1:
+		return true
+	var kind := w.launcher(lid, 8) >> 5
+	var gt := Flight.gb(w, g, 0x21) & 0xF0
+	var tx := w.fire_point.x
+	var ty := w.fire_point.y
+	if tg != 0:
+		tx = W.s8(Flight.gb(w, tg - 1, 0x16))
+		ty = W.s8(Flight.gb(w, tg - 1, 0x17))
+	if (gt == 0x50 or kind == 2) and (w.weapon_range(u, s) & 0xFF) * 10 < Ai.grid_distance(W.s8(Flight.gb(w, g, 0x16)), W.s8(Flight.gb(w, g, 0x17)), tx, ty):
+		return true
+	if tg != 0 and ((gt == 0x50 and kind != 1) or ((gt == 0x30 or gt == 0x40) and kind != 2)):
+		return true
+	var wh := w.warhead(u, s)
+	var acc := w.launcher(lid, 2)
+	if acc != 0xFF and acc == 0 and wh != 8:
+		return true
+	if Move.final_attack(w, u, s, false) & 0xFF == 0 and wh != 8:
+		return true
+	return w.slot_count(u, s) == 0 or w.slot_state(u, s) == 2
+
+
 static func gb(w: Pd2World, g: int, f: int) -> int:
 	return w.groups[35 * g + f]
 

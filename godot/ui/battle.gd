@@ -4700,7 +4700,7 @@ func cb_unit_rows(units: Array) -> Array:
 		var m := Flight.s8(w.ub(k, 0xC))
 		var args := [0xFF, GameData.call_sign(campaign, Flight.gb(w, g, 1)), given, family,
 				mn[m] if m >= 0 and m < mn.size() else "", cc, 100 - cond, sc, GameData.exe_text(campaign, state)]
-		rows.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": refused})
+		rows.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": Strike.cb_unit_refused(w, k)})
 	return rows
 
 
@@ -4771,7 +4771,8 @@ func cb_slot_rows(u: int, g: int, tg: int) -> Array:
 		var cells := text_cells(msg_raw(0x1C6), [0x40 if bad else 0xF0, str(ln.get(str(lid), "")), rc, rng_, ac, acs,
 				tc, atk, kc, _kind_char(kind), 0xFF, radius])
 		cells.append_array(text_cells(msg_raw(0x200), [str(an.get(str(a), "")), nc, cs, sc, stt]))
-		rows.append({"cells": cells, "refused": bad})
+		# (the game's argument: tg + 1, 0 for the fire point; the colours above are display)
+		rows.append({"cells": cells, "refused": Strike.cb_slot_refused(w, u, g, tg + 1 if tg >= 0 else 0, s)})
 	return rows
 
 
@@ -6254,9 +6255,20 @@ func _end_turn() -> void:
 	ai_thread.start(_ai_phase)
 
 
+func _autosave() -> void:
+	## mission_loop after the player's phase (command_loop's 0): __save__.dat by 0x4778D0 (the
+	## image with its CRC, which also goes into DS:0x50ADF3 / F4) and KEMURI__.DAT by
+	## mission_state(-1, 0) (0x484160: the F layer packed, the AI memory). Nothing reads them
+	## back; a failed write is the game's 0x10000 (not taken here: the engine goes on)
+	SaveFiles.write("__save__.dat", Title.write_save(w))
+	var size := Title.KEMURI_PD2 if w.campaign else Title.KEMURI_DASH
+	SaveFiles.write("KEMURI__.DAT", Title.kemuri_pack(w).slice(0, size))
+
+
 func _enemy_phase() -> Array:
 	## [the computer's result, its undefined units, the end code]: mission_loop leaves its
 	## turn loop when DS:0x50ADF2 is set after the turn script's stage 1 or stage 0
+	_autosave()
 	Turn.support_fire(w, 0)
 	_script_turn(1)
 	if w.ds8(0x50ADF2):
