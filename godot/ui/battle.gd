@@ -3945,8 +3945,11 @@ func height_map(d: int) -> void:
 		yb += 1
 		c += sc
 	gw.queue_redraw()
+	# the record's row (+0x24) = 0xE first: the '@' waits on the last row; then 0x0C clears the
+	# window to its background, and the relief is drawn over it (one DIB: not see-through)
+	gw._row = 0xE
+	gw._col = 0
 	await gw.print_text(GameData.exe_raw(campaign, 0x514780) if GameData.exe_raw(campaign, 0x514780) != "" else "@\u000c")
-	gw.transparent = true
 	var top := 0
 	var row := 0x68
 	xx = 0xE0
@@ -4035,6 +4038,10 @@ func height_map(d: int) -> void:
 		if not k40 > 1:
 			break
 	gw.queue_redraw()
+	# the record's row (+0x24) = 0xE before the print: the last of the 15 rows (+0x45 = 1 only
+	# repaints each print at once)
+	gw._row = 0xE
+	gw._col = 0
 	await gw.print_text(GameData.exe_text(campaign, 0x514784, [top]))
 	_close_window(gw)
 	busy = false
