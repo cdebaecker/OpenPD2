@@ -43,6 +43,11 @@ class T:
 	func r(f: int) -> int:
 		return w.ub(u, f)
 
+	## ai_progress (0x42B360), ENEMY THINK's bar (display); the game returns before it once stopped
+	func progress() -> void:
+		if not stopped():
+			Ai.progress()
+
 	func destroyed() -> bool:
 		return w.ub(u, 0) & 1 != 0
 
@@ -412,6 +417,7 @@ static func _b1(t: T) -> int:
 
 static func _b5(t: T) -> int:
 	t.reload()
+	t.progress()                              # ai_progress (all.c 77435)
 	var count := 0
 	var done := false
 	while true:
@@ -445,6 +451,7 @@ static func _b5(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 77549)
 	t.conceal()
 	t.reload()
 	t.support(-1)
@@ -454,6 +461,7 @@ static func _b5(t: T) -> int:
 static func _b6(t: T) -> int:
 	t.support(1)
 	t.reload()
+	t.progress()                              # ai_progress (all.c 77580)
 	var count := 0
 	var done := false
 	while true:
@@ -498,6 +506,7 @@ static func _b6(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 77773)
 	t.conceal()
 	t.reload()
 	t.support(-1)
@@ -507,6 +516,7 @@ static func _b6(t: T) -> int:
 static func _b7(t: T) -> int:
 	t.reload()
 	t.support(1)
+	t.progress()                              # ai_progress (all.c 77805)
 	var count := 0
 	var done := false
 	while true:
@@ -553,6 +563,7 @@ static func _b7(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 78011)
 	t.conceal()
 	t.reload()
 	t.support(-1)
@@ -567,6 +578,7 @@ static func _b3(t: T) -> int:
 	var count := 0
 	var done := false
 	while true:
+		t.progress()                          # ai_progress at each pass (all.c 76628)
 		if not t.search(0):
 			return 0
 		t.support(1)
@@ -631,6 +643,7 @@ static func _b3(t: T) -> int:
 static func _b4(t: T) -> int:
 	t.reload()
 	t.support(1)
+	t.progress()                              # ai_progress (all.c 76900)
 	var count := 0
 	var done := false
 	var seen4 := 0
@@ -693,6 +706,7 @@ static func _b4(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 77158)
 	t.conceal()
 	t.reload()
 	t.support(-1)
@@ -726,6 +740,7 @@ static func _b11(w: Pd2World, rng: Pd2Random, u: int, sight: PackedByteArray, ho
 static func _b8(t: T) -> int:
 	t.reload()
 	t.support(1)
+	t.progress()                              # ai_progress (all.c 77196)
 	var count := 0
 	var done := false
 	while true:
@@ -762,6 +777,7 @@ static func _b8(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 77408)
 	t.conceal()
 	t.reload()
 	t.support(-1)
@@ -795,6 +811,7 @@ static func _b10(t: T) -> int:
 		return 0
 	if any_spotted_player(t.w):
 		t.support(-1)
+	t.progress()                              # ai_progress (all.c 78050)
 	var count := 0
 	var res: Variant = t.stale      # the slot before its first write (null: called alone)
 	var done := t.u != 0
@@ -842,6 +859,7 @@ static func _b10(t: T) -> int:
 		count += 1
 		if done or count >= 3:
 			break
+		t.progress()                          # ai_progress after each pass (all.c 78234)
 	t.conceal()
 	t.reload()
 	t.support(-1)

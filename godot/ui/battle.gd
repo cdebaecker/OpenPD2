@@ -6175,7 +6175,11 @@ func _enemy_phase() -> Array:
 	Turn.clear_reacted_all(w)
 	hooks.flag = 0
 	var undefined := []
+	# ENEMY THINK's other ticks (ai_progress inside ai_move, the fields, the behaviours ...),
+	# deferred to the main thread as hooks.progress() is
+	Ai.progress_cb = func() -> void: call_deferred("_think", true)
 	var res := AiTurn.run(w, rng, hooks, w.ds8(0x50ADF1), false, undefined)
+	Ai.progress_cb = Callable()
 	Turn.support_fire(w, 3)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)

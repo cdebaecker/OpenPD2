@@ -22,6 +22,14 @@ const AI_MOVE_WEIGHTS := {
 }
 ## result of a function the game leaves undefined (rules.py returns None / raises AiUndefined)
 const UNDEFINED := -0x7FFFFFFF
+## ENEMY THINK's bar (display only): the battle sets it for the computer's turn; Ai.progress()
+## stands for each ai_progress (0x42B360) call outside ai_turn's own (AiHooks.progress).
+static var progress_cb := Callable()
+
+
+static func progress() -> void:
+	if progress_cb.is_valid():
+		progress_cb.call()
 
 
 static func in_view(w: Pd2World, x: int, y: int, side: int) -> int:   # 0x46F2D0
@@ -81,6 +89,7 @@ static func ai_nearest_unspotted(w: Pd2World, u: int) -> int:
 ## 0x42EA60: [result, x, y]
 static func ai_waypoint(w: Pd2World, rng: Pd2Random, u: int, dtype: int, alert := 0) -> Array:
 	var s := (w.ub(u, 4) & 15) + (8 if alert else 0)
+	progress()                                # ai_progress (all.c 74780)
 	var pts := []
 	for i in 4:
 		pts.append(Vector2i(w.terrain[848 + 8 * s + 2 * i], w.terrain[849 + 8 * s + 2 * i]))
@@ -98,6 +107,7 @@ static func ai_waypoint(w: Pd2World, rng: Pd2Random, u: int, dtype: int, alert :
 		var i := rng.r16(4)
 		while tried[i]:
 			i = rng.r16(4)
+		progress()                            # ai_progress per pick (all.c 74830)
 		var p: Vector2i = pts[i]
 		if not passable(w, cat, p.x, p.y) or not w.on_map(p.x, p.y) or p == dest:
 			tried[i] = true
@@ -290,6 +300,7 @@ static func ai_distance_field(w: Pd2World, u: int, dx: int, dy: int) -> Array:
 			break
 		var b: Array = buckets[level & 63]
 		if not b.is_empty():
+			progress()                        # ai_progress per non-empty bucket (all.c 75454)
 			empty = 0
 			while not b.is_empty():
 				var n: Vector2i = b.back()
@@ -425,6 +436,7 @@ static func ai_tactical_field(w: Pd2World, u: int, w_flag: int, w_area: int, w_c
 	var low := 5000
 	var has_o := not w.O.is_empty()
 	for y in range(1, 71):
+		progress()                            # ai_progress per row (all.c 75741)
 		for x in range(1, 71 - (y & 1)):
 			var i := x + MAP * y
 			var v := 4000 + _cdiv8(W.s8(w.terrain[S_COVER_ROWS + 16 * cls + w.terrain[w.T[i]]]) * w_cover)
@@ -525,6 +537,7 @@ static func ai_players_near(w: Pd2World, u: int) -> int:
 
 ## 0x430660 (move mode 5): melee an adjacent player unit.
 static func ai_charge(w: Pd2World, u: int, mm: Move.MoveMap, hooks: AiHooks) -> int:
+	progress()                                # ai_progress on entry (all.c 76059)
 	var up := w.pos(u)
 	var best := -1
 	var best_m := 100
@@ -571,6 +584,7 @@ static func ai_charge(w: Pd2World, u: int, mm: Move.MoveMap, hooks: AiHooks) -> 
 static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: PackedByteArray, hooks: AiHooks = null) -> int:
 	if hooks == null:
 		hooks = AiHooks.new()
+	progress()                                # ai_progress on entry (all.c 74972)
 	var up := w.pos(u)
 	var ux := up.x
 	var uy := up.y
@@ -611,6 +625,7 @@ static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: Packe
 		mm_mode = 1
 	else:
 		mm_mode = 2 if mm_mode == 3 else 1
+	progress()                                # all.c 75113
 	var ap := w.sb(u, 0xE)
 	var reserve := 0
 	if mm_mode == 0 and mode == 6 and rng.r16(100) < 50:
@@ -625,6 +640,7 @@ static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: Packe
 	if not Move.MODE_FACTOR.has(mm_mode):
 		return UNDEFINED
 	var mm := Move.move_map(w, u, mm_mode)
+	progress()                                # all.c 75144
 	var any_ := false
 	for v in mm.cells:
 		if v != 0 and v != 0xFF:
@@ -638,6 +654,7 @@ static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: Packe
 			return 0
 		if res:
 			return res
+	progress()                                # all.c 75164
 	var df := ai_distance_field(w, u, dx, dy)
 	if df[0]:
 		return df[0]
@@ -651,6 +668,7 @@ static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: Packe
 		w_k0 = 6
 		flag = W.hexdist(ux, uy, dx, dy) / 2
 		run_in = 1
+	progress()                                # all.c 75189
 	var tact := ai_tactical_field(w, u, w_flag, w_area, w_cover, w_k1, w_k0, dx, dy, field, sight)
 	var threat := ai_threat_direction(w, u)
 	var best := 0x7FFE
@@ -663,6 +681,7 @@ static func ai_move(w: Pd2World, rng: Pd2Random, mode: int, u: int, sight: Packe
 	var alt_y := -1
 	var near := 1
 	for ly in mm.h:
+		progress()                            # ai_progress per move-map row (all.c 75212)
 		for lx in mm.w:
 			var c := W.s8(mm.at(lx, ly))
 			var cx := mm.x0 + lx
@@ -892,6 +911,7 @@ static func ai_engage(w: Pd2World, rng: Pd2Random, u: int, radius: int, threshol
 	if not ai_any_player(w):
 		return 0
 	var shots := 0
+	progress()                                # ai_progress before the loop (all.c 74011)
 	while true:
 		var ind := ai_pick_indirect(w, rng, u, radius)
 		var dir := ai_pick_direct(w, rng, u, radius)
@@ -927,6 +947,7 @@ static func ai_engage(w: Pd2World, rng: Pd2Random, u: int, radius: int, threshol
 		shots += 1
 		if shots > max_shots:
 			return 1
+		progress()                            # ai_progress after each shot (all.c 74098)
 	return 1
 
 

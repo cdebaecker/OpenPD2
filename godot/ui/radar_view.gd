@@ -213,13 +213,35 @@ func _pick_input(ev: InputEvent) -> bool:
 				_answer(r)            # the release on the region pressed (0x202)
 		elif ev.pressed:
 			var c := cell_at(ev.position)
-			if c.x != -1 and c != fire_cell:
-				_answer(c)
+			if c.x != -1 and c != fire_cell and _blink_k < 0:
+				_blink(c)
 	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed:
 		if pick == "cell":
 			_answer(null)             # 0x204: 0 (the area map asks a row again)
 		# (a right click on the regions: -2, which 0x43A570 ignores)
 	return true
+
+
+var _blink_c := Vector2i(-1, -1)
+var _blink_k := -1
+
+
+func _blink(c: Vector2i) -> void:
+	## 0x440670 after a cell's click (0x4409B4): its hover fill off, then for k = 0 .. 15
+	## (a 17 ms wait before each odd k) a 1 px frame inset by k XORed in colour 7 while k <
+	## 12, the one inset by k - 4 XORed off: squares shrinking with a trail of four; then
+	## the cell is the answer
+	_hover_c = Vector2i(-1, -1)
+	_blink_c = c
+	for k in 16:
+		if k % 2 == 1:
+			var end := Time.get_ticks_msec() + 0x11
+			while Time.get_ticks_msec() <= end:
+				await get_tree().process_frame
+		_blink_k = k
+		queue_redraw()
+	_blink_k = -1
+	_answer(c)
 
 
 func _answer(v: Variant) -> void:
@@ -245,6 +267,14 @@ func _draw_pick() -> void:
 		else:
 			var ry := 0x1A + 0x12 * _hover_r
 			_xor([[400, ry, 400 + 95, ry + 0xB, 1]], 15)
+	elif pick == "cell" and _blink_k >= 0:
+		var bx := _blink_c.x * 0x18 + 9
+		var by := _blink_c.y * 0x18 + 0x21
+		var ops := []
+		for j in range(maxi(0, _blink_k - 3), mini(11, _blink_k) + 1):
+			ops.append([bx + j, by + j, bx + 0x16 - j, by + 0x16 - j, 1])
+		if not ops.is_empty():
+			_xor(ops, 7)
 	elif pick == "cell" and _hover_c.x != -1:
 		var cx := _hover_c.x * 0x18 + 9
 		var cy := _hover_c.y * 0x18 + 0x21
