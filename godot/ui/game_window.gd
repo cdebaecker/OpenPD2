@@ -373,6 +373,235 @@ func blit(path: String, x: int, y: int, mirror := false) -> Vector2i:
 	return Vector2i(b[0], b[1])
 
 
+var overlays: Array = []      # [x0, y0, x1, y1, text, px]: translated labels over a picture's words
+
+
+func overlay_label(x0: int, y0: int, x1: int, y1: int, text: String, fill: int, px := 12, col := Color.BLACK) -> void:
+	## engine-side (not the game's): a picture's Japanese words (x0, y0)-(x1, y1) covered
+	## with its face colour (the picture's index fill) and the translation drawn centred
+	## in black, ＭＳ ゴシック bold of px (smaller when it would not fit)
+	for yy in range(y0, y1 + 1):
+		for xx in range(x0, x1 + 1):
+			if xx >= 0 and yy >= 0 and xx < _w and yy < _h:
+				_buf[yy * _w + xx] = 0
+				_raw[yy * _w + xx] = fill
+	overlays.append([x0, y0, x1, y1, text, px, col])
+	_dirty = true
+	queue_redraw()
+
+
+func overlay_word(x0: int, y0: int, x1: int, y1: int, inks: Array, text: String, col: Color, px := 12) -> void:
+	## engine-side: a picture's Japanese word erased, then the translation drawn centred in
+	## col. The background is the colours of the 1 px ring around (x0, y0)-(x1, y1); inside,
+	## every other pixel (the ink and its shading; inks too) takes the commonest background
+	## colour of its row, so striped faces stay striped
+	var ring := {}
+	for xx in range(x0 - 1, x1 + 2):
+		for yy in [y0 - 1, y1 + 1]:
+			if xx >= 0 and yy >= 0 and xx < _w and yy < _h:
+				ring[_raw[yy * _w + xx]] = true
+	for yy in range(y0 - 1, y1 + 2):
+		for xx in [x0 - 1, x1 + 1]:
+			if xx >= 0 and yy >= 0 and xx < _w and yy < _h:
+				ring[_raw[yy * _w + xx]] = true
+	for v in inks:
+		ring.erase(v)
+	for yy in range(maxi(y0, 0), mini(y1 + 1, _h)):
+		var counts := {}
+		for xx in range(maxi(x0, 0), mini(x1 + 1, _w)):
+			var v := _raw[yy * _w + xx]
+			if ring.has(v):
+				counts[v] = counts.get(v, 0) + 1
+		var bg := -1
+		var best := -1
+		for v in counts:
+			if counts[v] > best:
+				best = counts[v]
+				bg = v
+		if bg < 0:
+			for v in ring:
+				bg = v
+				break
+		if bg < 0:
+			continue
+		for xx in range(maxi(x0, 0), mini(x1 + 1, _w)):
+			if not ring.has(_raw[yy * _w + xx]):
+				_raw[yy * _w + xx] = bg
+	overlays.append([x0, y0, x1, y1, text, px, col])
+	_dirty = true
+	queue_redraw()
+
+
+## Pictures' Japanese words (engine-side translations, outside Japanese): by picture, its
+## words as [x0, y0, x1, y1 (the ink's box in the picture), ink indices, ui.csv key, text
+## colour]. Measured from the import's pictures (notes/picture-words.md).
+const PICTURE_WORDS := {
+	"hensei_g": [[20, 106, 83, 117, [234], "UI_SORTIE_LISTS", Color8(215, 186, 143)],
+		[110, 106, 189, 117, [234], "UI_SORTIE_REARM_ALL", Color8(215, 186, 143)],
+		[10, 122, 50, 136, [146, 139, 128], "UI_SORTIE_ARMS", Color.WHITE],
+		[56, 122, 96, 136, [146, 139, 128], "UI_SORTIE_PILOT", Color.WHITE],
+		[110, 122, 150, 136, [146, 139, 128], "UI_SORTIE_GROUND", Color.WHITE],
+		[156, 122, 196, 136, [146, 139, 128], "UI_SORTIE_AIR", Color.WHITE],
+		[32, 146, 84, 157, [146, 139], "UI_SORTIE_DROP", Color.WHITE],
+		[128, 146, 152, 158, [146, 139], "UI_SORTIE_FORM", Color.WHITE],
+		[161, 146, 186, 158, [146, 139], "UI_SORTIE_TRANS", Color.WHITE],
+		[32, 198, 108, 209, [146, 139], "UI_SORTIE_VEHICLES", Color.WHITE],
+		[128, 198, 152, 210, [146, 139], "UI_SORTIE_FORM", Color.WHITE],
+		[161, 198, 186, 210, [146, 139], "UI_SORTIE_TRANS", Color.WHITE],
+		[32, 250, 109, 261, [146, 139], "UI_SORTIE_AIR_SUPPORT", Color.WHITE],
+		[128, 250, 152, 262, [146, 139], "UI_SORTIE_FORM", Color.WHITE],
+		[160, 250, 183, 262, [146, 139], "UI_SORTIE_CAPACITY", Color.WHITE],
+		[6, 383, 48, 396, [245, 128, 121, 202], "UI_SORTIE_SYSTEM", Color.BLACK],
+		[55, 382, 99, 397, [245, 128, 121, 202], "UI_SORTIE_BRIEF", Color.BLACK],
+		[107, 382, 150, 397, [245, 128, 121, 202], "UI_SORTIE_PLAN", Color.BLACK],
+		[157, 382, 201, 397, [245, 128, 121, 202], "UI_SORTIE_START", Color.BLACK]],
+	"busou_b": [[7, 379, 74, 393, [245, 128, 121], "UI_EQUIP_CREW", Color.BLACK],
+		[86, 379, 153, 393, [245, 128, 121], "UI_EQUIP_MACHINE", Color.BLACK]],
+	"busou_g0": [[206, 349, 272, 360, [245, 128, 121], "UI_EQUIP_CHANGE", Color.BLACK],
+		[206, 365, 272, 376, [245, 128, 121], "UI_EQUIP_UNEQUIP", Color.BLACK],
+		[204, 381, 236, 392, [245, 128, 121], "UI_EQUIP_OK", Color.BLACK],
+		[243, 381, 273, 392, [245, 128, 121], "UI_EQUIP_CANCEL", Color.BLACK]],
+	"busou_g1": [[384, 246, 447, 257, [245, 128, 121], "UI_EQUIP_CHANGE", Color.BLACK],
+		[384, 266, 447, 277, [245, 128, 121], "UI_EQUIP_UNEQUIP", Color.BLACK],
+		[400, 334, 432, 345, [245, 128, 121], "UI_EQUIP_OK", Color.BLACK],
+		[401, 354, 431, 365, [245, 128, 121], "UI_EQUIP_CANCEL", Color.BLACK]],
+	"busou_g2": [[163, 345, 229, 356, [245, 128, 121], "UI_EQUIP_CHANGE", Color.BLACK],
+		[251, 345, 317, 356, [245, 128, 121], "UI_EQUIP_UNEQUIP", Color.BLACK],
+		[180, 369, 212, 380, [245, 128, 121], "UI_EQUIP_OK", Color.BLACK],
+		[269, 369, 299, 380, [245, 128, 121], "UI_EQUIP_CANCEL", Color.BLACK]],
+	"plan_g": [[387, 347, 450, 359, [245, 26], "UI_PLAN_SITUATION", Color.BLACK],
+		[459, 347, 523, 359, [245, 26], "UI_PLAN_OBJECTIVE", Color.BLACK],
+		[387, 367, 450, 379, [245, 26], "UI_PLAN_ENEMY", Color.BLACK],
+		[459, 367, 523, 379, [245, 26], "UI_PLAN_FRIENDLY", Color.BLACK],
+		[447, 271, 512, 283, [245, 26], "UI_PLAN_PLAN", Color.BLACK],
+		[459, 327, 523, 339, [245, 26], "UI_PLAN_CONFIRM", Color.BLACK],
+		[568, 358, 597, 372, [245, 26], "UI_PLAN_SORTIE", Color.BLACK],
+		[555, 283, 628, 295, [245, 26], "UI_PLAN_HEIGHT", Color.BLACK]],
+	"plan_gc": [[11, 107, 74, 119, [245, 26], "UI_PLAN_SITUATION", Color.BLACK],
+		[83, 107, 147, 119, [245, 26], "UI_PLAN_OBJECTIVE", Color.BLACK],
+		[11, 127, 74, 139, [245, 26], "UI_PLAN_ENEMY", Color.BLACK],
+		[83, 127, 147, 139, [245, 26], "UI_PLAN_FRIENDLY", Color.BLACK],
+		[71, 31, 136, 43, [245, 26], "UI_PLAN_PLAN", Color.BLACK],
+		[83, 87, 147, 99, [245, 26], "UI_PLAN_CONFIRM", Color.BLACK],
+		[192, 118, 221, 132, [245, 26], "UI_PLAN_SORTIE", Color.BLACK],
+		[179, 43, 252, 55, [245, 26], "UI_PLAN_HEIGHT", Color.BLACK]],
+	"plan_gb": [[28, 86, 91, 97, [214], "UI_PLAN_NOTES", Color8(247, 193, 131)],
+		[202, 86, 236, 95, [139, 92], "UI_PLAN_DECIDE", Color8(220, 220, 220)]],
+	"amap": [[359, 235, 424, 246, [245], "UI_PLAN_CLOSE", Color.BLACK]],
+}
+
+
+static func picture_image(path: String, pic: String) -> Image:
+	## a picture as an Image with its words (PICTURE_WORDS[pic]) erased as overlay_word
+	## does, for the views that draw pictures as textures; null when it does not read
+	var b: Array = TitleView.read_bmp(path)
+	if b.is_empty():
+		return null
+	var wd: int = b[0]
+	var ht: int = b[1]
+	var px: PackedByteArray = b[2]
+	var pal: PackedByteArray = b[3]
+	if GameData.language != "ja":
+		for e in PICTURE_WORDS.get(pic, []):
+			_erase_word(px, wd, ht, e[0], e[1], e[2], e[3], e[4])
+	var rgb := PackedByteArray()
+	rgb.resize(wd * ht * 3)
+	for i in wd * ht:
+		var v := px[i]
+		rgb[3 * i] = pal[3 * v]
+		rgb[3 * i + 1] = pal[3 * v + 1]
+		rgb[3 * i + 2] = pal[3 * v + 2]
+	return Image.create_from_data(wd, ht, false, Image.FORMAT_RGB8, rgb)
+
+
+static func _erase_word(px: PackedByteArray, wd: int, ht: int, x0: int, y0: int, x1: int, y1: int, inks: Array) -> void:
+	var ring := {}
+	for xx in range(x0 - 1, x1 + 2):
+		for yy in [y0 - 1, y1 + 1]:
+			if xx >= 0 and yy >= 0 and xx < wd and yy < ht:
+				ring[px[yy * wd + xx]] = true
+	for yy in range(y0 - 1, y1 + 2):
+		for xx in [x0 - 1, x1 + 1]:
+			if xx >= 0 and yy >= 0 and xx < wd and yy < ht:
+				ring[px[yy * wd + xx]] = true
+	for v in inks:
+		ring.erase(v)
+	for yy in range(maxi(y0, 0), mini(y1 + 1, ht)):
+		var counts := {}
+		for xx in range(maxi(x0, 0), mini(x1 + 1, wd)):
+			var v := px[yy * wd + xx]
+			if ring.has(v):
+				counts[v] = counts.get(v, 0) + 1
+		var bg := -1
+		var best := -1
+		for v in counts:
+			if counts[v] > best:
+				best = counts[v]
+				bg = v
+		if bg < 0:
+			for v in ring:
+				bg = v
+				break
+		if bg < 0:
+			continue
+		for xx in range(maxi(x0, 0), mini(x1 + 1, wd)):
+			if not ring.has(px[yy * wd + xx]):
+				px[yy * wd + xx] = bg
+
+
+static func draw_picture_words(ci: CanvasItem, pic: String, at: Vector2) -> void:
+	## the translations of pic's words where pic is drawn at `at` (outside Japanese)
+	if GameData.language == "ja":
+		return
+	for e in PICTURE_WORDS.get(pic, []):
+		var t := GameData.ui_text(e[5])
+		if t != e[5]:
+			draw_label(ci, at.x + e[0], at.y + e[1], at.x + e[2], at.y + e[3], t, 12, e[6])
+
+
+static func draw_label(ci: CanvasItem, x0: float, y0: float, x1: float, y1: float, t: String, px: int, col: Color) -> void:
+	## a translated label centred in (x0, y0)-(x1, y1), ＭＳ ゴシック bold, smaller to fit
+	var wd := x1 - x0 + 1
+	var f := font(px, true)
+	while px > 8 and f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x > wd:
+		px -= 1
+	var sz := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, px)
+	var x := x0 + floorf((wd - sz.x) / 2)
+	var y := y0 + floorf((y1 - y0 + 1 - px) / 2) + f.get_ascent(px)
+	ci.draw_string(f, Vector2(x, y), t, HORIZONTAL_ALIGNMENT_LEFT, -1, px, col)
+
+
+func translate_picture(pic: String, ox: int, oy: int) -> void:
+	## the picture's words (PICTURE_WORDS) at its place (ox, oy) in the window, outside
+	## Japanese
+	if GameData.language == "ja":
+		return
+	for e in PICTURE_WORDS.get(pic, []):
+		var t := GameData.ui_text(e[5])
+		if t != e[5]:
+			overlay_word(ox + e[0], oy + e[1], ox + e[2], oy + e[3], e[4], t, e[6], 12)
+
+
+func _draw_overlays() -> void:
+	for o in overlays:
+		var t: String = o[4]
+		var px: int = o[5]
+		if px == 8:
+			# the 8 px font (FONT_ANK.DAT), as the windows' 8 px text
+			var x8 := int(o[0]) + (int(o[2]) - int(o[0]) + 1 - 8 * t.length()) / 2
+			for i in t.length():
+				_ank_char(x8 + 8 * i, int(o[1]) + (int(o[3]) - int(o[1]) + 1 - 8) / 2, ank_code(t[i]), o[6], false)
+			continue
+		var wd: int = int(o[2]) - int(o[0]) + 1
+		var f := font(px, true)
+		while px > 8 and f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x > wd:
+			px -= 1
+		var sz := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, px)
+		var x := int(o[0]) + int((wd - sz.x) / 2)
+		var y := int(o[1]) + int((int(o[3]) - int(o[1]) + 1 - px) / 2) + int(f.get_ascent(px))
+		draw_string(f, Vector2(x, y), t, HORIZONTAL_ALIGNMENT_LEFT, -1, px, o[6])
+
+
 func xor_rect(x0: int, y0: int, x1: int, y1: int, c: int, type: int) -> void:
 	## 0x46C370 mode 4 on the window (a damaged part, 0x467520)
 	_rect(x0, y0, x1, y1, 4, c, type)
@@ -754,6 +983,8 @@ func _draw() -> void:
 					continue
 				_draw_char(x, _hh + 8 + 16 * i, ch, ic, 16)
 				x += 8 if half_width(ch) else 16
+	if not overlays.is_empty():
+		_draw_overlays()
 
 
 func _draw_char(x: int, y: int, ch: String, c: int, h := -1) -> void:

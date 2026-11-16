@@ -77,6 +77,7 @@ func refresh() -> void:
 	_buf.fill(0)
 	_raw.fill(0)
 	blit(GameData.ROOT + "/images/hex_g/00.bmp", 0, 0)
+	_translate_buttons()
 	for s in _subs:
 		s.queue_free()
 	_subs = []
@@ -90,6 +91,34 @@ func refresh() -> void:
 	minimap()
 	_dirty = true
 	queue_redraw()
+
+
+## hex_g.pac's button words (in its pixels: the black text's box on the face, index 139)
+## and their translations (ui.csv), drawn over them outside Japanese (engine-side)
+const BUTTON_WORDS := [[0x98 + 2, 0xE8 + 2, 199 - 2, 0xFB - 2, "UI_PANEL_UNITS"],
+	[0x98 + 2, 0xFC + 2, 199 - 2, 0x10F - 2, "UI_PANEL_ARMS"],
+	[0x98 + 2, 0x110 + 2, 199 - 2, 0x123 - 2, "UI_PANEL_MAP"],
+	[0x98 + 2, 0x124 + 2, 199 - 2, 0x137 - 2, "UI_PANEL_WITHDRAW"],
+	[0x98 + 2, 0x138 + 2, 199 - 2, 0x14B - 2, "UI_PANEL_ABORT"],
+	[0x98 + 2, 0x14C + 2, 199 - 2, 0x15F - 2, "UI_PANEL_ALL"],
+	[0x98 + 2, 0x160 + 2, 199 - 2, 0x173 - 2, "UI_PANEL_END"],
+	[0x88 + 2, 0x178 + 2, 199 - 2, 0x18B - 2, "UI_PANEL_ORDERS"],
+	[0x49 + 2, 0x178 + 2, 0x87 - 2, 0x18B - 2, "UI_PANEL_SYSTEM"]]
+
+
+func _translate_buttons() -> void:
+	overlays = []
+	if GameData.language == "ja":
+		return
+	for b in BUTTON_WORDS:
+		var t := GameData.ui_text(b[4])
+		if t != b[4]:
+			overlay_label(b[0], b[1], b[2], b[3], t, 139, 12)
+	# the hover read-outs' labels 高度 / 地形 (8 px, white on black), left of their values
+	for b in [[8, 0x184, 0x17, 0x18B, "UI_PANEL_HEIGHT"], [0x28, 0x184, 0x37, 0x18B, "UI_PANEL_COVER"]]:
+		var t := GameData.ui_text(b[4])
+		if t != b[4]:
+			overlay_label(b[0], b[1], b[2], b[3], t, 0, 8, Color.WHITE)
 
 
 static func _time(t: int, d: int) -> String:

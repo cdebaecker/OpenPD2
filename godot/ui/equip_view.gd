@@ -91,8 +91,11 @@ func refresh() -> void:
 	_layout()
 	var w: Pd2World = battle.w
 	var root: String = GameData.ROOT
+	overlays = []
 	blit("%s/images/busou_g%d/00.bmp" % [root, layout], 0xA0, 0)
+	translate_picture("busou_g%d" % layout, 0xA0, 0)
 	blit(root + "/images/busou_b/00.bmp", 0, 0)
+	translate_picture("busou_b", 0, 0)
 	blit("%s/images/chara/%02d.bmp" % [root, Flight.s8(w.cb(k, 1))], 0, 0)
 	var m := Flight.s8(w.ub(k, 0xC))
 	if m != -1:

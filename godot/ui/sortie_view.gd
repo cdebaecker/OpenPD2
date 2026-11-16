@@ -112,7 +112,9 @@ func refresh() -> void:
 	_layout()
 	var w: Pd2World = battle.w
 	var root: String = GameData.ROOT
+	overlays = []
 	blit(root + "/images/hensei_g/00.bmp", (2 - page) * 0xD8, 0)
+	translate_picture("hensei_g", (2 - page) * 0xD8, 0)
 	# the side windows, cleared with their patterns (drawn here: the cards' faces go over them)
 	match page:
 		0:

@@ -78,8 +78,16 @@ func _xor(ops: Array, c: int) -> void:
 
 
 func tex(path: String) -> Texture2D:
+	## (a picture with words, GameWindow.PICTURE_WORDS by its folder, comes with them erased
+	## outside Japanese: the translations are drawn over it)
 	if not _tex.has(path):
-		var img := Image.load_from_file(path) if FileAccess.file_exists(path) else null
+		var pic := path.get_base_dir().get_file()
+		var img: Image = null
+		var gw_script = load("res://ui/game_window.gd")     # (run time: -s tools compile this first)
+		if gw_script.PICTURE_WORDS.has(pic):
+			img = gw_script.picture_image(path, pic)
+		elif FileAccess.file_exists(path):
+			img = Image.load_from_file(path)
 		_tex[path] = ImageTexture.create_from_image(img) if img else null
 	return _tex[path]
 
@@ -166,6 +174,7 @@ func _draw() -> void:
 	var bg := tex(root + "/images/plan_g/00.bmp")
 	if bg:
 		draw_texture(bg, Vector2.ZERO)
+		load("res://ui/game_window.gd").draw_picture_words(self, "plan_g", Vector2.ZERO)
 	var camp: String = battle.campaign if battle else "dash"
 	var sm := tex("%s/%s/images/smap/%02d.bmp" % [root, camp, chunk - 1])
 	if sm:
@@ -175,6 +184,7 @@ func _draw() -> void:
 		var o := tex(root + ("/images/plan_gb/00.bmp" if orders == "open" else "/images/plan_gc/00.bmp"))
 		if o:
 			draw_texture(o, Vector2(0x178, 0xF0))
+			load("res://ui/game_window.gd").draw_picture_words(self, "plan_gb" if orders == "open" else "plan_gc", Vector2(0x178, 0xF0))
 	for v in views:
 		match v[0]:
 			"win":
@@ -214,6 +224,7 @@ func _draw() -> void:
 		var am := tex("%s/%s/images/amap/%02d.bmp" % [root, camp, (chunk - 1) * 4 + maps_i])
 		if am:
 			draw_texture(am, Vector2(0x30, 0x48))
+			load("res://ui/game_window.gd").draw_picture_words(self, "amap", Vector2(0x30, 0x48))
 	for f in order_fills:
 		draw_rect(f, fill_col)
 	if cell_frame != null:
