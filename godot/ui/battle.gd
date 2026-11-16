@@ -3860,11 +3860,16 @@ func _hm_c(x: int, y: int) -> int:
 	return w.terrain[256 + w.layer(w.T, x, y)] & 15 if w.terrain.size() >= 512 else 0
 
 
-func _hm_odd(x: int, y: int) -> void:
-	## a height below 0x14: the game's notes "%d %dの高さが変" (DS:0x514740 .. 0x514770, by
-	## ui_message_line / 0x4521C0) go to the log
+func _hm_odd(x: int, y: int, red := false) -> void:
+	## a height below 0x14: the game's note "%d %dの高さが変" as a message line, red (0x4521C0,
+	## DS:0x514740 / 0x514750) at a profile's first hex, plain (ui_message_line, 0x514760 /
+	## 0x514770) in the relief. The game passes one number (the second %d reads its stack);
+	## the engine prints both coordinates
 	if _hm_raw(x, y) < 0x14:
-		say(GameData.exe_text(campaign, 0x514740, [x, y]))
+		var t := GameData.exe_text(campaign, 0x514740, [x, y])
+		say(t)
+		if not auto_react:
+			show_line(t, red)
 
 
 func height_map(d: int) -> void:
@@ -3899,9 +3904,9 @@ func height_map(d: int) -> void:
 	var a := a0
 	while a != a1:
 		if odd == 0:
-			_hm_odd(a, sb + b0)
+			_hm_odd(a, sb + b0, true)
 		else:
-			_hm_odd(b0 + sb, a)
+			_hm_odd(b0 + sb, a, true)
 		var h0 := _hm_h(a, sb + b0) if odd == 0 else _hm_h(b0 + sb, a)
 		var x := xx
 		var y := yb
@@ -4942,7 +4947,9 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 		# 0x1AD shows the AP needed, the AP left and the distance (cmd_fire 0x4262DF); 0x1AC none
 		var up := w.pos(u)
 		var args := [cost, w.sb(u, 0xE), Pd2World.hexdist(up.x, up.y, h.x, h.y)] if check[1] == 0x1AD else []
-		_confirm(msg(check[1], args), _do_fire.bind(u, fmode, h))
+		_confirm(msg(check[1], args), _do_fire.bind(u, fmode, h), -1, func():
+			if fire_list:
+				_fire_range_list())             # the loop goes on: its list again (cmd_fire)
 		return
 	_do_fire(u, fmode, h)
 
@@ -5069,12 +5076,16 @@ func _fire_done(u: int, before: Dictionary) -> void:
 	if not hit:
 		say("%s fires: no hit." % unit_name(u))
 	_after_command()
+	# cmd_fire's target loop goes on while the AP, the rounds and the unit last: option
+	# 0x2000's list comes before each of its clicks
+	if fire_list and mode in FIRE_MODES and selected == u and w.active(u) and w.slot_count(u, slot) > 0 			and w.sb(u, 0xE) >= Move.fire_ap(w, u, slot, FIRE_MODES[mode]):
+		_fire_range_list()
 
 
-func _confirm(text: String, then: Callable, box_kind := -1) -> void:
+func _confirm(text: String, then: Callable, box_kind := -1, otherwise := Callable()) -> void:
 	## a question on the main thread: the prompt at the cursor (its choices from the
 	## message, 0 = the first), or with box_kind a message box (BOX_LABELS); then runs on
-	## the first answer
+	## the first answer, otherwise (when given) on the others
 	var gw: GameWindow
 	if box_kind < 0:
 		gw = open_prompt(text)
@@ -5084,7 +5095,9 @@ func _confirm(text: String, then: Callable, box_kind := -1) -> void:
 	gw.chosen.connect(func(v: int):
 		_close_window(gw)
 		if v == 0:
-			then.call())
+			then.call()
+		elif otherwise.is_valid():
+			otherwise.call())
 
 
 # --- the game's windows (ui/game_window.gd), in the main window's 640 x 400 ------------
