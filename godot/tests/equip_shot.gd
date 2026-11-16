@@ -29,6 +29,17 @@ func _init() -> void:
 			if args[3] == "armour" and b.w.cb(c, 3) == 0 and m >= 0 and b.w.machine(m, 0) & 15 != 0 and b.w.cb(c, 2) == 0:
 				k = c
 				break
+		if k == -1 and args[3] == "armour":
+			# (none in this mission: the first ground pilot given the first armoured machine,
+			# for the picture only)
+			for c in 64:
+				if b.w.cb(c, 3) == 0 and b.w.cb(c, 2) == 0 and Flight.s8(b.w.ub(c, 0xC)) >= 0:
+					for m in 32:
+						if b.w.machine(m, 0) & 15 != 0:
+							b.w.units[c * Pd2World.UNIT + 0xC] = m
+							k = c
+							break
+					break
 		print("unit ", k)
 	else:
 		k = Flight.gb(b.w, int(args[3]), 6)

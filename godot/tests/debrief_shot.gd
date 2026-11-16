@@ -26,6 +26,11 @@ func _init() -> void:
 		v.screens = [["ending", []]]
 		b._win_root().add_child(v)
 		v.play()
+		# (the cards fade in: wait for a window, then for the fade)
+		for i in 900:
+			await process_frame
+			if v.get_children().any(func(c): return c.get("_waiting") != null) and v._bright >= 1.0:
+				break
 		for i in 30:
 			await process_frame
 		await RenderingServer.frame_post_draw
@@ -41,16 +46,30 @@ func _init() -> void:
 		b._win_root().add_child(v)
 		v.play()
 		var clicks := int(args[4]) if args.size() > 4 else 0
+		# (each step waits for the next window: a note waiting for its click, or a list)
+		var ready := func() -> bool:
+			for c in v.get_children():
+				if c.get("_waiting") != null and (c._waiting or c.role == "debrief_list"):
+					return true
+			return false
 		for k in clicks:
-			for i in 90:
+			for i in 900:
 				await process_frame
+				if ready.call():
+					break
 			for c in v.get_children():
 				if c.has_method("outside"):
 					if c._waiting:
 						c.outside(MOUSE_BUTTON_LEFT)
 					elif c.role == "debrief_list":
 						c.chosen.emit(-2)
-		for i in 90:
+			for i in 10:
+				await process_frame
+		for i in 900:
+			await process_frame
+			if ready.call():
+				break
+		for i in 20:
 			await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_viewport().get_texture().get_image().save_png("%s_%s%d.png" % [args[1], args[3], clicks])
