@@ -31,6 +31,8 @@ signal _go
 const SCROLL_SHOWN := 10      # 0x40C090: 12 - 2 (DS:0x50C9F8 = 0)
 
 var cols := 20
+var wrap_cols := -1        # (engine-side) the letters a line holds when not cols: a 12 px window
+                           # widened for a translation (its letters step 6 px, its columns 8)
 var rows := 1
 var lh := 16
 var framed := true
@@ -487,7 +489,7 @@ const PICTURE_WORDS := {
 		[179, 43, 252, 55, [245, 26], "UI_PLAN_HEIGHT", Color.BLACK]],
 	"plan_gb": [[28, 86, 91, 97, [214], "UI_PLAN_NOTES", Color8(247, 193, 131)],
 		[202, 86, 236, 95, [139, 92], "UI_PLAN_DECIDE", Color8(220, 220, 220)]],
-	"amap": [[359, 235, 424, 246, [245], "UI_PLAN_CLOSE", Color.BLACK]],
+	"amap": [[357, 234, 426, 246, [245, 139, 195], "UI_PLAN_CLOSE", Color.BLACK]],
 }
 
 
@@ -725,6 +727,8 @@ static func fit(t: String, c: int) -> String:
 			continue
 		var last := 0
 		for m in cut.search_all(line):
+			if m.get_start() == 0:
+				continue                # (the line's own indent, not a break)
 			src.append(line.substr(last, m.get_start() - last))
 			last = m.get_end()
 		src.append(line.substr(last))
@@ -732,15 +736,20 @@ static func fit(t: String, c: int) -> String:
 		if line.find(" ") == -1 or text_cols(line) <= c:
 			out.append(line)
 			continue
+		# (the line's indent kept on each of its lines, when it leaves room)
+		var body := line.lstrip(" ")
+		var ind := " ".repeat(line.length() - body.length())
+		if ind.length() * 2 > c:
+			ind = ""
 		var cur := ""
-		for word in line.split(" "):
+		for word in body.split(" "):
 			var cand: String = word if cur == "" else cur + " " + word
-			if cur != "" and text_cols(cand) > c:
-				out.append(cur)
+			if cur != "" and text_cols(ind + cand) > c:
+				out.append(ind + cur)
 				cur = word
 			else:
 				cur = cand
-		out.append(cur)
+		out.append(ind + cur)
 	return "\n".join(out)
 
 
@@ -792,7 +801,7 @@ func print_text(t: String) -> void:
 				await _wait()
 			_:
 				var two := not half_width(ch)
-				if _col + (2 if two else 1) > cols:
+				if _col + (2 if two else 1) > (wrap_cols if wrap_cols > 0 else cols):
 					if _newline():
 						await _wait()
 						clear()

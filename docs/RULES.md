@@ -2579,7 +2579,24 @@ below 0xC — so its column 12 sorts again each time —, the item list below 7)
 Emulated with the stock, reg_unit.dat and other members' loadouts varied: 794 / 794 runs
 (6 skipped: 5 where a −1 machine's stock is the save header's last byte, outside the
 model; 1 where every scripted close was answered no and the screen stayed open).
-Not ported: a Ctrl + Alt debug key (0x4595F0).
+- **The debug menu** (0x4595F0: region 18, the ground layout's (0, 0)–(7, 0) strip at the
+  screen's top-left corner, pressed with Ctrl and Alt held: GetKeyState(0x11) / (0x12); `rules.debug_menu`, `Equipment.debug_menu`): a cheat editor
+  the shipped game kept. A list 隊員 / 兵器 / 武器 / 備品 (DS:0x5158FC..; 0x452A10 at (0, 0)),
+  then:
+  - **Crews** (0x459750): the crews with +2 = 0 and +4 not 0xF, each with its step and its
+    combat record (crew +15: the kills PLD / TNK / TRK / FLY, shots, hits). A pick asks
+    復帰 when +6 bits 0–1 are set (yes: cleared), 技能 (yes: +8 bits 0–3 set), and 登場 when
+    the step DS:0x50AD92 (signed) is below +4 (yes: +4 = 0, then a note).
+  - **Machines / launchers / rounds** (0x459CA0 / 0x45A020 / 0x45A390): the records whose
+    unused field (+0x1C / +0x0E / +0x09) is 0 and step field (+0x1E / +0x10 / +0x0B) not
+    0xF. A pick of one above the step asks 登場 (yes: the step field = 0).
+  - Each list's rows are built once (a change shows when it opens again), then the list
+    comes back; a right click leaves. The questions' and lists' aborts give −101 / −102 /
+    −103, and the armament screen returns them (closes).
+  - The rows are wsprintfA's (DS:0x515958 / 0x515A38 / 0x515A80 / 0x515AC8), cut to the
+    list's columns: the launchers' rows overflow the list's 0x11 columns in the game.
+  Emulated (verify_debug_menu, the lists and questions scripted, the rows read back as the
+  game formats them): 200 / 200 runs at seed 1, 600 / 600 at seed 7.
 
 ---
 

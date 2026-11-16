@@ -447,7 +447,10 @@ func _draw_list() -> void:
 	_list_wins = []
 	for e in want:
 		var gw := GameWindow.new()
-		gw.cols = maxi(e[2], GameWindow.text_cols(str(e[3])))   # (engine-side: a longer translation widens it)
+		# (engine-side: a longer translation widens it, by the 12 px font's 6 px half-width
+		# letters against the window's 8 px columns)
+		gw.cols = maxi(e[2], ceili(GameWindow.text_cols(str(e[3])) * 6 / 8.0))
+		gw.wrap_cols = maxi(gw.cols, GameWindow.text_cols(str(e[3])))
 		gw.rows = 1
 		gw.lh = 12
 		gw.framed = false

@@ -745,9 +745,11 @@ func _plan_view_open() -> void:
 	plan_view.advanced.connect(func(): plan_st.j += 1; _plan_draw())
 	hud_layer.add_child(plan_view)
 	var vs := get_viewport().get_visible_rect().size
-	var sc := minf(vs.x / PlanView.W, vs.y / PlanView.H) * 0.96
+	# (the main window's client, as win_root: the game's plan window is the whole client;
+	# a scale off the pixel grid would drop the pictures' and the letters' columns)
+	var sc := minf(vs.x / PlanView.W, vs.y / PlanView.H)
 	plan_view.scale = Vector2(sc, sc)
-	plan_view.position = (vs - Vector2(PlanView.W, PlanView.H) * sc) / 2
+	plan_view.position = Vector2.ZERO
 
 
 func _plan_region(i: int) -> void:
@@ -1118,11 +1120,17 @@ func _plan_orders_view() -> void:
 	var time := Flight.s16(Flight.gb(w, g, 0x1D) | Flight.gb(w, g, 0x1E) << 8)
 	var cs := func(n: int, _wd: int) -> String: return GameData.call_sign(campaign, n)
 	var mk := func(x: int, y: int, c: int, code: int, text: String, filled := true) -> void:
-		# "%a05%Ns": the text padded and cut to the window's columns (format_text's %s)
+		# "%a05%Ns": the text padded and cut to the window's columns (format_text's %s).
+		# (engine-side: a translation uses the box's whole width: its 12 px letters step 6
+		# px against the 8 px columns, c * 8 / 6 of them)
 		var gw: GameWindow = _plan_win(x, y, c, 1, 12, filled)
-		gw.print_text("\u0001" + char(code) + GameData.format_text("%" + str(c) + "s", [text]))
-	mk.call(0x188, 0xF6, 12, 0x08, cs.call(Flight.gb(w, g, 1), 12))
-	mk.call(0x1F0, 0xF6, 15, 0x05, cs.call(39 + Flight.gb(w, g, 0), 15))
+		var n := c
+		if GameWindow.translated(text):
+			n = c * 8 / 6
+			gw.wrap_cols = n
+		gw.print_text("\u0001" + char(code) + GameData.format_text("%" + str(n) + "s", [text]))
+	mk.call(0x188, 0xF6, 12, 0x08, _sign_fit(Flight.gb(w, g, 1), 16))
+	mk.call(0x1F0, 0xF6, 15, 0x05, _sign_fit(39 + Flight.gb(w, g, 0), 20))
 	mk.call(0x188, 0x106, 28, 0x05, plan_type_name(g))
 	var rq: GameWindow = _plan_win(0x188, 0x154, 28, 3, 16, false)
 	var reqs := Plan.requirements(w, g)
@@ -1734,6 +1742,46 @@ func _sortie_list_win(x: int, y: int, cols: int, labels: Array, regs: Array, hea
 	return gw
 
 
+static func _name_in(nm: Array, cols: int) -> String:
+	## "given family" for a column of the game's width (its %-14s). Engine-side: a translated
+	## name too long for it (the Japanese ones fit) gives its first word as an initial
+	## ("Margaret Schneider" -> "M. Schneider"; an air wing's designation is dropped: "TFW19
+	## Silver Knights" -> "Silver Knights"), so the columns after it stay under their headings;
+	## still too long, it is cut.
+	var g: String = str(nm[0]) if nm.size() > 0 else ""
+	var f: String = str(nm[1]) if nm.size() > 1 else ""
+	var full := "%s %s" % [g, f]
+	if GameWindow.text_cols(full) <= cols or g == "" or f == "":
+		return full if GameWindow.text_cols(full) <= cols else full.substr(0, cols)
+	# an air wing's designation as its first word (TFW19 Silver Knights): the nickname alone
+	var short := f if RegEx.create_from_string("[0-9]").search(g) != null else "%s. %s" % [g.substr(0, 1), f]
+	return short if GameWindow.text_cols(short) <= cols else short.substr(0, cols)
+
+
+func _sign_fit(n: int, letters: int) -> String:
+	## a call sign or group name (DS:0x50C7E5 / 0x50C881) for a box of the game's width.
+	## Engine-side: a translation too long for it takes its short form (callsigns.csv
+	## "<n>.short", 12 letters at most), else it is cut. In Japanese, the game's own.
+	var t := GameData.call_sign(campaign, n)
+	if not GameWindow.translated(t) or GameWindow.text_cols(t) <= letters:
+		return t
+	var sh := GameData.call_sign_short(n)
+	if sh != "" and GameWindow.text_cols(sh) <= letters:
+		return sh
+	return (sh if sh != "" else t).substr(0, letters)
+
+
+static func _name_part(t: String, cols: int, initial: bool) -> String:
+	## one name in its own column of the game's width (WMES 0x1C4's %8s %8s). Engine-side,
+	## for translated names too long for it: the first name as its initial, the family name
+	## cut with a dot ("Rutherford" -> "Rutherf.")
+	if GameWindow.text_cols(t) <= cols or t == "":
+		return t
+	if initial:
+		return t.substr(0, 1) + "."
+	return t.substr(0, cols - 1).strip_edges() + "."
+
+
 func _sortie_request_win() -> void:
 	## the roster (0x46A240: 0x452A10 at (0x38, 0x80), 0x40 columns, its header MES 0x1CD two
 	## lines with 12 sorting regions (x 0x80 + 0x18 i .. 0x8F + 0x18 i, y 8 .. 0x28), rows
@@ -1761,7 +1809,7 @@ func _sortie_request_win() -> void:
 				var cn: Array = names.crew
 				var n := w.cb(c, 0)
 				var nm: Array = cn[n] if n < cn.size() else ["", ""]
-				var r: String = wsp(GameData.base_raw(campaign, 0x1CC, mission_index), [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""]),
+				var r: String = wsp(GameData.base_raw(campaign, 0x1CC, mission_index), [_name_in(nm, 14),
 					GameData.exe_text(campaign, 0x5171F0 if w.cb(c, 3) else 0x5171EC), "\u0001" + char(0x4F if s6 & 3 else 0x7F),
 					GameData.exe_text(campaign, st), Flight.s8(w.cb(c, 9))])
 				for f in [0xA, 0xB, 0xC, 0xD]:
@@ -2801,7 +2849,7 @@ func _equip_machine_list(ents: Array) -> void:
 
 
 static func wsp(t: String, args: Array) -> String:
-	## wsprintfA as the armament screen's lists build their rows: %[-][width] s / d / c, a
+	## wsprintfA as the armament screen's lists build their rows: %[-][width] s / d / u / c, a
 	## string's width in Shift-JIS bytes (format_text's count), right-justified unless '-';
 	## %% a percent sign; %aHH (no wsprintf meaning: its rows are printed through
 	## format_text by the list, 0x40C090) kept as the colour code
@@ -2843,6 +2891,8 @@ static func wsp(t: String, args: Array) -> String:
 				v = str(a)
 			"d":
 				v = str(int(a))
+			"u":
+				v = str(int(a) & 0xFFFFFFFF)
 			"c":
 				v = str(a) if a is String else char(int(a))
 			_:
@@ -3019,7 +3069,7 @@ func _equip_template_list(kind: String, ents: Array) -> void:
 			var n := w.cb(c, 0)
 			var nm: Array = cn[n] if n < cn.size() else ["", ""]
 			var m := Flight.s8(w.ub(c, 0xC))
-			t = wsp("%-15s %10s", [wsp("%s %s", [nm[0], nm[1] if nm.size() > 1 else ""]), str(codes[m]) if m >= 0 and m < codes.size() else ""])
+			t = wsp("%-15s %10s", [_name_in(nm, 15), str(codes[m]) if m >= 0 and m < codes.size() else ""])
 		elif e is String and TEMPLATE_LABELS.has(e) and e in ["all", "machine+weapons", "weapons", "items"]:
 			opts = true
 			t = wsp("%-26s" if kind == "copy" else "%-22s", [t])
@@ -3146,7 +3196,7 @@ func _preview_win(hold: Control, x: int, y: int, c: int, r: int, t: String) -> v
 func _equip_region(r: int) -> void:
 	## 0x454E60's answer to region r (its layout's table): 0 / 1 the pilot's or the machine's
 	## window, 2 the machine, 3 clear, 4 close, 5 undo, 6 .. 11 the slots, 12 .. 17 and 19 ..
-	## 24 the pockets (18: the debug key's, Ctrl + Alt only, not ported)
+	## 24 the pockets, 18 the debug menu with Ctrl + Alt held (0x4595F0)
 	if equip_request != null:
 		return
 	var m := Flight.s8(w.ub(equip_sess.k, 0xC))
@@ -3173,6 +3223,10 @@ func _equip_region(r: int) -> void:
 			_equip_press(["pocket", r - 12])
 		19, 20, 21, 22, 23, 24:
 			_equip_press(["pocket", r - 19])
+		18:
+			# 0x45ED60: region 0x12 with Ctrl and Alt held opens the debug menu (0x4595F0)
+			if Input.is_key_pressed(KEY_CTRL) and Input.is_key_pressed(KEY_ALT):
+				_equip_debug()
 
 
 # --- geometry --------------------------------------------------------------------
@@ -4644,6 +4698,19 @@ func text_cells(fmt: String, args: Array) -> Array:
 	return out
 
 
+func _unit_row_fmt() -> String:
+	## WMES 0x1C4 ("%b%12s %8s %8s %14s %b%2d%% %b%s"). Engine-side, outside Japanese: the
+	## machine's column at 16, the width names.csv fits the machines' names to (the table then
+	## sized to its rows: pick_table_cols)
+	var f := msg_raw(0x1C4)
+	return f if GameData.language == "ja" else f.replace("%14s", "%16s")
+
+
+func pick_table_cols(cols: int) -> int:
+	## the game's width for a table of the game's rows; outside Japanese its widest row (0)
+	return cols if GameData.language == "ja" else 0
+
+
 func support_unit_rows(rows: Array) -> Array:
 	## 0x4DFE70's rows (WMES 0x1C4, as 0x4E3230's): the call sign, the pilot's names, the
 	## machine, the damage, the state (SHIFT / BUSY / SUPPORT / STAND BY by
@@ -4656,14 +4723,14 @@ func support_unit_rows(rows: Array) -> Array:
 		var cc := 0x7F if cond >= 0x32 else (0xFF if cond >= 0x23 else 0x4F)
 		var c := w.ucrew(k, 0)
 		var cn: Array = names.crew
-		var given: String = cn[c][0] if c < cn.size() else ""
-		var family: String = cn[c][1] if c < cn.size() and cn[c].size() > 1 else ""
+		var given: String = _name_part(cn[c][0] if c < cn.size() else "", 8, true)
+		var family: String = _name_part(cn[c][1] if c < cn.size() and cn[c].size() > 1 else "", 8, false)
 		var mn: Array = names.machine
 		var m := Flight.s8(w.ub(k, 0xC))
-		var sign := GameData.call_sign(campaign, Flight.gb(w, g, 1)) if g >= 0 else ""
+		var sign := _sign_fit(Flight.gb(w, g, 1), 12) if g >= 0 else ""
 		var args := [0xFF, sign, given, family, mn[m] if m >= 0 and m < mn.size() else "", cc,
 				100 - cond, rw[3], GameData.exe_text(campaign, rw[2])]
-		out.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": rw[1] == 1})
+		out.append({"cells": text_cells(_unit_row_fmt(), args), "refused": rw[1] == 1})
 	return out
 
 
@@ -4694,13 +4761,13 @@ func cb_unit_rows(units: Array) -> Array:
 		var cc := 0x7F if cond >= 0x32 else (0xFF if cond >= 0x23 else 0x4F)
 		var c := w.ucrew(k, 0)
 		var cn: Array = names.crew
-		var given: String = cn[c][0] if c < cn.size() else ""
-		var family: String = cn[c][1] if c < cn.size() and cn[c].size() > 1 else ""
+		var given: String = _name_part(cn[c][0] if c < cn.size() else "", 8, true)
+		var family: String = _name_part(cn[c][1] if c < cn.size() and cn[c].size() > 1 else "", 8, false)
 		var mn: Array = names.machine
 		var m := Flight.s8(w.ub(k, 0xC))
-		var args := [0xFF, GameData.call_sign(campaign, Flight.gb(w, g, 1)), given, family,
+		var args := [0xFF, _sign_fit(Flight.gb(w, g, 1), 12), given, family,
 				mn[m] if m >= 0 and m < mn.size() else "", cc, 100 - cond, sc, GameData.exe_text(campaign, state)]
-		rows.append({"cells": text_cells(msg_raw(0x1C4), args), "refused": Strike.cb_unit_refused(w, k)})
+		rows.append({"cells": text_cells(_unit_row_fmt(), args), "refused": Strike.cb_unit_refused(w, k)})
 	return rows
 
 
@@ -6331,9 +6398,9 @@ func _radar() -> RadarView:
 		radar_view.visible = false
 		hud_layer.add_child(radar_view)
 	var vs := get_viewport().get_visible_rect().size
-	var sc := minf(vs.x / RadarView.W, vs.y / RadarView.H) * 0.96
+	var sc := minf(vs.x / RadarView.W, vs.y / RadarView.H)      # (as the plan view's)
 	radar_view.scale = Vector2(sc, sc)
-	radar_view.position = (vs - Vector2(RadarView.W, RadarView.H) * sc) / 2
+	radar_view.position = Vector2.ZERO
 	return radar_view
 
 
@@ -6667,7 +6734,7 @@ class BattleStrikeHooks extends Strike.Hooks:
 		if rows.is_empty():                   # 0x4E3230: none listed, MES 0x1C3
 			battle.say_msg(0x1C3)
 			return -1
-		var i: int = battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], rows, -2, 0x3B)
+		var i: int = battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], rows, -2, battle.pick_table_cols(0x3B))
 		return -1 if i == -2 else units[i]
 
 	func cb_slot(u: int, g: int) -> int:
@@ -6694,7 +6761,7 @@ class BattleSupportHooks extends Strike.SupportHooks:
 		battle.say_msg(msg)
 
 	func pick(rows: Array) -> int:
-		return battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], battle.support_unit_rows(rows), -2, 0x3B)
+		return battle.ask_table(battle.ui("UI_PICK_SUPPORT"), [], battle.support_unit_rows(rows), -2, battle.pick_table_cols(0x3B))
 
 	func prompt(msg: int) -> int:
 		return 0 if battle.ask_prompt(battle.msg(msg), true) else 1
@@ -7623,7 +7690,7 @@ func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
 	var nm: Array = GameData.tables(campaign).crew_names
 	var id := Pd2World.s8(wd.crew[c * 16])
 	var n: Array = nm[id] if id >= 0 and id < nm.size() else ["", ""]
-	var name := "%s %s" % [n[0], n[1]]
+	var name := _name_in(n, 14)
 	var pad := 14 - GameWindow.text_cols(name)
 	var t := "\u0001" + char(0xCF if picked else 0xFF) + name + " ".repeat(maxi(pad, 0)) + " %2d " % Pd2World.s8(wd.crew[c * 16 + 9])
 	for f in [0xA, 0xB, 0xC, 0xD]:
@@ -7787,7 +7854,7 @@ func _show_reaction_units(menu: Array, t: int, mode: int) -> void:
 		var nm := intercept_names(b)
 		var m := Pd2World.s8(w.ub(b, 0xC))
 		labels.append(GameWindow.coded(text_cells(GameData.exe_raw(campaign, 0x517860),
-				[0x7F, str(codes[m]) if m >= 0 and m < codes.size() else "", nm[0], nm[1]])))
+				[0x7F, str(codes[m]) if m >= 0 and m < codes.size() else "", _name_part(nm[0], 8, true), _name_part(nm[1], 8, false)])))
 	var n := mini(labels.size(), 12)
 	var mp := _mouse_main()
 	var x := (int(mp.x) & 0xFFF8) - 0x50
@@ -8108,3 +8175,169 @@ func _draw_unit(dw: Pd2World, u: int, o: Vector2, see_all: bool, large: bool) ->
 	var ic := (2 if dw.ub(u, 0) & 0x20 else 0) | (1 if dw.ub(u, 0x34) != 0xFF else 0)
 	if ic:
 		MapPieces.icons(overlay, o + Vector2(32, 28), ic)
+
+
+# --- the armament screen's debug menu (0x4595F0; Equipment.debug_menu, emulated) -------------
+
+var debug_thread: Thread = null
+
+
+class BattleDebugHooks extends Equipment.DebugHooks:
+	## the debug menu's windows, opened on the main thread while the menu runs on a worker
+	var battle
+
+	func pick(kind: String, rows: Array) -> int:
+		return int(battle.debug_ask("pick", [kind, rows]))
+
+	func ask(msg: int) -> int:
+		return int(battle.debug_ask("ask", [msg]))
+
+	func note(msg: int) -> int:
+		return int(battle.debug_ask("note", [msg]))
+
+
+func _equip_debug() -> void:
+	## region 0x12 with Ctrl + Alt held (0x45ED60's GetKeyState(0x11) / (0x12)): 0x4595F0
+	if debug_thread != null or equip_request != null:
+		return
+	var hk := BattleDebugHooks.new()
+	hk.battle = self
+	debug_thread = Thread.new()
+	debug_thread.start(func():
+		var r := Equipment.debug_menu(w, hk)
+		call_deferred("_equip_debug_done", r))
+
+
+func _equip_debug_done(r: int) -> void:
+	debug_thread.wait_to_finish()
+	debug_thread = null
+	if r == -0x65 or r == -0x66 or r == -0x67:
+		# 0x454E60: below -0x65 it returns, -0x65 destroys its window and returns: the
+		# screen closes, as the template menu's aborts do
+		equip_sess = {}
+		_sortie_draw()
+		return
+	_equip_draw()
+
+
+func debug_ask(kind: String, data: Array) -> int:
+	## on the worker thread: a debug window on the main thread, then its answer
+	if not scripted.is_empty():
+		return scripted.pop_front()
+	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return -2 if kind == "pick" else 0
+	call_deferred("_debug_open", kind, data)
+	react_sem.wait()
+	return react_answer
+
+
+func _debug_name(nid: int) -> String:
+	## the crew list's name: given and family names with a space (DS:0x50BCB5 / 0x50BD4D)
+	var cn: Array = names.crew
+	if nid < 0 or nid >= cn.size():
+		return ""
+	return "%s %s" % [cn[nid][0], cn[nid][1] if cn[nid].size() > 1 else ""]
+
+
+func _debug_name_extra(kind: String, rows: Array) -> int:
+	## engine-side: the columns a translated name needs beyond the game's %-14s (the Japanese
+	## names fit in 14 bytes; some translated ones do not). The name column, the list and its
+	## header widen by as much, so the numbers stay under their headings. 0 in Japanese.
+	if kind != "crew":
+		return 0
+	var n := 14
+	for r in rows:
+		n = maxi(n, GameWindow.text_cols(_debug_name(r[1])))
+	return n - 14
+
+
+func _debug_rows(kind: String, rows: Array) -> Array:
+	## the lists' rows as 0x459750 / 0x459CA0 / 0x45A020 / 0x45A390 format them (wsprintfA of
+	## DS:0x515958 / 0x515A38 / 0x515A80 / 0x515AC8), cut to the list's columns as it shows them
+	var out := []
+	var extra := _debug_name_extra(kind, rows)
+	var cols: int = {"crew": 0x2F, "machine": 0x14, "launcher": 0x11, "ammo": 0x14}[kind] + extra
+	for r in rows:
+		var t := ""
+		match kind:
+			"crew":
+				var fmt := GameData.exe_raw(campaign, 0x515958).replace("%-14s", "%%-%ds" % (14 + extra))
+				t = wsp(fmt, [_debug_name(r[1]), r[2], r[3], r[4], r[5], r[6], r[7], r[8]])
+			"machine":
+				var mn: Array = names.machine
+				t = wsp(GameData.exe_raw(campaign, 0x515A38), [mn[r[0]] if r[0] < mn.size() else "", r[1]])
+			"launcher":
+				t = wsp(GameData.exe_raw(campaign, 0x515A80), [_name_of("launcher_names", r[0]), r[1]])
+			"ammo":
+				t = wsp(GameData.exe_raw(campaign, 0x515AC8), [_name_of("ammo_names", r[0]), r[1]])
+		out.append(GameWindow.fit(t, cols).split("\n")[0])
+	return out
+
+
+func _debug_open(kind: String, data: Array) -> void:
+	var done := func(v: int, hold: Control) -> void:
+		if is_instance_valid(hold):
+			hold.queue_free()
+		react_answer = v
+		react_sem.post()
+	match kind:
+		"pick":
+			var k: String = data[0]
+			if k == "menu":
+				# 0x452A10(NULL, 4, the labels, 0, 0, 4 columns, right click allowed)
+				var labels := []
+				for a in Equipment.DEBUG_LABELS:
+					labels.append(GameData.exe_text(campaign, a))
+				var ic := 4
+				for l in labels:
+					ic = maxi(ic, GameWindow.text_cols(str(l)))
+				var gw := GameWindow.select_window(0, 0, ic, 0, 0, labels, ic, [], true)
+				gw.role = "debug_menu"
+				var hold := _debug_hold(gw)
+				gw.chosen.connect(func(v: int): done.call(v, hold))
+				return
+			# the header window (ui_window_create at (0, 0), the list's columns, 1 row) with
+			# DS:0x51597C / 0x515A44 / 0x515A8C / 0x515AD4 of "", then 0x452A10 at (0, 0x20)
+			var extra := _debug_name_extra(k, data[1])
+			var cols: int = {"crew": 0x2F, "machine": 0x14, "launcher": 0x11, "ammo": 0x14}[k] + extra
+			var head: int = {"crew": 0x51597C, "machine": 0x515A44, "launcher": 0x515A8C, "ammo": 0x515AD4}[k]
+			var rows := _debug_rows(k, data[1])
+			var hd := GameWindow.text_window(0, 0, cols, 1, 1)
+			hd.waits = false
+			hd.print_text(" ".repeat(extra) + wsp(GameData.exe_raw(campaign, head), [""]))
+			var gw := GameWindow.select_window(0, 0x20, cols, 0, 0, rows, cols, [], true)
+			gw.role = "debug_list"
+			var hold := _debug_hold(gw)
+			hold.add_child(hd)
+			gw.chosen.connect(func(v: int): done.call(v, hold))
+		"ask":
+			# 0x451E30(text, 1): 実行 / 中止 at y 0xAA
+			var l: Array = BOX_LABELS[1]
+			var wins := box_windows(GameData.exe_text(campaign, int(data[0])), [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])], 0xAA)
+			var hold := _debug_hold(wins[1])
+			hold.add_child(wins[0])
+			wins[0].print_text(wins[0].get_meta("text"))
+			wins[1].role = "debug_ask"
+			wins[1].chosen.connect(func(v: int): done.call(1 if v == 0 else 0, hold))
+		"note":
+			# 0x452200(text, flag 0): its line end waits for a click
+			var t := GameData.exe_text(campaign, int(data[0]))
+			var n := mini(GameWindow.text_cols(t), 76)
+			var tw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
+			tw.role = "debug_note"
+			tw.waits = not _headless()
+			var hold := _debug_hold(tw)
+			await tw.print_text(GameWindow.fit(t, 76).split("\n")[0] + "\n")
+			done.call(0, hold)
+
+
+func _debug_hold(gw: GameWindow) -> Control:
+	var hold := Control.new()
+	hold.size = Vector2(MAIN_W, MAIN_H)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	hold.add_child(gw)
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed:
+			gw.outside(ev.button_index))
+	(sortie_panel if sortie_panel else _win_root()).add_child(hold)
+	return hold

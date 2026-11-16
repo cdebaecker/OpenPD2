@@ -216,6 +216,12 @@ func call_sign(campaign: String, n: int) -> String:
 	return signs[n] if n >= 0 and n < signs.size() else ""
 
 
+## A call sign's short form (callsigns.csv "<n>.short", engine-side, for the boxes a
+## translation is too long for); "" when none (and in Japanese).
+func call_sign_short(n: int) -> String:
+	return _translated("callsigns", "%d.short" % n)
+
+
 ## A debrief text (RMES.SLD, which 0x4719D0 loads for the debrief 0x48FA40), translated
 ## (rmes.csv: "<campaign>.<id>") or the game's own; an empty line stays empty.
 ## An RMES text as written (translated), its codes, 0x0C, CR and '@' kept for the window

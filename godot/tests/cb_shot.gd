@@ -23,7 +23,7 @@ func _init() -> void:
 	var rows: Array = b.cb_unit_rows(units)
 	for r in rows:
 		print("unit row%s: %s" % [" (refused)" if r.refused else "", "".join(r.cells.map(func(c): return c[0]))])
-	b._open_table(b.ui("UI_PICK_SUPPORT"), [], rows, -2, 0x3B)
+	b._open_table(b.ui("UI_PICK_SUPPORT"), [], rows, -2, b.pick_table_cols(0x3B))
 	for i in 4:
 		await process_frame
 	await RenderingServer.frame_post_draw

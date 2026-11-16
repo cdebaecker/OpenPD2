@@ -656,3 +656,134 @@ static func template_menu(w: Pd2World, k: int, mode: int, hooks: Hooks) -> int:
 		else:
 			src = mem[j]
 	return 0
+
+
+# --- the debug menu (0x4595F0: region 0x12 clicked with Ctrl + Alt; rules.debug_menu) --------
+
+const DEBUG_LABELS := [0x5158FC, 0x51590C, 0x51591C, 0x51592C]   # 隊員 兵器 武器 備品
+const DEBUG_CREW_ASKS := [0x5159A0, 0x5159B4, 0x5159C8]          # 復帰 技能 登場
+const DEBUG_CREW_NOTE := 0x5159DC
+## kind: [base in w.records, record size, count, the "unused" field, the step field, question]
+const DEBUG_RECORDS := {"machine": [0, 31, 32, 0x1C, 0x1E, 0x515A4C],
+	"launcher": [32 * 31, 17, 96, 0x0E, 0x10, 0x515A94],
+	"ammo": [32 * 31 + 96 * 17, 12, 96, 0x09, 0x0B, 0x515ADC]}
+const DEBUG_ABORT := {-3: -102, -2: -103, -1: -101}
+
+
+## The debug menu's windows (rules.debug_menu's hooks): pick(kind, rows) the list's index
+## (-2 a right click, -12 / -11 the aborts), ask(msg) 0x451E30 (1 yes, -3 / -2 / -1 the
+## aborts), note(msg) 0x452200.
+class DebugHooks:
+	func pick(kind: String, rows: Array) -> int:
+		return -2
+
+	func ask(msg: int) -> int:
+		return 0
+
+	func note(msg: int) -> int:
+		return 0
+
+
+## 0x459750's rows: [crew, name id, step, kills PLD / TNK / TRK / FLY, shots, hits] for the
+## crews with +2 = 0 and +4 not 0xF (combat record crew +15: +0..+3, +4 / +6 u16; < 0 zeros).
+static func debug_crew_list(w: Pd2World) -> Array:
+	var out := []
+	for c in 64:
+		if w.cb(c, 2) == 0 and w.cb(c, 4) != 0xF:
+			var i := Pd2World.s8(w.cb(c, 15))
+			var r := [c, Pd2World.s8(w.cb(c, 0)), w.cb(c, 4), 0, 0, 0, 0, 0, 0]
+			if i >= 0:
+				var o := 13 * i
+				for k in 4:
+					r[3 + k] = w.combat[o + k]
+				r[7] = w.combat[o + 4] | w.combat[o + 5] << 8
+				r[8] = w.combat[o + 6] | w.combat[o + 7] << 8
+			out.append(r)
+	return out
+
+
+## 0x459CA0 / 0x45A020 / 0x45A390's rows: [index, step] of the records whose unused field is
+## 0 and step field not 0xF.
+static func debug_record_list(w: Pd2World, kind: String) -> Array:
+	var d: Array = DEBUG_RECORDS[kind]
+	var out := []
+	for i in int(d[2]):
+		var o: int = d[0] + d[1] * i
+		if w.records[o + d[3]] == 0 and w.records[o + d[4]] != 0xF:
+			out.append([i, w.records[o + d[4]]])
+	return out
+
+
+## 0x4595F0 (rules.debug_menu): the menu, then its list. 0, or -101 / -102 / -103.
+static func debug_menu(w: Pd2World, hooks: DebugHooks) -> int:
+	var m := hooks.pick("menu", [])
+	if m == -12:
+		return -102
+	if m == -11:
+		return -103
+	if m == 0:
+		return debug_crews(w, hooks)
+	if m >= 1 and m <= 3:
+		return debug_records(w, ["machine", "launcher", "ammo"][m - 1], hooks)
+	return 0
+
+
+## 0x459750 (rules.debug_crews): its rows built once; a pick asks 復帰 (when +6 bits 0-1 are
+## set: cleared), 技能 (+8 bits 0-3 set), 登場 (when DS:0x50AD92 is below +4: +4 = 0 and the
+## note); then the list again; -2 leaves with 0.
+static func debug_crews(w: Pd2World, hooks: DebugHooks) -> int:
+	var rows := debug_crew_list(w)
+	while true:
+		var a := hooks.pick("crew", rows)
+		if a == -12:
+			return -102
+		if a == -11:
+			return -103
+		if a == -2 or a < 0 or a >= rows.size():
+			return 0
+		var c: int = rows[a][0]
+		var o := c * 16
+		if w.crew[o + 6] & 3:
+			var r := hooks.ask(DEBUG_CREW_ASKS[0])
+			if DEBUG_ABORT.has(r):
+				return DEBUG_ABORT[r]
+			if r == 1:
+				w.crew[o + 6] = w.crew[o + 6] & 0xFC
+		var r2 := hooks.ask(DEBUG_CREW_ASKS[1])
+		if DEBUG_ABORT.has(r2):
+			return DEBUG_ABORT[r2]
+		if r2 == 1:
+			w.crew[o + 8] = w.crew[o + 8] | 0x0F
+		if w.ds16(0x50AD92) < w.crew[o + 4]:
+			var r3 := hooks.ask(DEBUG_CREW_ASKS[2])
+			if DEBUG_ABORT.has(r3):
+				return DEBUG_ABORT[r3]
+			if r3 == 1:
+				w.crew[o + 4] = 0
+				var n := hooks.note(DEBUG_CREW_NOTE)
+				if DEBUG_ABORT.has(n):
+					return DEBUG_ABORT[n]
+	return 0
+
+
+## 0x459CA0 / 0x45A020 / 0x45A390 (rules.debug_records): a pick of a record whose step field is
+## above DS:0x50AD92 asks 登場 (yes: the field = 0); then the list again; -2 leaves with 0.
+static func debug_records(w: Pd2World, kind: String, hooks: DebugHooks) -> int:
+	var d: Array = DEBUG_RECORDS[kind]
+	var rows := debug_record_list(w, kind)
+	while true:
+		var a := hooks.pick(kind, rows)
+		if a == -12:
+			return -102
+		if a == -11:
+			return -103
+		if a == -2 or a < 0 or a >= rows.size():
+			return 0
+		var o: int = d[0] + d[1] * int(rows[a][0]) + d[4]
+		if w.ds16(0x50AD92) < w.records[o]:
+			var r := hooks.ask(d[5])
+			if DEBUG_ABORT.has(r):
+				return DEBUG_ABORT[r]
+			if r == 1:
+				w.records[o] = 0
+	return 0

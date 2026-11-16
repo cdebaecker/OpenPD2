@@ -268,6 +268,12 @@ func _new_items(data: Array) -> void:
 		await _kabe_list(0xB0, 0x60, 0x2C, 1, GameData.exe_text(camp, 0x5198FC), rows)
 
 
+func _name_pair(c: int) -> Array:
+	var cn: Array = GameData.tables(battle.campaign).crew_names
+	var n: int = battle.w.cb(c, 0)
+	return cn[n] if n < cn.size() else ["", ""]
+
+
 func _given_family(c: int) -> String:
 	var cn: Array = GameData.tables(battle.campaign).crew_names
 	var n: int = battle.w.cb(c, 0)
@@ -289,7 +295,7 @@ func _recruits(data: Array) -> void:
 	for c in data:
 		var s6 := w.cb(c, 6)
 		var st := 0x519968 if s6 & 1 else (0x51996C if s6 & 2 else (0x519974 if w.cb(c, 5) == 0xFF else 0x519970))
-		var r: String = battle.wsp(GameData.exe_raw(camp, 0x519980), [_given_family(c),
+		var r: String = battle.wsp(GameData.exe_raw(camp, 0x519980), [battle._name_in(_name_pair(c), 14),
 			GameData.exe_text(camp, 0x51997C if w.cb(c, 3) else 0x519978), "\u0001" + char(0x4F if s6 & 3 else 0x7F),
 			GameData.exe_text(camp, st), Pd2World.s8(w.cb(c, 9))])
 		for f in [0xA, 0xB, 0xC, 0xD]:

@@ -205,7 +205,7 @@ func _card(x: int, y: int, c: int) -> void:
 	var nm: Array = battle.names.crew[w.cb(c, 0)] if w.cb(c, 0) < battle.names.crew.size() else ["", ""]
 	var sk := w.cb(c, 8)
 	s += fmt(GameData.base_raw(battle.campaign, 0x1D0, battle.mission_index),
-		[str(nm[0]) + " " + str(nm[1] if nm.size() > 1 else ""), Flight.s8(w.cb(c, 9)), Flight.s8(w.cb(c, 0xA)),
+		[battle._name_in(nm, 14), Flight.s8(w.cb(c, 9)), Flight.s8(w.cb(c, 0xA)),
 		Flight.s8(w.cb(c, 0xC)), Flight.s8(w.cb(c, 0xB)), Flight.s8(w.cb(c, 0xD)),
 		"SCOUT" if sk & 1 else "", "COVER" if sk & 8 else "", "COM" if sk & 4 else "", "ENG" if sk & 2 else ""])
 	tw.print_text(s)
@@ -221,10 +221,26 @@ func _centre(g: int, dx: int) -> void:
 	## 0x463790(1)
 	var w: Pd2World = battle.w
 	var camp: String = battle.campaign
-	for e in [[0x18, GameData.call_sign(camp, 39 + Flight.gb(w, g, 0))], [0x26, GameData.call_sign(camp, Flight.gb(w, g, 1))]]:
-		# (engine-side: a longer translation widens the window over the picture)
-		var c := maxi(0x10, GameWindow.text_cols(e[1])) if GameWindow.translated(e[1]) else 0x10
-		_win(0x1F0 + dx, e[0], c, 1, 0xC, 1, "50D719", 0xC0).print_text(e[1])
+	# (engine-side: a longer translation widens the windows, by the 12 px font's 6 px
+	# half-width letters against the window's 8 px columns, and moves them left so the text
+	# still ends inside the game's box (0x1F0 + 0x80), no further than the logo (0x1D8): 25
+	# letters. A longer group name takes two lines from 0x12, the call sign then at 0x2A,
+	# above the requirements (0x36).)
+	var gname := GameData.call_sign(camp, 39 + Flight.gb(w, g, 0))
+	var lines := [gname]
+	if GameWindow.translated(gname) and GameWindow.text_cols(gname) > 25:
+		lines = Array(GameWindow.fit(gname, 25).split("\n")).slice(0, 2)
+	var two := lines.size() > 1
+	for e in [[0x12 if two else 0x18, lines], [0x2A if two else 0x26, [GameData.call_sign(camp, Flight.gb(w, g, 1))]]]:
+		var n := 0
+		for l in e[1]:
+			n = maxi(n, GameWindow.text_cols(l) if GameWindow.translated(l) else 0)
+		var x := maxi(0x1D8, mini(0x1F0, (0x270 - n * 6) & ~7))
+		var cw := _win(x + dx, e[0], maxi(0x10, ceili(n * 6 / 8.0)), e[1].size(), 0xC, 1, "50D719", 0xC0)
+		cw.wrap_cols = maxi(cw.cols, n)
+		if two:
+			cw.transparent = true       # (the letters alone: the logo's foot stays in view)
+		cw.print_text("\n".join(e[1]))
 	var rq := _win(0x1C0 + dx, 0x36, 0x16, 3, 0x10, 1, "50D721", 0xC0)
 	var reqs := Plan.requirements(w, g)
 	var rt := "\u000c\u0001" + char(0x0D)
