@@ -5441,8 +5441,9 @@ func split_open(sx: int, sy: int, tx: int, ty: int) -> void:
 	## the split map window: (rows >> 1) - 1 rows a half; the shooter's half at the window's
 	## top, a band of 0x24 px at half the height less 0x12 (0x405330's window, filled by
 	## 0x46C370 mode 1: DIB index 10, the colour 0), the target's half under it (the window's
-	## paint with +0x40 set). The engine shows both halves live (the game keeps the one not
-	## being animated in a memory DC: 0x40F300).
+	## paint with +0x40 set). The half not being animated is frozen, as the game keeps it in a
+	## memory DC (0x40F300): first the target's (0x40F300(0)), then, when the target's side
+	## plays (0x4101A0 / 0x4102A0 / 0x4103A0, 0x41B320's stage 2: 0x40F300(1)), the shooter's.
 	var v := map_view_cells()
 	var hr := (v.size.y >> 1) - 1
 	var so := _half_origin(sx, sy, v.size.x, hr)
@@ -5491,6 +5492,7 @@ func split_open(sx: int, sy: int, tx: int, ty: int) -> void:
 	split_box.visible = true
 	split_band.visible = true
 	overlay.queue_redraw()
+	_split_frozen("target")
 
 
 func flight_window() -> Dictionary:
@@ -5521,8 +5523,62 @@ func split_view_rect() -> Rect2:
 	return Rect2(c.position - size / 2.0, size)
 
 
+var split_live := ""                         # the half drawn live ("shooter" / "target")
+var split_still: TextureRect = null          # the shooter's half while frozen
+
+
+func _split_frozen(half: String) -> void:
+	## 0x40F300: half goes into the memory DC (drawn as it was), the other one live
+	if split_box == null or not is_instance_valid(split_box):
+		return
+	var sub: SubViewport = split_box.get_child(0)
+	if half == "target":
+		split_live = "shooter"
+		_split_unstill()
+		sub.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		await get_tree().process_frame               # (one frame of it drawn, then held)
+		await RenderingServer.frame_post_draw
+		if split_live == "shooter" and is_instance_valid(sub):
+			sub.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	else:
+		split_live = "target"
+		var img := get_viewport().get_texture().get_image()
+		var top := split_band.position.y if split_band else 0.0
+		var f := get_viewport().get_final_transform().x.x
+		var region := Rect2i(0, 0, int(split_band.size.x * f), int(top * f))
+		_split_unstill()
+		if region.size.x > 0 and region.size.y > 0:
+			split_still = TextureRect.new()
+			split_still.texture = ImageTexture.create_from_image(img.get_region(region))
+			split_still.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			split_still.scale = Vector2(1.0 / f, 1.0 / f)
+			hud_layer.add_child(split_still)
+			hud_layer.move_child(split_still, 0)
+		sub.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+
+
+func _split_unstill() -> void:
+	if split_still and is_instance_valid(split_still):
+		split_still.queue_free()
+	split_still = null
+
+
+func _split_target_side(x: int, y: int) -> void:
+	## a player at (x, y) in the target's half while the shooter's is live: the swap
+	if split_live != "shooter" or split_box == null or not split_box.visible:
+		return
+	var v := map_view_cells()
+	var hr := (v.size.y >> 1) - 1
+	if x >= split_origin.x and x < split_origin.x + v.size.x and y >= split_origin.y and y < split_origin.y + hr:
+		_split_frozen("shooter")
+
+
 func split_close() -> void:
 	## 0x40F4F0: the band goes, the window is whole again
+	split_live = ""
+	_split_unstill()
+	if split_box and is_instance_valid(split_box):
+		(split_box.get_child(0) as SubViewport).render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	if split_box and is_instance_valid(split_box) and split_box.visible:
 		split_box.visible = false
 		split_band.visible = false
@@ -5569,6 +5625,8 @@ func _flight_step(stage: int, rec: Array) -> void:
 		anime_view.clear_missile()
 		anim_sem.post()
 		return
+	if stage == 2 and split_live == "shooter":
+		_split_frozen("shooter")                     # 0x41B320 stage 2: 0x40F300(1)
 	var tex := anime_view.flight_sprite(rec)
 	var pts := anime_view.flight_points(rec, stage)
 	var k := 0
@@ -5601,6 +5659,7 @@ func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 		return
 	if i == 0:
 		anim_click = false
+		_split_target_side(x, y)
 	if AnimeView.sound_at(player, i):
 		GameAudio.se(int(spec.se))           # 0x40AFF0 before this wait (RULES.md 5.26)
 	anim_listen = true
@@ -7956,13 +8015,18 @@ func _draw_cells(dw: Pd2World, vr: Rect2, done_cells: Dictionary) -> void:
 			marked[dw.pos(b)] = true
 	var see_all := (options & 0x40) != 0
 	var large := (options & 0x1000) != 0
+	# the whole map's redraw (0x4F3DA0) in PD2 (DS:0x554B10 = 1): in the computer's phase
+	# (DS:0x50DDC8 = 3) with option 8, a hex the computer's side sees is not striped either
+	# (DASH's branch and redraw_hex stripe by in_view(x, y, 0) alone; the engine redraws the
+	# whole map, so its single-hex redraws do not stripe those hexes again)
+	var unstripe3 := campaign == "pd2" and dw.phase == 3 and (options & 8) != 0
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
 			if not dw.on_map(x, y) or done_cells.has(x + MAP * y):
 				continue
 			done_cells[x + MAP * y] = true
 			var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
-			if not Ai.in_view(dw, x, y, 0):
+			if not Ai.in_view(dw, x, y, 0) and not (unstripe3 and Ai.in_view(dw, x, y, 3)):
 				overlay.draw_texture(MapPieces.stripes(), o)
 			if MissionScripts.target_mark_at(dw, x, y) or marked.has(Vector2i(x, y)):
 				overlay.draw_texture(MapPieces.hexmark(), o)
