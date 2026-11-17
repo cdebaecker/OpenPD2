@@ -57,6 +57,7 @@ var busy := false
 ## pause it; auto_react answers the menu without asking (tests, headless runs).
 var auto_form := false          # tests: the automatic sortie fills the formable groups first
 var auto_sortie_log: Array = []   # tests: the automatic sortie's log (its joins and checks)
+var auto_sortie_plan: Array = []  # tests: auto_form's ways tried and the check's answer to each
 var auto_react := false
 var react_policy := Callable()     # auto_react's answers (tests); default: strongest weapon
 var ai_thread: Thread = null
@@ -1617,31 +1618,254 @@ func _sortie() -> void:
 
 
 func _auto_sortie_actions() -> Array:
-	## (tests, auto_form) the buttons a player would press to form a squad: each formable
-	## group selected, the free pilots joined in turn (the game's own join refuses the ones
-	## that don't fit: a pilot then stays, the next is tried), at most 4 a group; then start.
-	## Planned on a copy of the world, so the screen then runs them for real.
-	var dry := w.duplicate_world()
-	Campaign.sortie_open(dry)
+	## (tests, auto_form) a squad formed as a player would: several ways of forming it are
+	## tried on copies of the world, the game's own check (Campaign.sortie_check, with the
+	## mission's deploy hook) judging each; the first that passes is played on the screen
+	## (its pockets armed first through the armament screen, Equipment.screen). Each way:
+	## the ground groups (even, 0-11) take ground pilots (PD2: Yao, crew 1, first), at most
+	## 3 a group when it flies in; a group that flies in (+3 bit 0) takes air pilots until
+	## their capacity (machine +9) covers its members' needs (+0xA), a machine-10 one first
+	## when its plan asks for one (kind 0); a group whose plan asks for TX48 charges (kinds
+	## 1 / 4 / 7) gets them in its members' pockets (some ways arm 4 in any case, for the
+	## missions' deploy checks that count them); the air groups (12-19) take one air pilot
+	## each whose machine suits the group: what its plan asks for (kind 2 / 8: 7 or 12,
+	## kind 3: 8), a fighter (7 or 12) in a 0x60 group and none in a 0x30 / 0x40 one (the
+	## missions' deploy checks); a pilot without one gets it on the armament screen.
+	auto_sortie_plan = []
+	var ways := [[1, false, false], [3, false, false], [1, true, false], [3, true, false], [1, true, true],
+			[3, true, true], [1, false, true], [3, false, true], [6, true, true]]
+	for way in ways:
+		var dry := w.duplicate_world()
+		Campaign.sortie_open(dry)
+		var plan := _auto_plan(dry, int(way[0]), bool(way[1]), bool(way[2]))
+		var dh := AutoSortieHooks.new()
+		dh.dw = dry
+		dh.battle = self
+		var r: Array = Campaign.sortie_check(dry, dh)
+		auto_sortie_plan.append([way, r])
+		if r[0] == "start" or way == ways[-1]:
+			for a in plan.arm:
+				if a[0] is String and a[0] == "machine":
+					_auto_machine(w, int(a[1]), int(a[2]))
+				else:
+					_auto_arm(w, int(a[0]), int(a[1]))
+			return plan.acts + [["start"]]
+	return [["start"]]
+
+
+class AutoSortieHooks extends Campaign.SortieHooks:
+	## the dry check's hooks: no windows; the deploy hook on the copy
+	var dw: Pd2World
+	var battle
+
+	func deploy() -> int:
+		return MissionScripts.run_deploy(dw, battle.mission_hooks)
+
+	func dialog(_msg: int, _arg: Array) -> int:
+		return 0
+
+	func note(_code: int, _arg: int) -> int:
+		return 0
+
+
+class AutoArmHooks extends Equipment.Hooks:
+	## the armament screen's pocket button: "item", then the round (once; then cancel)
+	var round := 12
+	var picked := false
+
+	func pick(kind: String, entries: Array) -> int:
+		if kind == "pocket":
+			return entries.find("item")
+		if kind == "item" and not picked:
+			picked = true
+			var i := entries.find(round)
+			return i + 7 if i >= 0 else -2
+		return -2
+
+
+class AutoMachineHooks extends Equipment.Hooks:
+	## the armament screen's machine button: that machine (once; then cancel)
+	var machine := -1
+	var picked := false
+
+	func pick(kind: String, entries: Array) -> int:
+		if kind == "machine" and not picked:
+			picked = true
+			var i := entries.find(machine)
+			return i + 6 if i >= 0 else -2
+		return -2
+
+
+func _auto_machine(wd: Pd2World, k: int, m: int) -> void:
+	## unit k given machine m on the armament screen
+	var hk := AutoMachineHooks.new()
+	hk.machine = m
+	Equipment.screen(wd, k, hk, ["machine", "close"])
+
+
+func _auto_arm(wd: Pd2World, k: int, pockets: int) -> void:
+	## unit k's first `pockets` pockets given TX48 (round 12) on the armament screen
+	for p in pockets:
+		var hk := AutoArmHooks.new()
+		Equipment.screen(wd, k, hk, [["pocket", p], "close"])
+
+
+func _auto_plan(dry: Pd2World, ground_groups: int, air: bool, arm4: bool) -> Dictionary:
 	var st := Campaign.sortie_state()
 	var log := []
 	var acts := []
-	for g in 20:
-		if not (Flight.gb(dry, g, 2) & 1) or (g < 12 and g % 2 == 1):
-			continue
-		var a := ["select", g]
-		Campaign.sortie_action(dry, sortie_hooks, st, a, log)
-		acts.append(a)
-		var i := 0
-		while Flight.gb(dry, g, 5) < 4 and i < mini(dry.crew_pool_n, 4):
+	var arm := []
+	var pool_of := func(pred: Callable) -> Array:
+		var out := []
+		for i in dry.crew_pool_n:
+			var k: int = dry.ds[2 + i]
+			if pred.call(k):
+				out.append(i)
+		return out
+	var mach := func(k: int) -> int: return Campaign._machine(dry, k)
+	var mrec := func(m: int, f: int) -> int: return dry.mem8(Campaign.MACHS + 31 * m + f) if m >= 0 else 0
+	var join := func(g: int, pred: Callable, limit: int) -> int:
+		# join pilots that pass pred while the group has fewer than limit; the pool shifts
+		var n := 0
+		var guard := 0
+		while Flight.gb(dry, g, 5) < limit and guard < 64:
+			guard += 1
+			var rows: Array = pool_of.call(pred)
+			if rows.is_empty():
+				break
+			var at: int = rows[0]
+			while st.scroll > at:                   # (scrolled into the four rows shown)
+				var u := ["pool_up"]
+				Campaign.sortie_action(dry, sortie_hooks, st, u, log)
+				acts.append(u)
+			while at > st.scroll + 3:
+				var d := ["pool_down"]
+				var was: int = st.scroll
+				Campaign.sortie_action(dry, sortie_hooks, st, d, log)
+				acts.append(d)
+				if st.scroll == was:
+					break
+			var a := ["join", at - st.scroll]
 			var before := dry.crew_pool_n
-			var j := ["join", i]          # (the pool's first four rows, as shown)
-			Campaign.sortie_action(dry, sortie_hooks, st, j, log)
-			acts.append(j)
+			Campaign.sortie_action(dry, sortie_hooks, st, a, log)
+			acts.append(a)
 			if dry.crew_pool_n == before:
-				i += 1
-	acts.append(["start"])
-	return acts
+				break
+			n += 1
+		return n
+	var formed := 0
+	for g in 20:
+		if not (Flight.gb(dry, g, 2) & 1):
+			continue
+		var typ := Flight.gb(dry, g, 0x21) & 0xF
+		var kinds := []
+		for i in 3:
+			kinds.append(Campaign._record(dry, 7 + typ * 0x1C + 7 * i))
+		if g < 12:
+			if g % 2 == 1 or formed >= ground_groups:
+				continue
+			var a := ["select", g]
+			Campaign.sortie_action(dry, sortie_hooks, st, a, log)
+			acts.append(a)
+			var flies := Flight.gb(dry, g, 3) & 1
+			var cap := 3 if flies else 4
+			if dry.campaign != 0 and formed == 0:
+				join.call(g, func(k): return k == 1, 1)          # Yao first (PD2's check: crew 1 in a group)
+			join.call(g, func(k): return dry.cb(k, 3) == 0 and mach.call(k) >= 0, cap)
+			# ground pilots without a machine: a PLD (class 0) from the stock, on the armament screen
+			for i in dry.crew_pool_n:
+				if Flight.gb(dry, g, 5) >= cap:
+					break
+				var k: int = dry.ds[2 + i]
+				if dry.cb(k, 3) != 0 or mach.call(k) >= 0:
+					continue
+				for m in Equipment.machine_list(dry, k):
+					if Flight._machine_class(dry, m) == 0 and dry.mem8(Equipment.STOCK_MACH + m) > 0:
+						_auto_machine(dry, k, m)
+						arm.append(["machine", k, m])
+						join.call(g, func(q): return q == k, Flight.gb(dry, g, 5) + 1)
+						break
+			if Flight.gb(dry, g, 5) == 0:
+				continue
+			formed += 1
+			if flies:
+				if 0 in kinds:
+					join.call(g, func(k): return dry.cb(k, 3) == 1 and mach.call(k) == 10, Flight.gb(dry, g, 5) + 1)
+				var guard := 0
+				while guard < 6:
+					guard += 1
+					var need := 0
+					var have := 0
+					for i in Flight.gb(dry, g, 5):
+						var m: int = Flight.gb(dry, g, 6 + i)
+						if dry.cb(m, 3) == 0:
+							need += mrec.call(mach.call(m), 0xA)
+						else:
+							have += mrec.call(mach.call(m), 9)
+					if have >= need:
+						break
+					if join.call(g, func(k): return dry.cb(k, 3) == 1 and mrec.call(mach.call(k), 9) > 0, Flight.gb(dry, g, 5) + 1) == 0:
+						# none carries: an air pilot given a transport on the armament screen
+						var done := false
+						for i in dry.crew_pool_n:
+							var k: int = dry.ds[2 + i]
+							if dry.cb(k, 3) != 1:
+								continue
+							for m in Equipment.machine_list(dry, k):
+								if mrec.call(m, 9) > 0 and dry.mem8(Equipment.STOCK_MACH + m) > 0:
+									_auto_machine(dry, k, m)
+									arm.append(["machine", k, m])
+									done = join.call(g, func(q): return q == k, Flight.gb(dry, g, 5) + 1) > 0
+									break
+							break
+						if not done:
+							break
+			var want := 10 if 7 in kinds else (3 if 1 in kinds else (1 if 4 in kinds else 0))
+			if arm4 and formed == 1:
+				want = maxi(want, 4)
+			if want:
+				for i in Flight.gb(dry, g, 5):
+					var m: int = Flight.gb(dry, g, 6 + i)
+					if want <= 0 or dry.cb(m, 3) != 0:
+						continue
+					var n := mini(want, mrec.call(mach.call(m), 0x17))
+					if n > 0:
+						_auto_arm(dry, m, n)
+						arm.append([m, n])
+						want -= n
+		elif air:
+			var hi := Flight.gb(dry, g, 0x21) & 0xF0
+			var fits := func(m: int) -> bool:
+				if m < 0:
+					return false
+				if 3 in kinds:
+					return m == 8
+				if 2 in kinds or 8 in kinds or hi == 0x60:
+					return m in [7, 12]
+				if hi == 0x30 or hi == 0x40:
+					return not m in [7, 12]
+				return true
+			var a := ["select", g]
+			Campaign.sortie_action(dry, sortie_hooks, st, a, log)
+			acts.append(a)
+			if join.call(g, func(k): return dry.cb(k, 3) == 1 and fits.call(mach.call(k)), 1) == 0:
+				# none fits: an air pilot's machine changed on the armament screen
+				for i in dry.crew_pool_n:
+					var k: int = dry.ds[2 + i]
+					if dry.cb(k, 3) != 1:
+						continue
+					var to := -1
+					for m in Equipment.machine_list(dry, k):
+						if fits.call(m) and dry.mem8(Equipment.STOCK_MACH + m) > 0:
+							to = m
+							break
+					if to == -1:
+						continue
+					_auto_machine(dry, k, to)
+					arm.append(["machine", k, to])
+					join.call(g, func(q): return q == k, 1)
+					break
+	return {"acts": acts, "arm": arm}
 
 
 func _sortie_draw(confirm := false) -> void:

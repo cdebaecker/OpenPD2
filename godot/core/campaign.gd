@@ -882,6 +882,13 @@ static func sortie_action(w: Pd2World, hooks: SortieHooks, st: Dictionary, a: Ar
 			if Flight.gb(w, g, 2) & 1:
 				st.sel = g
 				st.mscroll = 0
+		"pool_up", "pool_down":
+			# the pool's scroll arrows (regions 0x48 / 0x49 on the screen's middle page, 4 rows shown)
+			var n := w.crew_pool_n
+			if a[0] == "pool_up" and st.scroll > 0:
+				st.scroll -= 1
+			elif a[0] == "pool_down" and st.scroll + 3 < n - 1:
+				st.scroll += 1
 		"join":
 			var i: int = st.scroll + a[1]
 			if i < w.crew_pool_n and w.crew_pool_n:

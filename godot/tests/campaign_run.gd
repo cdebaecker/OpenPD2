@@ -53,6 +53,9 @@ func _init() -> void:
 		var label := "%s chunk %d (script %d, step %d)" % [b.campaign, b.mission_index + 1, b.script_no, w.ds16(0x50AD8E)]
 		var squad: int = b.squad.size()
 		var stand_in: bool = b.sandbox
+		if not b.auto_sortie_plan.is_empty() and b.auto_sortie_plan[-1][1][0] != "start":
+			for e in b.auto_sortie_plan:
+				print("      tried ", e)
 		var check := "none"
 		for e in b.auto_sortie_log:
 			if e[0] == "check":
@@ -92,8 +95,10 @@ func _init() -> void:
 			break
 		if b.debrief_result == 0x81:
 			# the debrief's end: the ending's or a game over's screens, then the title
-			ended = w.ds16(0x50AD8E) == 10
-			print("the campaign ends (debrief 0x81) at step %d" % w.ds16(0x50AD8E))
+			# (a passive player loses some missions: a game over is a valid end of the run)
+			ended = true
+			print("the campaign ends (debrief 0x81) at step %d: %s" % [w.ds16(0x50AD8E),
+				"the ending" if w.ds16(0x50AD8E) == 10 and w.ds8(0x50ADF2) != 0x82 else "a game over"])
 			break
 		var nxt: Array = Debrief.next_mission(w)
 		if nxt.is_empty():
