@@ -7,7 +7,8 @@ extends RefCounted
 ## the roster (SAVEDATA.ORG) in 0-26. Plus the S / M / H map layers.
 ##
 ## The player's own squad is chosen and equipped on the sortie screen (Campaign.sortie_*);
-## where it leaves none, sandbox_squad() stands in (see engine/README.md).
+## where it leaves none (automatic test runs only: the game refuses an empty sortie),
+## sandbox_squad() stands in (see engine/README.md).
 
 const UNITS := 255              # 0-254: the group table follows unit 254 (DS:0x50A35C)
 const INIT_FIRST := 27
