@@ -3720,6 +3720,10 @@ func _map_edge_scroll(p: Vector2) -> bool:
 
 
 func _unhandled_input(ev: InputEvent) -> void:
+	# (a new campaign's pilot choice waits for the player while the map is built on a worker
+	# thread: no world nor camera yet, so the map takes no input)
+	if w == null or cam == null:
+		return
 	if ev is InputEventMouseMotion:
 		if ev.button_mask & MOUSE_BUTTON_MASK_RIGHT or ev.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 			cam.position = (cam.position - ev.relative / cam.zoom).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
