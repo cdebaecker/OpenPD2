@@ -193,10 +193,17 @@ func view_frame() -> void:
 	if battle == null or not battle.has_method("map_view_cells"):
 		return
 	var v: Rect2i = battle.map_view_cells()
+	# (engine-side: zoomed out, the engine's map window holds more cells than the map has
+	# past its origin; the frame stops at the map's edge, inside the minimap)
+	var cw := mini(v.size.x, 72 - v.position.x)
+	var ch := mini(v.size.y, 72 - v.position.y)
+	if cw <= 0 or ch <= 0:
+		queue_redraw()
+		return
 	var x0 := 8 + 2 * v.position.x
 	var y0 := 0xE4 + 2 * v.position.y
-	_view_rect = [x0, y0, x0 + 2 * v.size.x - 1, y0 + 2 * v.size.y - 1]
-	_rect(x0, y0, x0 + 2 * v.size.x - 1, y0 + 2 * v.size.y - 1, 4, 0xF, 1)
+	_view_rect = [x0, y0, x0 + 2 * cw - 1, y0 + 2 * ch - 1]
+	_rect(x0, y0, x0 + 2 * cw - 1, y0 + 2 * ch - 1, 4, 0xF, 1)
 	queue_redraw()
 
 

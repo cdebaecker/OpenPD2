@@ -461,6 +461,10 @@ func _begin_finished() -> void:
 
 
 func _begin_done() -> void:
+	# the player's phase begins: the panels' refresh (ui_refresh_panels 0x4363D0) closes the
+	# flight window the approach (0x4403D0) left open (0x43F060). (Deferred: the flight
+	# engine's own calls to show and update it are deferred too, and queued before this.)
+	call_deferred("radar_hide")
 	var landed := squad.filter(func(u): return w.active(u))
 	if not landed.is_empty():
 		_select(landed[0])

@@ -717,7 +717,15 @@ static func fit(t: String, c: int) -> String:
 	## engine-side fit for the translations: a line longer than the window breaks at its
 	## last space that fits (the game's own wrap breaks anywhere, which suits Japanese)
 	## (the translations write the Japanese line breaks as two spaces: a too long line breaks
-	## first at two spaces before a letter, then at its words)
+	## first at two spaces before a letter, then at its words). Each page (0x0C clears the
+	## window) is fitted on its own: a page often follows the last one's '@' on its line.
+	var pages := []
+	for page in t.split(""):
+		pages.append(_fit_page(page, c))
+	return "".join(pages)
+
+
+static func _fit_page(t: String, c: int) -> String:
 	var out := []
 	var src := []
 	var cut := RegEx.create_from_string("  +(?=[^\\s\\d])")
