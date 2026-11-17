@@ -122,6 +122,10 @@ func _gui_input(ev: InputEvent) -> void:
 		note = ""
 		queue_redraw()
 		return
+	if _win < _wins - 1 and page_title != "":
+		_win += 1                        # the full window's wait: the next window
+		queue_redraw()
+		return
 	if blink != null:
 		advanced.emit()
 		return
@@ -161,6 +165,13 @@ func _text(t: String, x: float, y: float, fs := 12, c := Color.WHITE) -> void:
 	draw_string(_font(), Vector2(x, y + fs), t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, c)
 
 
+func _line(t: String, x: float, y: float, fs := 12) -> void:
+	## a window's 12 px line at y: the font's line box centred in it
+	var f := _font()
+	var asc := f.get_ascent(fs)
+	draw_string(f, Vector2(x, y + (12.0 - asc - f.get_descent(fs)) / 2.0 + asc), t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+
+
 func _frame(x: int, y: int, cols: int, rows: int, lh: int) -> void:
 	## a ui_window_create window: its frame around cols x 8 by rows x line-height pixels
 	var r := Rect2(x, y, cols * 8 + 16, rows * maxi(lh, 8) + 16)
@@ -179,7 +190,7 @@ func _draw() -> void:
 	var sm := tex("%s/%s/images/smap/%02d.bmp" % [root, camp, chunk - 1])
 	if sm:
 		draw_texture(sm, Vector2(8, 0x20))
-	_text(title, 0x38 + 8, 10 + 2)
+	_line(title, 0x38 + 8, 10)            # (0x43E510: an unframed window at (0x38, 10), 12 px lines)
 	if orders != "":
 		var o := tex(root + ("/images/plan_gb/00.bmp" if orders == "open" else "/images/plan_gc/00.bmp"))
 		if o:
@@ -199,26 +210,21 @@ func _draw() -> void:
 					draw_texture(t, Vector2(v[3], v[4]))
 	if page_title != "" or not lines.is_empty():
 		# (the title's and the text's windows are plan_g.pac's own frames)
-		_text(page_title, 0x188 + 8, 0x18 + 6)
-		# 28 columns of 8 px, 16 px a line (a translated line wraps at the window's width)
-		# (a long translation takes a smaller size to stay in the window's 11 lines)
+		_line(page_title, 0x188 + 8, 0x18)
+		# 28 columns of 8 px, 11 lines (0x188, 0x38): a translated text wraps at the window's
+		# width in a smaller size; ui_window_print waits and clears a full window, so a page
+		# longer than the window shows a window at a time, a click for the next (_gui_input)
 		var f := _font()
-		var parts := []
-		for l in lines:
-			parts.append_array(str(l).split("\n"))
-		var fs := 11
-		while fs > 7:
-			var tot := 0.0
-			for part in parts:
-				tot += f.get_multiline_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, 28 * 8, fs).y
-			if tot <= 11 * 16:
-				break
-			fs -= 1
+		var lay := _text_rows(f)
+		var fs: int = lay[0]
+		var rows: Array = lay[1]
+		var per: int = lay[2]
 		var y := 0x38 + 8.0
-		for part in parts:
-			var sz := f.get_multiline_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, 28 * 8, fs)
-			draw_multiline_string(f, Vector2(0x188 + 8, y + fs), part, HORIZONTAL_ALIGNMENT_LEFT, 28 * 8, fs, -1, Color.WHITE)
-			y += maxf(sz.y, fs + 2)
+		for r in range(_win * per, mini(rows.size(), (_win + 1) * per)):
+			draw_string(f, Vector2(0x188 + 8, y + fs), rows[r], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+			y += fs + 4
+		if _win < _wins - 1:
+			draw_string(f, Vector2(0x188 + 8 + 28 * 8 - 8, 0x38 + 8 + TEXT_H), "▼", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
 	if maps_i >= 0:
 		# 0x444500: AMAP.pac entry DS:0x50663D x 4 - 4 + i at (0x30, 0x48)
 		var am := tex("%s/%s/images/amap/%02d.bmp" % [root, camp, (chunk - 1) * 4 + maps_i])
@@ -241,6 +247,69 @@ func _draw() -> void:
 	if note != "":
 		_frame(0xC0, 0xB0, 0x18, 2, 16)
 		_text(note, 0xC0 + 8, 0xB0 + 10)
+
+
+const TEXT_H := 160              # the text rows' height: inside plan_g.pac's frame (to y 235)
+var _win := 0                   # the text window's page shown (a page longer than 11 lines)
+var _wins := 1
+var _shown := ""                # the text laid out last, its rows' count
+var _shown_rows := 0
+
+
+func page_text() -> String:
+	## the page's lines as one stream, as ui_window_print gets them: '@' is a click wait, not
+	## a line; in a translation a line break inside a sentence (the Japanese line's end, the
+	## next line going on in lower case) is a space
+	var t := ""
+	for l in lines:
+		# (each item on a line of its own)
+		t += ("" if t == "" or t.ends_with("\n") else "\n") + str(l).replace("\r\n", "\n")
+	t = t.replace("@", "")
+	if GameData.language != "ja":
+		var re := RegEx.new()
+		re.compile("[ \\t]*\\n[ \\t]*(?=\\p{Ll})")
+		t = re.sub(t, " ", true)
+	return t.strip_edges(false, true)
+
+
+func _wrap(f: Font, t: String, fs: int, wd: float) -> Array:
+	## t's rows at width wd: each line broken at its spaces
+	var rows := []
+	for line in t.split("\n"):
+		var cur := ""
+		for word in line.split(" "):
+			var cand := word if cur == "" else cur + " " + word
+			if cur != "" and f.get_string_size(cand, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > wd:
+				rows.append(cur)
+				cur = word
+			else:
+				cur = cand
+		rows.append(cur)
+	return rows
+
+
+func _text_rows(f: Font) -> Array:
+	## [size, rows, rows a window]: the largest size from 11 down to 9 whose rows fit the
+	## window's TEXT_H px, else 9 in windows of that many rows; the window shown follows the
+	## text (a new step's first row, or the first window for a new page)
+	var t := page_text()
+	var fs := 11
+	var rows := []
+	var per := 0
+	while true:
+		rows = _wrap(f, t, fs, 28 * 8)
+		per = TEXT_H / (fs + 4)
+		if rows.size() <= per or fs == 9:
+			break
+		fs -= 1
+	if t != _shown:
+		_win = 0
+		if _shown != "" and t.begins_with(_shown) and rows.size() > per:
+			_win = mini(_shown_rows / per, (rows.size() - 1) / per)
+		_shown = t
+		_shown_rows = rows.size()
+	_wins = maxi(1, ceili(rows.size() / float(per)))
+	return [fs, rows, per]
 
 
 var flashed := false            # the camera cell's flash done for this picker

@@ -26,12 +26,21 @@ const SHADER := """
 shader_type canvas_item;
 uniform sampler2D idx : filter_nearest;
 uniform sampler2D pal : filter_nearest;
+uniform vec4 lit = vec4(-1.0);   // the hovered word's box (x0, y0, x1, y1), the port's highlight
 void fragment() {
 	float i = texture(idx, UV).r * 255.0;
-	COLOR = vec4(texture(pal, vec2((i + 0.5) / 256.0, 0.5)).rgb, 1.0);
+	vec3 c = texture(pal, vec2((i + 0.5) / 256.0, 0.5)).rgb;
+	vec2 p = floor(UV * vec2(640.0, 400.0));
+	if (p.x >= lit.x && p.x < lit.z && p.y >= lit.y && p.y < lit.w
+			&& i > 105.5 && i < 109.5)
+		c = mix(c, vec3(1.0), 0.45);   // the word's letters (pd2title.pac's 106-109) lit
+	COLOR = vec4(c, 1.0);
 }
 """
 
+## The hover: the port lights the word's letters (engine-choices "The title's hover"); the
+## game's XOR frame (0x4380C0) when classic_outline is set.
+static var classic_outline := false
 static var logos_done := false   # the logos play once a run (before game_mode_loop's title loop)
 
 var bits := PackedByteArray()
@@ -42,6 +51,8 @@ var fast := false                # tests and headless runs: no waits, no frames
 var holder: Control              # the game's windows over the screen
 var regions: Array = []          # [x0, y0, x1, y1, type, colour]
 var menu_on := false
+var _mat: ShaderMaterial
+var _lit := -1                   # the word lit (the port's hover)
 var _idx_img: Image
 var _idx_tex: ImageTexture
 var _pal_img: Image
@@ -87,6 +98,7 @@ func _ready() -> void:
 	mat.set_shader_parameter("idx", _idx_tex)
 	mat.set_shader_parameter("pal", _pal_tex)
 	rect.material = mat
+	_mat = mat
 	add_child(rect)
 	holder = Control.new()
 	holder.size = Vector2(W, H)
@@ -374,6 +386,23 @@ func _region_at(p: Vector2) -> int:
 
 
 func outline(i: int) -> void:
+	if not classic_outline:
+		_light(i)
+		return
+	_frame(i)
+
+
+func _light(i: int) -> void:
+	## the port's hover: region i's word lit, or none when it is already lit (outline toggles,
+	## as the XOR frame does)
+	var g: Array = regions[i]
+	if g[4] != 1 or _mat == null:
+		return
+	_lit = -1 if _lit == i else i
+	_mat.set_shader_parameter("lit", Vector4(g[0], g[1], g[2], g[3]) if _lit == i else Vector4(-1, -1, -1, -1))
+
+
+func _frame(i: int) -> void:
 	## 0x4380C0 -> 0x46C370(x0, y0, x1 - 1, y1 - 1, mode 4, colour, type): type 1 XORs a
 	## 1-pixel frame, each byte ((b - 10) ^ colour) + 10; its corners are XORed twice
 	var g: Array = regions[i]

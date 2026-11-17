@@ -864,7 +864,7 @@ func _plan_view_update() -> void:
 	if plan_st.mode == "page":
 		var st := Plan.view_step(w, plan_st.k, plan_st.j)
 		plan_view.page_title = plan_exe(Plan.PAGE_TITLES[plan_st.k])
-		plan_view.lines = st.lines.map(func(it): return plan_line(it).replace("@", "\n"))
+		plan_view.lines = st.lines.map(func(it): return plan_line(it))
 		plan_view.views = st.views
 		plan_view.blink = st.blink
 	else:
@@ -4076,7 +4076,7 @@ func ask_radar(kind: String) -> Variant:
 
 func _open_radar_pick(kind: String) -> void:
 	var r := _radar()
-	r.visible = true
+	_radar_front(r)
 	r.fire_cell = Vector2i(Flight.s16(w.ds16(0x50AD95)), Flight.s16(w.ds16(0x50AD97)))
 	r.pick = kind
 	r.pick_cb = func(v: Variant):
@@ -6662,18 +6662,25 @@ func _radar() -> RadarView:
 		radar_view = RadarView.new()
 		radar_view.battle = self
 		radar_view.visible = false
-		hud_layer.add_child(radar_view)
-	var vs := get_viewport().get_visible_rect().size
-	var sc := minf(vs.x / RadarView.W, vs.y / RadarView.H)      # (as the plan view's)
-	radar_view.scale = Vector2(sc, sc)
+		# (in the main window's client with its windows and the panel: 640 x 400)
+		_win_root().add_child(radar_view)
+	radar_view.scale = Vector2.ONE
 	radar_view.position = Vector2.ZERO
 	return radar_view
+
+
+func _radar_front(r: RadarView) -> void:
+	## the flight window (640 x 400, DS:0x554FBC) opens over the panel too: its status rows
+	## (x 400-495) and close button (0x24A, 0x181) are under the port's side panel otherwise
+	if not r.visible:
+		r.get_parent().move_child(r, -1)   # (windows opened after it go over it)
+	r.visible = true
 
 
 func radar_show(snap: Dictionary) -> void:
 	var r := _radar()
 	r.snap = snap
-	r.visible = true
+	_radar_front(r)
 	r.queue_redraw()
 
 
@@ -6685,7 +6692,7 @@ func radar_update(snap: Dictionary) -> void:
 
 func radar_face(a: int, code: int, b: int) -> void:
 	var r := _radar()
-	r.visible = true
+	_radar_front(r)
 	r.radio_face(a, code, b)
 
 
@@ -6697,7 +6704,7 @@ func radar_say(t: String, code: int) -> void:
 
 func radar_say_wait(t: String, code: int) -> void:
 	var r := _radar()
-	r.visible = true                       # (the radio's windows are the flight window's)
+	_radar_front(r)                      # (the radio's windows are the flight window's)
 	var gw = r.radio_say(t, code)
 	gw.waits = true
 	await gw.print_text(str(r.lines[(code >> 4) & 0xF][0]))
