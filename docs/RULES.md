@@ -649,7 +649,8 @@ variable), so it is never used for moving.
 | Carry / release | 8 (4 with engineering) / 2 | `cmd_search` (0x426B10); the manual |
 | Clear a mine | 4 | messages 0x1A3, 0x1C9 |
 | Use an item (throw, place a sensor) | the round's ammo +7 low 5 bits (§5.16) |
-| Conceal, lay mines | shown in their prompts; not yet decoded | `cmd_conceal` (0x426C00), 0x428D80, 0x46A6D0 |
+| Conceal | 6 (3 with crew +8 bit 3, as `ai_conceal`) | `cmd_conceal` (0x426C00) |
+| Set explosives / lay a mine | the round's +7 low 5 bits, halved for an engineer (crew +8 bit 1) | 0x428D80 (`lay_explosive`) |
 
 Each shot also uses one round from the slot's pocket. Launcher +8 bits 5–7 are
 the launcher **kind** (2 = missile, which triggers interception), and launcher
