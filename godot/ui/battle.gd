@@ -55,6 +55,8 @@ var options: int:
 var busy := false
 ## The computer's turn runs on a worker thread so that the player's reaction menu can
 ## pause it; auto_react answers the menu without asking (tests, headless runs).
+var auto_form := false          # tests: the automatic sortie fills the formable groups first
+var auto_sortie_log: Array = []   # tests: the automatic sortie's log (its joins and checks)
 var auto_react := false
 var react_policy := Callable()     # auto_react's answers (tests); default: strongest weapon
 var ai_thread: Thread = null
@@ -1597,7 +1599,8 @@ func _sortie() -> void:
 	sortie_hooks = BattleSortieHooks.new()
 	sortie_hooks.battle = self
 	if auto_react or not sortie_window:
-		var sr: Array = Campaign.sortie_screen(w, sortie_hooks, [["start"]])
+		var sr: Array = Campaign.sortie_screen(w, sortie_hooks, _auto_sortie_actions() if auto_form else [["start"]])
+		auto_sortie_log = sr[1]
 		Plan.pre_battle_round(w, brief_code, plan_code, int(sr[0]))
 		_begin_battle()
 		return
@@ -1611,6 +1614,34 @@ func _sortie() -> void:
 			sortie_sel = g
 			break
 	_sortie_draw()
+
+
+func _auto_sortie_actions() -> Array:
+	## (tests, auto_form) the buttons a player would press to form a squad: each formable
+	## group selected, the free pilots joined in turn (the game's own join refuses the ones
+	## that don't fit: a pilot then stays, the next is tried), at most 4 a group; then start.
+	## Planned on a copy of the world, so the screen then runs them for real.
+	var dry := w.duplicate_world()
+	Campaign.sortie_open(dry)
+	var st := Campaign.sortie_state()
+	var log := []
+	var acts := []
+	for g in 20:
+		if not (Flight.gb(dry, g, 2) & 1) or (g < 12 and g % 2 == 1):
+			continue
+		var a := ["select", g]
+		Campaign.sortie_action(dry, sortie_hooks, st, a, log)
+		acts.append(a)
+		var i := 0
+		while Flight.gb(dry, g, 5) < 4 and i < mini(dry.crew_pool_n, 4):
+			var before := dry.crew_pool_n
+			var j := ["join", i]          # (the pool's first four rows, as shown)
+			Campaign.sortie_action(dry, sortie_hooks, st, j, log)
+			acts.append(j)
+			if dry.crew_pool_n == before:
+				i += 1
+	acts.append(["start"])
+	return acts
 
 
 func _sortie_draw(confirm := false) -> void:
@@ -2476,6 +2507,7 @@ func _reload_from_save(resume: bool) -> void:
 	b.title_carry = {"image": Debrief.save_image(w), "script": w.script_no, "stash": w.stash,
 		"loop": not resume, "resume": resume}
 	b.auto_react = auto_react
+	b.auto_form = auto_form
 	b.sortie_window = sortie_window
 	b.plan_window = plan_window
 	get_tree().root.add_child(b)
@@ -3295,9 +3327,10 @@ func _build_hud() -> void:
 	var cmds := [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
 			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
 			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn], [ui("UI_WITHDRAW") + " [W]", _cmd_withdraw]]
-	var entry11 := MissionScripts.run_menu(w, squad[0] if not squad.is_empty() else 0)   # table 0x51EF18: the unit menu's entry 11
-	if entry11[0] == 1:
-		cmds.append([mission_label(entry11[1]) + " [I]", _cmd_mission])
+	# (the engine's bar: a generic label. The menu hook, table 0x51EF18, runs only for a unit
+	# whose menu opens, as the game's: it reads around the unit, which isn't on the map yet
+	# here, and some hooks write state)
+	cmds.append([ui("UI_MISSION_COMMAND") + " [I]", _cmd_mission])
 	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
 	cmds.append([ui("UI_SLOT_MENU") + " [G]", _cmd_slot_menu])
 	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])   # the machine status window (the menu's entry 7)
@@ -6162,6 +6195,7 @@ func _reload_scene() -> void:
 	b.mission_index = Debrief.chunk(w) - 1
 	b.title_carry = {"world": w, "rng": rng}
 	b.auto_react = auto_react
+	b.auto_form = auto_form
 	b.sortie_window = sortie_window
 	b.plan_window = plan_window
 	get_tree().root.add_child(b)
@@ -7231,6 +7265,7 @@ func _next_mission(nxt: Array) -> void:
 	b.campaign = "pd2" if nxt[0] else "dash"
 	b.mission_index = int(nxt[1]) - 1
 	b.auto_react = auto_react
+	b.auto_form = auto_form
 	b.sortie_window = sortie_window
 	b.plan_window = plan_window
 	get_tree().root.add_child(b)
