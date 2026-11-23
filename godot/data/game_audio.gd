@@ -50,6 +50,12 @@ func reload() -> void:
 	_cache.clear()
 
 
+func set_volumes(music: float, sfx: float) -> void:
+	## the Options' volumes (0-1; the port's own: the game has none)
+	_music.volume_db = linear_to_db(music) if music > 0.0 else -80.0
+	_wave.volume_db = linear_to_db(sfx) if sfx > 0.0 else -80.0
+
+
 func cd_present() -> bool:
 	## the MIDI window's WM_CREATE finds the CD ("PD2" volume): the CD-DA tracks were imported
 	return not meta.get("cd", {}).is_empty()

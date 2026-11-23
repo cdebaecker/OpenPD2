@@ -818,12 +818,16 @@ func print_text(t: String) -> void:
 	queue_redraw()
 
 
+var _waited := 0.0                # the wait's seconds (the Options' auto-advance)
+
+
 func _wait() -> void:
 	queue_redraw()
 	if not waits:
 		return
 	_waiting = true
 	_t = 0.0
+	_waited = 0.0
 	await _go
 	_waiting = false
 	_bar = false
@@ -832,6 +836,11 @@ func _wait() -> void:
 
 func _process(delta: float) -> void:
 	if not _waiting:
+		return
+	_waited += delta
+	if Settings.auto_text and _waited >= Settings.AUTO_TEXT_SECS:
+		_waited = -1000.0
+		_go.emit()                       # (the Options' auto-advance: the wait goes on)
 		return
 	_t += delta
 	if _t >= 0.2:
@@ -855,6 +864,14 @@ func answer(v: int) -> void:
 	chosen.emit(v)
 
 
+func wheel(d: int) -> void:
+	## the list scrolled d rows (the arrows' steps)
+	var s := clampi(scroll + d, 0, maxi(0, items.size() - SCROLL_SHOWN))
+	if s != scroll:
+		scroll = s
+		_layout()
+
+
 func outside(button: int) -> void:
 	## a click outside the window: a wait goes on; a right click cancels where allowed
 	if _waiting:
@@ -871,6 +888,12 @@ func _gui_input(ev: InputEvent) -> void:
 			queue_redraw()
 		return
 	if not (ev is InputEventMouseButton and ev.pressed):
+		return
+	if ev.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		# (the port's: the wheel steps a scrolled list as its arrows do)
+		if items.size() > SCROLL_SHOWN and not _waiting:
+			accept_event()
+			wheel(-1 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
 		return
 	if ev.button_index != MOUSE_BUTTON_LEFT and ev.button_index != MOUSE_BUTTON_RIGHT:
 		return

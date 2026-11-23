@@ -1,6 +1,6 @@
 extends SceneTree
 ## A shot of the title (not a test; windowed): godot --path engine/godot -s tests/title_shot.gd --
-## out.png <seconds> [hover|list|version|exit|continue|scenario|opening <seconds in>]
+## out.png <seconds> [hover|hover5|options|list|version|exit|continue|scenario|opening <seconds in>]
 ## The title runs as in play (the logos first); after <seconds> the shot is saved. hover /
 ## list / version / exit act once the menu is up; opening starts it and shoots after its
 ## own seconds.
@@ -24,6 +24,10 @@ func _init() -> void:
 		match act:
 			"hover":
 				boot.title._set_outline(0)
+			"hover5":                                # the port's OPTIONS
+				boot.title._set_outline(5)
+			"options":                               # the port's options list
+				boot.title.pick_region(5)
 			"list":
 				boot.title.pick_region(0)
 			"version":

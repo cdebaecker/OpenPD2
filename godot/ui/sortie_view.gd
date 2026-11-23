@@ -304,6 +304,17 @@ func _counts(g: int, dx: int) -> void:
 func _gui_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseButton and ev.pressed:
 		_last = ev.position
+		if ev.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			# (the port's: the wheel over a list or its bar presses that list's arrows)
+			var r := _region_at(ev.position)
+			var up: bool = ev.button_index == MOUSE_BUTTON_WHEEL_UP
+			if (r >= 0 and r < 0x18) or (r >= 0x48 and r <= 0x4A):
+				accept_event()
+				pressed.emit(0x48 if up else 0x49, ev.position)
+			elif (r >= 0x18 and r < 0x30) or (r >= 0x4B and r <= 0x4D):
+				accept_event()
+				pressed.emit(0x4B if up else 0x4C, ev.position)
+			return
 	super(ev)
 
 

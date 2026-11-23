@@ -129,6 +129,7 @@ func _show_title() -> void:
 	busy = true
 	title.win_palette(0x50D82C, title.level)
 	title.pac("pd2title", 0, 0, 0)
+	title.options_word()                     # (the port's OPTIONS under QUIT)
 	if not GameAudio.title_shown:
 		await title.fade(100)
 		GameAudio.title_shown = true
@@ -166,12 +167,16 @@ func _menu() -> void:
 		2:
 			if await question(SaveFiles.exe(0x518A20), 1):
 				GameAudio.music_stop()            # 0x40AF80, then userinf.dat and WM_CLOSE
+				Settings.remember_window()
 				get_tree().quit()
 			else:
 				_menu()
 		3:
 			await title.opening()                 # 0x4783A0 (its result is not looked at)
 			await _show_title()
+		5:
+			await options()
+			_menu()
 		_:
 			await version_box()
 			_menu()
@@ -231,6 +236,81 @@ func question(text: String, kind: int) -> bool:
 	var v: int = await bw.chosen
 	hold.queue_free()
 	return v == 0
+
+
+# --- the port's Options (region 5; not the game's) -----------------------------------------
+
+## [label key, Settings' field, its values, the values' labels (ui keys, or texts)]
+const OPTIONS := [
+	["UI_OPT_LANGUAGE", "language", ["auto", "en", "fr", "ja"], ["UI_OPT_AUTO", "English", "Français", "日本語"]],
+	["UI_OPT_WINDOW", "window", ["x1", "x2", "x3", "full"], ["640 x 480", "1280 x 960", "1920 x 1440", "UI_OPT_FULL"]],
+	["UI_OPT_PACE", "pace", [0, 1, 2], ["UI_OPT_PACE_GAME", "UI_OPT_PACE_FAST", "UI_OPT_PACE_FASTEST"]],
+	["UI_OPT_AUTO_TEXT", "auto_text", [false, true], ["UI_OPT_OFF", "UI_OPT_ON"]],
+	["UI_OPT_MUSIC", "music", [0, 2, 4, 6, 8, 10], ["0", "2", "4", "6", "8", "10"]],
+	["UI_OPT_SFX", "sfx", [0, 2, 4, 6, 8, 10], ["0", "2", "4", "6", "8", "10"]],
+	["UI_OPT_SOURCE", "music_source", ["ask", "cd", "midi"], ["UI_OPT_ASK", "CD", "MIDI"]],
+	["UI_OPT_LOGOS", "skip_logos", [false, true], ["UI_OPT_PLAY", "UI_OPT_SKIP"]],
+	["UI_OPT_HOVER", "classic_hover", [false, true], ["UI_OPT_HOVER_LIT", "UI_OPT_HOVER_FRAME"]],
+]
+const OPTIONS_COLS := 38
+
+
+func option_rows() -> Array:
+	## each option's line: its label, then its value from column 20; then Back
+	var rows := []
+	for o in OPTIONS:
+		var vals: Array = o[2]
+		var i := vals.find(Settings.get(o[1]))
+		if i < 0:                                # (a volume between the steps)
+			i = 0
+			for k in vals.size():
+				if int(vals[k]) <= int(Settings.get(o[1])):
+					i = k
+		var v: String = o[3][i]
+		if v.begins_with("UI_"):
+			v = ui(v)
+		var l := ui(o[0])
+		rows.append(l + " ".repeat(maxi(1, 20 - GameWindow.text_cols(l))) + v)
+	rows.append(ui("UI_BACK"))
+	return rows
+
+
+func options() -> void:
+	## a list window of the options; a click on one steps its value (applied and saved at
+	## once), Back or a right click closes it
+	var x := ((80 - (OPTIONS_COLS + 2)) / 2) * 8
+	while true:
+		var pick: int = await list_window(x, 0x50, OPTIONS_COLS, option_rows(), true)
+		if pick < 0 or pick >= OPTIONS.size():
+			return
+		option_step(pick)
+
+
+func option_step(i: int) -> void:
+	## option i's next value, applied and saved
+	var o: Array = OPTIONS[i]
+	var vals: Array = o[2]
+	var k := vals.find(Settings.get(o[1]))
+	Settings.set(o[1], vals[(k + 1) % vals.size()])
+	match o[1]:
+		"language":
+			Settings.apply_language()
+		"window":
+			Settings.geometry = Rect2i()
+			Settings.apply_window()
+		"music", "sfx":
+			Settings.apply_audio()
+			if o[1] == "sfx":
+				GameAudio.se(0)                    # (a sample of the new volume)
+		"music_source":
+			if Settings.music_source != "ask":
+				var m := 0 if Settings.music_source == "cd" and GameAudio.cd_present() else 1
+				if m != GameAudio.mode:
+					GameAudio.mode = m
+					GameAudio.music_start(5)       # (the title's tune again, from the new source)
+		"classic_hover":
+			TitleView.classic_outline = Settings.classic_hover
+	Settings.save_file()
 
 
 func version_box() -> void:

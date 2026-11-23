@@ -1,6 +1,7 @@
 extends SceneTree
 ## The title screen (ui/boot.gd, ui/title_view.gd) driven through its windows: region 0's list,
-## the scenario select's list (DASH's mission 12), then the battle scene it starts.
+## the scenario select's list (DASH's mission 12), its data question (the default data),
+## then the battle scene it starts.
 
 func find_button(n: Node, text: String) -> Button:
 	if n is Button and (n as Button).text == text:
@@ -38,7 +39,7 @@ func _init() -> void:
 	ok = ok and tv.menu_on
 	tv.pick_region(0)
 	var lst = null
-	for i in 50:
+	for i in 300:
 		await process_frame
 		lst = find_role(tv.holder, "title_list")
 		if lst != null:
@@ -62,6 +63,17 @@ func _init() -> void:
 	ok = ok and at != -1
 	if at != -1:
 		sc.answer(at)
+	# then the data's question (the default data, or a save's crews): the default
+	var dq = null
+	for i in 300:
+		await process_frame
+		dq = find_role(tv.holder, "title_list")
+		if dq != null and dq != sc and is_instance_valid(dq):
+			break
+		dq = null
+	ok = ok and dq != null and dq.items.size() == 2
+	if dq != null:
+		dq.answer(0)
 	var b = null
 	for i in 400:
 		await process_frame

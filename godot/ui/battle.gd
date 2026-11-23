@@ -5675,7 +5675,7 @@ func _step_shown(u: int) -> void:
 	var p := w.pos(u)
 	if not hex_in_window(p.x, p.y):
 		scroll_to_hex(p.x, p.y)
-	await get_tree().create_timer(0x21 / 1000.0).timeout
+	await get_tree().create_timer(Settings.step_secs()).timeout   # (0x21 ms; the Options' pace)
 	view_sem.post()
 
 
@@ -5958,7 +5958,7 @@ const FLIGHT_STEPS_PER_FRAME := 2
 
 func anim_flight(stage: int, rec: Array) -> void:
 	## the missile's flight stage (0x410160 -> 0x41B320: kind 8 only, no waits in the game,
-	## each step drawn; engine-side pace: FLIGHT_STEPS_PER_FRAME; its lines: AnimeView.flight_segments);
+	## each step drawn; engine-side pace: Settings.flight_steps(), FLIGHT_STEPS_PER_FRAME at the Options' default; its lines: AnimeView.flight_segments);
 	## 4 erases it
 	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return
@@ -5982,7 +5982,7 @@ func _flight_step(stage: int, rec: Array) -> void:
 	for p in pts:
 		anime_view.show_missile(p, tex)
 		k += 1
-		if k % FLIGHT_STEPS_PER_FRAME == 0:
+		if k % Settings.flight_steps() == 0:
 			await get_tree().process_frame
 	anim_sem.post()
 
@@ -6001,7 +6001,7 @@ func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 	_park_view()
 	if spec.get("turn", false):
 		# 0x410020's waits (a click does not stop the turn): the facing is the map's drawing
-		await get_tree().create_timer((int(spec.first_ms) if i == 0 else int(spec.ms)) / 1000.0).timeout
+		await get_tree().create_timer(Settings.anim_secs(int(spec.first_ms) if i == 0 else int(spec.ms))).timeout
 		overlay.queue_redraw()
 		anim_skip = false
 		anim_sem.post()
@@ -6012,7 +6012,7 @@ func _anim_step(player: int, x: int, y: int, i: int, dy: int, dx: int, rec: Arra
 	if AnimeView.sound_at(player, i):
 		GameAudio.se(int(spec.se))           # 0x40AFF0 before this wait (RULES.md 5.26)
 	anim_listen = true
-	await get_tree().create_timer(int(spec.ms) / 1000.0).timeout
+	await get_tree().create_timer(Settings.anim_secs(int(spec.ms))).timeout
 	if anim_click:
 		anime_view.clear()
 		anim_skip = true
