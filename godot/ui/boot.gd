@@ -256,6 +256,7 @@ const OPTIONS := [
 	["UI_OPT_SOURCE", "music_source", ["ask", "cd", "midi"], ["UI_OPT_ASK", "CD", "MIDI"]],
 	["UI_OPT_LOGOS", "skip_logos", [false, true], ["UI_OPT_PLAY", "UI_OPT_SKIP"]],
 	["UI_OPT_MAP_WINDOW", "map_window", ["full", "game"], ["UI_OPT_MAP_FULL", "UI_OPT_MAP_GAME"]],
+	["UI_OPT_MAP_ZOOM", "map_zoom", [false, true], ["UI_OPT_OFF", "UI_OPT_ON"]],
 ]
 const OPTIONS_COLS := 38
 

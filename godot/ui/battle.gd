@@ -3787,13 +3787,18 @@ func _map_size() -> Vector2:
 
 
 func _map_mask() -> void:
-	## (the Options' "game" size) the screen around the smaller map window is black, under
-	## the panel and the windows
-	if Settings.map_window != "game" or hud_layer == null:
+	## the screen outside the map window is black, under the panel and the windows: below the
+	## panel, and (the Options' "game" size) around the smaller map window
+	if hud_layer == null:
 		return
 	var ms := _map_size()
 	var vs := get_viewport().get_visible_rect().size
-	for r in [Rect2(ms.x, 0, vs.x - ms.x, vs.y), Rect2(0, ms.y, ms.x, vs.y - ms.y)]:
+	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0
+	# (the screen right of the map window below the panel is not the map's either)
+	var rects := [Rect2(ms.x, MAIN_H * sc, vs.x - ms.x, vs.y - MAIN_H * sc)]
+	if Settings.map_window == "game":
+		rects = [Rect2(ms.x, 0, vs.x - ms.x, vs.y), Rect2(0, ms.y, ms.x, vs.y - ms.y)]
+	for r in rects:
 		var cr := ColorRect.new()
 		cr.color = Color.BLACK
 		cr.position = r.position
@@ -3806,19 +3811,47 @@ func _map_mask() -> void:
 func _cam_limits() -> void:
 	## 0x4066F0 / 0x407A30: the window's pixel origin from 0 to the DIB's size less the
 	## window's; the screen right of the map window is the info panel's
-	var vs := get_viewport().get_visible_rect().size
-	var ms := _map_size()
+	var vs := get_viewport().get_visible_rect().size / cam.zoom
+	var ms := _map_world()
 	cam.limit_left = DIB_X
 	cam.limit_top = DIB_Y
 	cam.limit_right = DIB_X + DIB_W + int(vs.x - ms.x)
 	cam.limit_bottom = DIB_Y + DIB_H + int(vs.y - ms.y)
 
 
+func _map_world() -> Vector2:
+	## the map window's size in the map's pixels (the Options' zoom divides it)
+	return _map_size() / cam.zoom
+
+
+const ZOOM_MIN := 0.25
+const ZOOM_MAX := 2.0
+
+
+func zoom_at(screen: Vector2, f: float) -> void:
+	## (the port's, with the Options' map zoom) the map zoomed by f, the point under the
+	## cursor kept
+	var before := view_tl() + screen / cam.zoom
+	var z := clampf(cam.zoom.x * f, ZOOM_MIN, ZOOM_MAX)
+	cam.zoom = Vector2(z, z)
+	_cam_limits()
+	var tl := before - screen / cam.zoom
+	cam.position = tl + get_viewport().get_visible_rect().size / cam.zoom / 2.0
+	_clamp_cam()
+
+
+func _clamp_cam() -> void:
+	## the camera's centre kept where its limits put the view (view_tl stays its origin)
+	cam.position = view_tl() + get_viewport().get_visible_rect().size / cam.zoom / 2.0
+	if info_panel and is_instance_valid(info_panel):
+		info_panel.view_frame()
+
+
 func map_view_cells() -> Rect2i:
 	## the map window's area in cells: its origin (DS:0x551D20 / 0x551D24, the pixel origin
 	## / (0x30, 0x24) + 1) and its columns and rows (window +0x18 / +0x1C: (w + 0x2F) / 0x30,
 	## (h + 0x23) / 0x24)
-	var ms := _map_size()
+	var ms := _map_world()
 	var tl := view_tl()
 	var ox := int(floor(tl.x / TILE_W))
 	var oy := int(floor(tl.y / TILE_H))
@@ -3830,7 +3863,7 @@ func set_view_origin(ox: int, oy: int) -> void:
 	## pixel origin ((ox - 1) x 0x30, (oy - 1) x 0x24) whatever the row's parity, kept
 	## inside the DIB
 	var v := map_view_cells()
-	var ms := _map_size()
+	var ms := _map_world()
 	ox = maxi(1, mini(ox, 0x47 - v.size.x))
 	oy = maxi(1, mini(oy, 0x47 - v.size.y))
 	var tl := Vector2(clampf(ox * TILE_W, DIB_X, maxf(DIB_X, DIB_X + DIB_W - ms.x)),
@@ -3858,8 +3891,9 @@ func _map_edge_scroll(p: Vector2) -> bool:
 	if p.x >= ms.x or busy:
 		return false
 	var v := map_view_cells()
-	var row := int(p.y) / TILE_H
-	var col := int(floor((p.x - ((row + v.position.y) & 1) * 0x18) / TILE_W))
+	var q := p / cam.zoom                  # (in the map's pixels)
+	var row := int(q.y) / TILE_H
+	var col := int(floor((q.x - ((row + v.position.y) & 1) * 0x18) / TILE_W))
 	var d := Vector2i.ZERO
 	if col < 1:
 		d = Vector2i(-1, 0)
@@ -3884,6 +3918,16 @@ func _unhandled_input(ev: InputEvent) -> void:
 		return
 	if ev is InputEventMouse and not Rect2(Vector2.ZERO, _map_size()).has_point(ev.position):
 		return                            # (outside the map window: its clicks are not the map's)
+	if Settings.map_zoom:
+		# (the port's, with the Options' map zoom: the wheel zooms at the cursor, a right or
+		# middle drag moves the map)
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			zoom_at(ev.position, 1.15 if ev.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.15)
+			return
+		if ev is InputEventMouseMotion and ev.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
+			cam.position -= ev.relative / cam.zoom
+			_clamp_cam()
+			return
 	if ev is InputEventMouseMotion:
 		var hv := hex_at(get_global_mouse_position())
 		if ev.button_mask == 0 and _map_edge_scroll(ev.position):

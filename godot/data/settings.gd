@@ -31,6 +31,7 @@ var sfx := 10
 var music_source := "ask"
 var skip_logos := false
 var map_window := "full"
+var map_zoom := false               # the port's: the battle map zoomed with the wheel, dragged
 var geometry := Rect2i()               # the window's last place and size (x1-x3 only)
 
 var _headless := false
@@ -60,6 +61,7 @@ func load_file() -> void:
 	music_source = _pick(str(c.get_value("options", "music_source", music_source)), SOURCES, music_source)
 	skip_logos = bool(c.get_value("options", "skip_logos", skip_logos))
 	map_window = "game" if str(c.get_value("options", "map_window", map_window)) == "game" else "full"
+	map_zoom = bool(c.get_value("options", "map_zoom", map_zoom))
 	var g: Variant = c.get_value("window", "geometry", null)
 	if g is Rect2i:
 		geometry = g
@@ -76,6 +78,7 @@ func save_file() -> void:
 	c.set_value("options", "music_source", music_source)
 	c.set_value("options", "skip_logos", skip_logos)
 	c.set_value("options", "map_window", map_window)
+	c.set_value("options", "map_zoom", map_zoom)
 	if geometry.size != Vector2i.ZERO:
 		c.set_value("window", "geometry", geometry)
 	c.save(path)
