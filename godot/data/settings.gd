@@ -10,7 +10,6 @@ extends Node
 ## - music / sfx: volumes 0-10;
 ## - music_source: "ask" (the title's list, as the game), "cd", "midi";
 ## - skip_logos: the logos not played at start;
-## - classic_hover: the title's hover as the game's XOR frame.
 
 var path := "user://settings.cfg"   # (tests point it elsewhere)
 const LANGUAGES := ["auto", "en", "fr", "ja"]
@@ -29,7 +28,6 @@ var music := 10
 var sfx := 10
 var music_source := "ask"
 var skip_logos := false
-var classic_hover := false
 var geometry := Rect2i()               # the window's last place and size (x1-x3 only)
 
 var _headless := false
@@ -58,7 +56,6 @@ func load_file() -> void:
 	sfx = clampi(int(c.get_value("options", "sfx", sfx)), 0, 10)
 	music_source = _pick(str(c.get_value("options", "music_source", music_source)), SOURCES, music_source)
 	skip_logos = bool(c.get_value("options", "skip_logos", skip_logos))
-	classic_hover = bool(c.get_value("options", "classic_hover", classic_hover))
 	var g: Variant = c.get_value("window", "geometry", null)
 	if g is Rect2i:
 		geometry = g
@@ -74,7 +71,6 @@ func save_file() -> void:
 	c.set_value("options", "sfx", sfx)
 	c.set_value("options", "music_source", music_source)
 	c.set_value("options", "skip_logos", skip_logos)
-	c.set_value("options", "classic_hover", classic_hover)
 	if geometry.size != Vector2i.ZERO:
 		c.set_value("window", "geometry", geometry)
 	c.save(path)
@@ -91,7 +87,6 @@ func apply_all() -> void:
 	# (the title's script loaded at run time: naming its class here would load GameWindow,
 	# which reads this autoload, while it is being made)
 	var tv: GDScript = load("res://ui/title_view.gd")
-	tv.classic_outline = classic_hover
 	if music_source != "ask":
 		GameAudio.mode_asked = true
 		GameAudio.mode = 0 if music_source == "cd" and GameAudio.cd_present() else 1

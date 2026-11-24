@@ -107,7 +107,6 @@ func _ready() -> void:
 	for i in 5:
 		var a := REGIONS + 18 * i
 		regions.append([_s32(a), _s32(a + 4), _s32(a + 8), _s32(a + 12), _u8(a + 16), _u8(a + 17)])
-	regions.append(OPTIONS_REGION)
 
 
 func _process(_d: float) -> void:
@@ -318,53 +317,30 @@ func pac(dir: String, entry: int, x: int, y: int) -> Array:
 	return pic
 
 
-## The port's OPTIONS (region 5, not the game's): a word under QUIT made of pd2title.pac's
-## own letters at half size, between QUIT's foot (y 313) and the KOGADO plate (y 334).
-## Each letter is a run of the words' letter colours (106-109) in a word's rows: [x0, x1,
-## y0, y1] of START (S 205-217, T 260-271) and OPENING (O 204-216, P 220-230, N 245-257,
-## I 261-265).
-const OPTIONS_REGION := [200, 316, 264, 331, 1, 11]
-const OPTIONS_LETTERS := [[204, 216, 257, 278], [220, 230, 257, 278], [260, 271, 194, 215],
-		[261, 265, 257, 278], [204, 216, 257, 278], [245, 257, 257, 278], [205, 217, 194, 215]]
+## The port's OPTIONS (the title's region 3, OPENING's place; the opening is in START's
+## list): O and P stay OPENING's, then T and S from START (rows 194-215, 63 above) and I, O
+## and N from OPENING, each a strip of the picture from a column before its letter to two
+## after (its shade and background with it), 3 px apart, in the letters' rows (254-278:
+## the "Detachment" line under them stays). [x0, x1, rows' offset]
+const OPTIONS_LETTERS := [[260, 271, -63], [261, 265, 0], [204, 216, 0], [245, 257, 0],
+		[205, 217, -63]]
+const OPTIONS_X := 233               # after OPENING's P (220-230)
+const OPTIONS_ROWS := [254, 279]
+const OPTIONS_REGION := 3
 
 
 func options_word() -> void:
-	## OPTIONS drawn into the DIB at (204, 318): each letter halved (a 2 x 2 block takes its
-	## first letter pixel), 2 px apart, a 1 px shadow (index 113) right and below
-	var x := 204
-	var y := 318
-	var glyphs := []
+	## OPTIONS over OPENING in the DIB, its region widened to the word's end
+	var src := bits.duplicate()
+	var cx := OPTIONS_X
 	for l in OPTIONS_LETTERS:
-		var gw := (int(l[1]) - int(l[0]) + 2) / 2
-		var gh := (int(l[3]) - int(l[2]) + 2) / 2
-		var g := PackedByteArray()
-		g.resize(gw * gh)
-		for dy in gh:
-			for dx in gw:
-				var v := 0
-				for k in 4:
-					var sx: int = int(l[0]) + dx * 2 + (k & 1)
-					var sy: int = int(l[2]) + dy * 2 + (k >> 1)
-					if sx <= int(l[1]) and sy <= int(l[3]):
-						var b := bits[sy * W + sx]
-						if b >= 106 and b <= 109:
-							v = b
-							break
-				g[dy * gw + dx] = v
-		glyphs.append([g, gw, gh])
-	for pass_i in 2:                     # the shadows first, then the letters
-		var gx := x
-		for e in glyphs:
-			var g: PackedByteArray = e[0]
-			for dy in int(e[2]):
-				for dx in int(e[1]):
-					var v := g[dy * int(e[1]) + dx]
-					if v == 0:
-						continue
-					var px := gx + dx + (1 - pass_i)
-					var py := y + dy + (1 - pass_i)
-					bits[py * W + px] = 113 if pass_i == 0 else v
-			gx += int(e[1]) + 2
+		var x0: int = int(l[0]) - 1
+		for sx in range(x0, int(l[1]) + 3):
+			for y in range(OPTIONS_ROWS[0], OPTIONS_ROWS[1]):
+				bits[y * W + cx + sx - x0] = src[(y + int(l[2])) * W + sx]
+		cx += int(l[1]) - int(l[0]) + 5
+	if regions.size() > OPTIONS_REGION:
+		regions[OPTIONS_REGION][2] = maxi(int(regions[OPTIONS_REGION][2]), cx)
 	_bits_dirty = true
 
 

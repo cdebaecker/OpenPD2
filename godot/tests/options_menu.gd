@@ -1,6 +1,6 @@
 extends SceneTree
-## The port's Options (the title's region 5): the OPTIONS word drawn under QUIT in the
-## words' letter colours, its region, the options' list, a value stepped, applied and saved
+## The port's Options (the title's region 3, OPENING's place): the OPTIONS word over
+## OPENING, its region, the opening in START's list, the options' list, a value stepped, applied and saved
 ## (to a test file: the player's settings.cfg is left alone), Back; a long GameWindow list
 ## scrolled by the wheel. Windowed: godot --path engine/godot -s tests/options_menu.gd
 
@@ -20,26 +20,36 @@ func _init() -> void:
 	var t0 := Time.get_ticks_msec()
 	while not boot.title.menu_on and Time.get_ticks_msec() - t0 < 60000:
 		await process_frame
-	# the word: letter colours (106-109) in its rows under QUIT, none before it was drawn
-	var lit := 0
-	for y in range(318, 330):
-		for x in range(204, 264):
-			var b: int = boot.title.bits[y * 640 + x]
-			if b >= 106 and b <= 109:
-				lit += 1
-	var reg: Array = boot.title.regions[5] if boot.title.regions.size() > 5 else []
-	var r5: int = boot.title._region_at(Vector2(230, 323))
-	print("OPTIONS letters' pixels %d, region 5 %s, (230, 323) in region %d" % [lit, reg, r5])
-	ok = ok and lit > 150 and r5 == 5
+	# the word: OPTIONS' S (START's, rows 63 above) at its place, OPENING's G gone
+	var same := 0
+	for y in range(257, 279):
+		for x in 13:
+			if boot.title.bits[y * 640 + 293 + x] == boot.title.bits[(y - 63) * 640 + 205 + x]:
+				same += 1
+	var reg: Array = boot.title.regions[3]
+	var r3: int = boot.title._region_at(Vector2(300, 266))
+	print("OPTIONS' S pixels as START's %d / 286, region 3 %s, (300, 266) in region %d, regions %d" % [same, reg, r3, boot.title.regions.size()])
+	ok = ok and same == 286 and r3 == 3 and boot.title.regions.size() == 5
+	# START's list: the game's entries, then the opening
+	boot.title.pick_region(0)
+	var sl = null
+	while sl == null:
+		await process_frame
+		sl = _find(boot.title.holder, "title_list")
+	print("start list: %s" % [sl.items])
+	ok = ok and sl.items.size() >= 2 and str(sl.items[-1]) == root.get_node("GameData").ui_text("UI_OPENING")
+	sl.answer(-2)
+	while not boot.title.menu_on:
+		await process_frame
 	# the list: its rows, a step of the pace, saved
-	boot.title.pick_region(5)
+	boot.title.pick_region(3)
 	var l = null
 	while l == null:
 		await process_frame
 		l = _find(boot.title.holder, "title_list")
 	var rows: Array = l.items if l.items.size() > 0 else []
 	print("rows %d: %s" % [rows.size(), rows])
-	ok = ok and rows.size() == 10
+	ok = ok and rows.size() == 9
 	l.answer(2)
 	await process_frame
 	await process_frame
@@ -54,7 +64,7 @@ func _init() -> void:
 		l = _find(boot.title.holder, "title_list")
 	var row2: String = str(l.items[2])
 	print("pace row after the step: %s" % row2)
-	l.answer(9)                                  # Back
+	l.answer(8)                                  # Back
 	var back := false
 	for i in 60:
 		await process_frame

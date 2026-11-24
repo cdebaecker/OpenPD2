@@ -1,6 +1,6 @@
 extends SceneTree
 ## A shot of the title (not a test; windowed): godot --path engine/godot -s tests/title_shot.gd --
-## out.png <seconds> [hover|hover5|options|list|version|exit|continue|scenario|opening <seconds in>]
+## out.png <seconds> [hover|hover3|options|list|version|exit|continue|scenario|opening <seconds in>]
 ## The title runs as in play (the logos first); after <seconds> the shot is saved. hover /
 ## list / version / exit act once the menu is up; opening starts it and shoots after its
 ## own seconds.
@@ -24,10 +24,10 @@ func _init() -> void:
 		match act:
 			"hover":
 				boot.title._set_outline(0)
-			"hover5":                                # the port's OPTIONS
-				boot.title._set_outline(5)
+			"hover3":                                # the port's OPTIONS (OPENING's place)
+				boot.title._set_outline(3)
 			"options":                               # the port's options list
-				boot.title.pick_region(5)
+				boot.title.pick_region(3)
 			"list":
 				boot.title.pick_region(0)
 			"version":
@@ -43,8 +43,13 @@ func _init() -> void:
 					await process_frame
 					l = _find(boot.title.holder, "title_list")
 				l.answer(1)
-			"opening":
-				boot.title.pick_region(3)
+			"opening":                               # the start list's last entry (the port's)
+				boot.title.pick_region(0)
+				var l = null
+				while l == null:
+					await process_frame
+					l = _find(boot.title.holder, "title_list")
+				l.answer(l.items.size() - 1)
 				secs = float(args[3]) if args.size() > 3 else 5.0
 		t0 = Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < secs * 1000.0:

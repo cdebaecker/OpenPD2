@@ -44,7 +44,7 @@ func _init() -> void:
 		lst = find_role(tv.holder, "title_list")
 		if lst != null:
 			break
-	ok = ok and lst != null and lst.items.size() == 3
+	ok = ok and lst != null and lst.items.size() == 4                # (the port's Opening last)
 	if lst != null:
 		lst.answer(1)
 	var mission: String = load("res://ui/save_files.gd").mission_name(12)

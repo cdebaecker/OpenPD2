@@ -129,7 +129,7 @@ func _show_title() -> void:
 	busy = true
 	title.win_palette(0x50D82C, title.level)
 	title.pac("pd2title", 0, 0, 0)
-	title.options_word()                     # (the port's OPTIONS under QUIT)
+	title.options_word()                     # (the port's OPTIONS over OPENING)
 	if not GameAudio.title_shown:
 		await title.fade(100)
 		GameAudio.title_shown = true
@@ -150,8 +150,14 @@ func _menu() -> void:
 	busy = true
 	match i:
 		0:
-			var pick: int = await list_window(0x120, 0xD8, 20, SaveFiles.choice_texts(0x50D86C), true)
-			if pick == 0:
+			var picks := SaveFiles.choice_texts(0x50D86C)
+			var opening_at := picks.size()
+			picks.append(ui("UI_OPENING"))        # (the port's: OPENING's word is OPTIONS)
+			var pick: int = await list_window(0x120, 0xD8, 20, picks, true)
+			if pick == opening_at:
+				await title.opening()             # 0x4783A0 (its result is not looked at)
+				await _show_title()
+			elif pick == 0:
 				if await question(SaveFiles.exe(0x518A08), 0):
 					_run("0")
 				else:
@@ -171,10 +177,7 @@ func _menu() -> void:
 				get_tree().quit()
 			else:
 				_menu()
-		3:
-			await title.opening()                 # 0x4783A0 (its result is not looked at)
-			await _show_title()
-		5:
+		3:                                        # the port's OPTIONS in OPENING's place
 			await options()
 			_menu()
 		_:
@@ -238,7 +241,7 @@ func question(text: String, kind: int) -> bool:
 	return v == 0
 
 
-# --- the port's Options (region 5; not the game's) -----------------------------------------
+# --- the port's Options (region 3, OPENING's; not the game's) -----------------------------------------
 
 ## [label key, Settings' field, its values, the values' labels (ui keys, or texts)]
 const OPTIONS := [
@@ -250,7 +253,6 @@ const OPTIONS := [
 	["UI_OPT_SFX", "sfx", [0, 2, 4, 6, 8, 10], ["0", "2", "4", "6", "8", "10"]],
 	["UI_OPT_SOURCE", "music_source", ["ask", "cd", "midi"], ["UI_OPT_ASK", "CD", "MIDI"]],
 	["UI_OPT_LOGOS", "skip_logos", [false, true], ["UI_OPT_PLAY", "UI_OPT_SKIP"]],
-	["UI_OPT_HOVER", "classic_hover", [false, true], ["UI_OPT_HOVER_LIT", "UI_OPT_HOVER_FRAME"]],
 ]
 const OPTIONS_COLS := 38
 
@@ -308,8 +310,6 @@ func option_step(i: int) -> void:
 				if m != GameAudio.mode:
 					GameAudio.mode = m
 					GameAudio.music_start(5)       # (the title's tune again, from the new source)
-		"classic_hover":
-			TitleView.classic_outline = Settings.classic_hover
 	Settings.save_file()
 
 
