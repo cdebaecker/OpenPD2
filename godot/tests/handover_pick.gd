@@ -26,8 +26,13 @@ func _init() -> void:
 	var asked := false
 	var t0 := Time.get_ticks_msec()
 	var pick_texts := ""
-	while b.debrief_panel == null and Time.get_ticks_msec() - t0 < 120000:
+	var script = b.get_script()
+	var res := -1
+	while is_instance_valid(b) and not b.debrief_done and Time.get_ticks_msec() - t0 < 120000:
 		await process_frame
+		if not is_instance_valid(b):
+			break
+		res = b.debrief_result
 		var lst = _find(b, "pick")
 		if lst != null:
 			if pick_texts == "":
@@ -61,18 +66,17 @@ func _init() -> void:
 				ev.button_index = MOUSE_BUTTON_LEFT
 				ev.pressed = true
 				n._gui_input(ev)              # a click (a waiting window's, or the picture's)
-	var dvs := []
-	for n in b.get_tree().root.find_children("*", "", true, false):
-		if n.get_script() != null and str(n.get_script().resource_path).ends_with("debrief_view.gd"):
-			dvs.append([n.is_visible_in_tree(), n.get("screens")])
-	print("after %d ms: pick layer %s, react panel %s, debrief views %s" % [Time.get_ticks_msec() - t0, b._pick_layer, b.react_panel, dvs])
-	var n_picked := 0
-	for c in 64:
-		if Pd2World.s8(w.cb(c, 4)) != -1 and w.cb(c, 4) != 0xFF and w.cb(c, 2) == 0:
-			n_picked += 1
+	# game_mode_loop goes on at once: DASH's first mission (chunk 2, script 12)
+	var nb = null
+	for f in 60:
+		await process_frame
+		for n in root.get_children():
+			if is_instance_valid(n) and n != b and n.get_script() == script:
+				nb = n
 	print("debrief 0x%X, campaign %d, script %d, step %d, picked one %s, asked %s, first row %s" % [
-		b.debrief_result, w.campaign, w.script_no, w.ds16(0x50AD8E), picked_one, asked, pick_texts])
-	ok = b.debrief_result == 0x80 and w.campaign == 0 and w.script_no == 12 and picked_one and asked
+		res, w.campaign, w.script_no, w.ds16(0x50AD8E), picked_one, asked, pick_texts])
+	print("next battle: %s" % ("none" if nb == null else "%s chunk %d, script %d" % [nb.campaign, nb.mission_index + 1, nb.script_no]))
+	ok = res == 0x80 and w.campaign == 0 and w.script_no == 12 and picked_one and asked 		and nb != null and nb.campaign == "dash" and nb.script_no == 12
 	print("hand-over pick: %s" % ("ok" if ok else "FAILED"))
 	quit(0 if ok else 1)
 

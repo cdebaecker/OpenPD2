@@ -30,11 +30,8 @@ func _init() -> void:
 		b.debrief_result, step, w.ds16(0x50AD92), w.script_no, Debrief.chunk(w), w.ds8(0x50AD42), empty, str(nxt)])
 	var debriefed := ended and step == 2 and w.ds16(0x50AD92) == 2 and w.script_no == 3 and Debrief.chunk(w) == 3 \
 		and w.ds8(0x50AD42) == 1 and empty and nxt == [1, 3] and w.stock != stock_before
-	var lines := 0
-	for c in b.debrief_panel.get_children()[0].get_children():
-		if c is RichTextLabel:
-			lines = c.text.count("\n") + 1
-	print("debrief panel: %d lines" % lines)
+	var lines: int = b.debrief_lines.size()
+	print("debrief: %d lines, done %s, next %s" % [lines, b.debrief_done, b.debrief_next])
 	# the next mission: the battle scene again, from the debrief's save
 	var script = b.get_script()
 	b._next_mission(nxt)

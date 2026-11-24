@@ -237,6 +237,9 @@ BSS_END = 0x526000
 # menu (0x454E60's right button, 0x45A700), the flight window's and the counter-battery
 # pickers' words. GameData.exe_text, exe.csv.
 EXE_TEXTS = (0x5142A4, 0x5142B4,  # 一斉 0x429540
+             0x514DB8, 0x514DD0,  # the airdrop menu 0x44C7F0: 降下 / 一斉降下
+             0x518B90,            # 0x48BF90's "Event window full." (0x4521C0)
+             0x514240,            # the fuse list's rows (0x429200): %3d分
              0x5188E0, 0x518A20,  # the title's version box (0x452200) and its exit question (0x451E30)
              0x4FD008, 0x517930,  # the battle's save list (0x477B10): New File and its rows' format
              0x5158FC, 0x51590C, 0x51591C, 0x51592C, 0x515958, 0x51597C, 0x5159A0, 0x5159B4,  # the armament

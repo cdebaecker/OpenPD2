@@ -121,6 +121,8 @@ func _draw() -> void:
 		var t := tex("%s/images/%s/%02d.bmp" % [root, f[0], f[1]])
 		if t:
 			draw_texture(t, Vector2(f[2], f[3]))
+	for q in route:                       # 0x453CD0's squares (its window at (8, 0x20))
+		draw_rect(Rect2(Vector2(8, 0x20) + Vector2(q), Vector2(4, 4)), pal(15))
 	_draw_pick()
 
 
@@ -244,6 +246,37 @@ func _blink(c: Vector2i) -> void:
 	_answer(c)
 
 
+var route: Array = []          # 0x453CD0's squares drawn so far (Vector2i, its window's)
+
+
+func route_line(p0: Vector2i, p1: Vector2i) -> void:
+	## 0x453CD0 (script 13's route): over max(|dx|, |dy|) / 4 steps, the point 4 i along
+	## the line (_line_step 0x4539A0) filled 4 x 4 in colour 15, a 17 ms wait after each
+	route = []
+	var n := maxi(absi(p1.x - p0.x), absi(p1.y - p0.y)) / 4
+	for i in n:
+		route.append(Ai.line_step(p0.x, p0.y, p1.x, p1.y, 4 * i))
+		queue_redraw()
+		var end := Time.get_ticks_msec() + 0x11
+		while Time.get_ticks_msec() <= end and is_inside_tree():
+			await get_tree().process_frame
+
+
+func ping(c: Vector2i) -> void:
+	## 0x48BA40: the same shrinking squares at cell c (a script's point: DASH script 13's
+	## contacts), its 17 ms waits before each odd k; nothing answered
+	_blink_c = c
+	for k in 16:
+		if k % 2 == 1:
+			var end := Time.get_ticks_msec() + 0x11
+			while Time.get_ticks_msec() <= end and is_inside_tree():
+				await get_tree().process_frame
+		_blink_k = k
+		queue_redraw()
+	_blink_k = -1
+	queue_redraw()
+
+
 func _answer(v: Variant) -> void:
 	pick = ""
 	_hover_r = -1
@@ -267,7 +300,7 @@ func _draw_pick() -> void:
 		else:
 			var ry := 0x1A + 0x12 * _hover_r
 			_xor([[400, ry, 400 + 95, ry + 0xB, 1]], 15)
-	elif pick == "cell" and _blink_k >= 0:
+	elif _blink_k >= 0:                  # (a cell's click, or a script's point 0x48BA40)
 		var bx := _blink_c.x * 0x18 + 9
 		var by := _blink_c.y * 0x18 + 0x21
 		var ops := []

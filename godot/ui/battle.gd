@@ -18,7 +18,9 @@ static var carry := {}
 ## The title's start (0x46D780, ui/boot.gd) hands its savedata.tmp the same way, with
 ## new_campaign: game_mode_loop runs 0x421B90 first (button 0's entries returning 1).
 var title_carry := {}
-var debrief_panel: PanelContainer = null
+var debrief_lines: Array = []      # the debrief's lines (the tests read them)
+var debrief_next: Array = []       # the next mission [campaign flag, chunk], or none
+var debrief_done := false          # the debrief shown (the tests' runs stop there)
 var debrief_result := -1        # the debrief's code (0x80 next mission, 0x81 the title), -1 none yet
 
 var w: Pd2World
@@ -389,8 +391,12 @@ func _game_closed(code: int) -> void:
 	## 0x10000 (a save that cannot be read back, a window gone): the game itself ends
 	## there; the engine says so and goes back to the title
 	mission_over = true
-	say("[color=red]%s[/color]" % uif("UI_GAME_CLOSED", ["0x%X" % code]))
-	_show_debrief([], [])
+	debrief_done = true
+	if auto_react or _headless():
+		say("[color=red]%s[/color]" % uif("UI_GAME_CLOSED", ["0x%X" % code]))
+		return
+	show_line(uif("UI_GAME_CLOSED", ["0x%X" % code]), true)
+	after_lines(_to_title)
 
 
 class ResumeHooks extends Title.BattleSaveHooks:
@@ -696,6 +702,9 @@ func sortie_arg(arg: Array) -> String:
 
 func sortie_say(t: String) -> void:
 	sortie_text = t
+
+
+var sortie_objective := -1        # a deploy refusal's 0x4DD390 window (MES id) to show
 
 
 # --- the briefing (0x4DD2F0) and the operation plan (0x443F60, "plan_g.pac") ------------
@@ -1307,12 +1316,26 @@ func _plan_site_window(a: Array) -> void:
 
 
 func _plan_objective_window(m: int) -> void:
-	## 0x4DD390 for the deploy hook's message (0x444730 region 0): MES m + 0x20 in a framed
-	## window ((0x24 - 4) / 2 x 8 = 0x80, 0x90) 40 x 5 of 12 px (flags 1), its two answers
-	## DS:0x50E06D (無視, 再考) a 4-column list at (0x80 + 0x150, 0x90), no right click;
-	## 0 leaves the plan, 1 stays
+	## 0x4DD390 for the deploy hook's message (0x444730 region 0): MES m + 0x20; 0 leaves
+	## the plan, 1 stays
+	var gw := objective_window(plan_view, Vector2(PlanView.W, PlanView.H), GameData.base_text(campaign, m + 0x20, [], mission_index))
+	gw.role = "plan_objective"
+	gw.chosen.connect(func(v: int):
+		if v < 0:
+			return
+		plan_st.ask = null
+		if v == 0:
+			plan_st.mode = "page"
+			plan_st.k = 0
+		_plan_draw())
+
+
+func objective_window(parent: Control, sz: Vector2, t: String) -> GameWindow:
+	## 0x4DD390: the text in a framed window ((0x24 - 4) / 2 x 8 = 0x80, 0x90) 40 x 5 of 12
+	## px (flags 1), its two answers DS:0x50E06D (無視, 再考) a 4-column list at (0x80 +
+	## 0x150, 0x90), no right click; the answer list returned (its hold freed on a choice)
 	var hold := Control.new()
-	hold.size = Vector2(PlanView.W, PlanView.H)
+	hold.size = sz
 	hold.mouse_filter = Control.MOUSE_FILTER_STOP
 	var tw := GameWindow.text_window(0x80, 0x90, 0x28, 5, 1)
 	tw.lh = 12
@@ -1325,7 +1348,6 @@ func _plan_objective_window(m: int) -> void:
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(l)))
 	var gw := GameWindow.select_window(0x80 + 0x150, 0x90, ic, 0, 0, labels.slice(0, 2), ic, [], false)
-	gw.role = "plan_objective"
 	hold.add_child(gw)
 	hold.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and ev.pressed:
@@ -1333,19 +1355,14 @@ func _plan_objective_window(m: int) -> void:
 				tw.outside(ev.button_index)
 			else:
 				gw.outside(ev.button_index))
-	plan_view.add_child(hold)
-	var t := GameData.base_text(campaign, m + 0x20, [], mission_index)
+	parent.add_child(hold)
 	if GameWindow.translated(t):
 		t = GameWindow.fit(t, 0x28)
 	tw.print_text(t)
 	gw.chosen.connect(func(v: int):
-		if v < 0:
-			return
-		plan_st.ask = null
-		if v == 0:
-			plan_st.mode = "page"
-			plan_st.k = 0
-		_plan_draw())
+		if v >= 0 and is_instance_valid(hold):
+			hold.queue_free())
+	return gw
 
 
 func _plan_list_window(a: Array) -> void:
@@ -1896,6 +1913,12 @@ func _sortie_draw(confirm := false) -> void:
 	sortie_panel.add_child(sortie_view)
 	sortie_view.refresh()
 	sortie_view.pressed.connect(_sortie_region)
+	if sortie_objective >= 0:
+		var og := objective_window(sortie_panel, Vector2(MAIN_W, MAIN_H), mes(sortie_objective))
+		og.role = "sortie_objective"
+		og.chosen.connect(func(v: int):
+			if v >= 0:
+				sortie_objective = -1)
 	if sortie_text != "":
 		# a note of the start's checks / the roster / the system menu: 0x45ED60's framed
 		# window (0x98, 0xB4) 40 x 2 of 12 px, then '@'
@@ -3553,13 +3576,13 @@ func _build_hud() -> void:
 	var row4 := HBoxContainer.new()
 	box.add_child(row4)
 	var cmds := [["Search [S]", _cmd_search], ["Conceal [C]", _cmd_conceal], ["Carry / release [K]", _cmd_carry_mode],
-			[ui("UI_ITEM_USE") + " [U]", _cmd_item_mode],
+			[ui("UI_ITEM_USE"), _cmd_item_mode],
 			["Next [Tab]", _next_unit], ["End turn [E]", _end_turn], [ui("UI_WITHDRAW") + " [W]", _cmd_withdraw]]
 	# (the engine's bar: a generic label. The menu hook, table 0x51EF18, runs only for a unit
 	# whose menu opens, as the game's: it reads around the unit, which isn't on the map yet
 	# here, and some hooks write state)
 	cmds.append([ui("UI_MISSION_COMMAND") + " [I]", _cmd_mission])
-	cmds.append([ui("UI_EXPLOSIVES") + " [X]", _cmd_explosives])
+	cmds.append([ui("UI_EXPLOSIVES"), _cmd_explosives])
 	cmds.append([ui("UI_SLOT_MENU") + " [G]", _cmd_slot_menu])
 	cmds.append([ui("UI_POCKET_MENU") + " [P]", _cmd_pocket_menu])   # the machine status window (the menu's entry 7)
 	cmds.append([ui("UI_SYSTEM") + " [Esc]", _cmd_system])     # the command menu's entry 0x10 (0x4847C0)
@@ -3763,6 +3786,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.button_index == MOUSE_BUTTON_LEFT and not busy:
 			_click(hex_at(get_global_mouse_position()))
 	elif ev is InputEventKey and ev.pressed and not ev.echo and not busy:
+		# (the port's shortcuts to the game's own commands and buttons; the game has none)
 		match ev.keycode:
 			KEY_M: _set_mode("move")
 			KEY_F: _fire_command("fire")
@@ -3771,11 +3795,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_S: _cmd_search()
 			KEY_C: _cmd_conceal()
 			KEY_K: _cmd_carry_mode()
-			KEY_U: _cmd_item_mode()
-			KEY_E: _end_turn()
+			KEY_E: _confirm(msg(0x1E0), _end_turn, 1)   # (as 終了: 0x1E0, a message box of kind 1)
 			KEY_W: _cmd_withdraw()
 			KEY_I: _cmd_mission()
-			KEY_X: _cmd_explosives()
 			KEY_G: _cmd_slot_menu()
 			KEY_P: _cmd_pocket_menu()
 			KEY_ESCAPE: _cmd_system()
@@ -3787,7 +3809,6 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_R:                                    # the last flight window, to look at again
 				if radar_view and not radar_view.snap.is_empty():
 					radar_view.visible = not radar_view.visible
-			KEY_1, KEY_2, KEY_3, KEY_4: _set_slot(ev.keycode - KEY_1)
 
 
 # --- the command menu (unit_command_menu 0x4EE8D0) and the info panel ---------------
@@ -5202,25 +5223,17 @@ func list_font() -> Font:
 
 
 func ask_hex(text: String, hexes: Array, default: Variant) -> Variant:
-	## a hex clicked on the map (ui_map_click), on a worker thread; hexes are marked ("any":
-	## every hex is taken), the panel's button answers -2. auto_react / the main thread: default.
+	## a hex clicked on the map (ui_map_click 0x47AC70), on a worker thread: no window, the
+	## hexes marked ("any": every hex is taken), a right click answers -2. text is the
+	## engine's own description (the log). auto_react / the main thread: default.
 	if not scripted.is_empty():
 		return scripted.pop_front()
 	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return default
-	call_deferred("_open_hex", text, hexes)
+	say(text)
+	call_deferred("_open_map_click", hexes)
 	react_sem.wait()
 	return react_answer
-
-
-func _open_hex(text: String, hexes: Array) -> void:
-	hex_pick = hexes if not hexes.is_empty() else ["any"]
-	var box := _reaction_panel(text.replace("@", "\n").strip_edges())
-	var btn := Button.new()
-	btn.text = ui("UI_CANCEL")
-	btn.pressed.connect(_answer_hex.bind(-2))
-	box.add_child(btn)
-	overlay.queue_redraw()
 
 
 func _answer_hex(v: Variant) -> void:
@@ -5239,6 +5252,20 @@ func _open_choice(text: String, options: Array, kind := "list") -> void:
 		"box":
 			gw = open_box(text, [options[0][0], options[1][0]])
 			gw.chosen.connect(func(v: int): _answer_reaction(options[0][1] if v == 0 else options[1][1]))
+		"fuse":
+			var labels := []
+			for o in options:
+				if not (o[1] is int and o[1] == -2):
+					labels.append(o[0])
+			gw = open_fuse(text, labels)
+			gw.chosen.connect(func(v: int): _answer_reaction(-2 if v < 0 else options[v][1]))
+		"drop_menu", "drop_who":
+			var labels := []
+			for o in options:
+				if not (o[1] is int and o[1] == -2):
+					labels.append(o[0])
+			gw = open_menu(labels, 10 if kind == "drop_menu" else 0x15, kind)
+			gw.chosen.connect(func(v: int): _answer_reaction(-2 if v < 0 else options[v][1]))
 		"menu":
 			var labels := []
 			for o in options:
@@ -5575,7 +5602,7 @@ func box_windows(text: String, labels: Array, at_y := -1) -> Array:
 	return [mw, bw]
 
 
-func open_menu(labels: Array, cols := 0xE) -> GameWindow:
+func open_menu(labels: Array, cols := 0xE, place := "") -> GameWindow:
 	## the slot menu (0x427530) and the pocket menu (0x427FF0): a select window of 14
 	## columns at the cursor (x & ~7 - 0x28, y - n x 16 / 2; x 640 - 0x80 when x & ~7 + 0x57
 	## passes 640, y 400 - (n + 1) x 16 when the list would pass 400; not below 0), right
@@ -5588,11 +5615,47 @@ func open_menu(labels: Array, cols := 0xE) -> GameWindow:
 		x = MAIN_W - 0x80
 	if y + 0xF + n * 16 > MAIN_H:
 		y = MAIN_H - (n + 1) * 16
+	if place == "drop_menu":             # 0x44C7F0: (x & ~7 - 0x18, y - 0x10)
+		x = (int(m.x) & 0xFFF8) - 0x18
+		if (int(m.x) & 0xFFF8) + 0x47 > MAIN_W:
+			x = MAIN_W - 0x60
+		y = int(m.y) - 0x10
+		if int(m.y) + 0x1F > MAIN_H:
+			y = MAIN_H - 0x30
+	elif place == "drop_who":            # 0x44A7E0: (x & ~7 - 0x28, y - 0x40)
+		x = (int(m.x) & 0xFFF8) - 0x28
+		if (int(m.x) & 0xFFF8) + 0xE7 > MAIN_W:
+			x = MAIN_W - 0x110
+		y = int(m.y) - 0x40
+		if n * 16 + 0xF + y > MAIN_H:
+			y = MAIN_H - (n + 1) * 16
 	var ic := cols
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(l)))     # (engine-side: a longer translation widens it)
 	var gw := GameWindow.select_window(maxi(x, 0), maxi(y, 0), ic, 0, 0, labels, ic, [], true)
 	_hold([gw])
+	return gw
+
+
+func open_fuse(text: String, labels: Array) -> GameWindow:
+	## 0x429200: the list (0x40C090, 5 columns, a right click cancelling) and over it a
+	## framed window of the question's length (one line, flags 0), the pair centred on the
+	## window (the list's size + 0x20 high), the list 0x20 under the header
+	var t := text.replace("@", "").strip_edges()
+	var ic := 5
+	for l in labels:
+		ic = maxi(ic, GameWindow.text_cols(str(l)))       # (engine-side: a wider translation)
+	var gw := GameWindow.select_window(0, 0, ic, 0, 0, labels, ic, [], true)
+	var sz: Vector2 = gw.size
+	var x := maxi(0, (MAIN_W - int(sz.x)) >> 1)
+	var y := maxi(0, (MAIN_H - (int(sz.y) + 0x20)) >> 1)
+	var n := GameWindow.text_cols(t)
+	var hd := GameWindow.text_window(x, y, n, 1, 0)
+	hd.waits = false
+	gw.position = Vector2((x >> 3) << 3, y + 0x20)
+	gw.role = "fuse"
+	_hold([hd, gw])
+	hd.print_text(t)
 	return gw
 
 
@@ -6400,8 +6463,10 @@ func _menu_advance() -> void:
 	_menu_close()
 	var real := MenuDriveHooks.new(menu_answers, self, false)
 	var r := Title.battle_menu(w, real)
-	for t in real.notes:
+	for t in real.notes:                 # (0x452170: a centred red line until a click)
 		say(menu_text(t))
+		if not auto_react and not _headless():
+			await note_line(menu_text(t))
 	if r in Title.BATTLE_ABORTS:
 		_game_closed(r)
 		return
@@ -6806,11 +6871,16 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return 0
 
 	func note(msg: int) -> int:
-		## 0x452170 from an init (the pre-battle screen: MES.PCK), e.g. mission 10's 0x1CE
+		## 0x452170 from an init (the pre-battle screen: MES.PCK), e.g. mission 10's 0x1CE:
+		## 0x452200 with its red start, a centred line at y 0xAA until a click
 		battle.say(battle.mes(msg))
+		battle.script_window(battle.note_line.bind(battle.mes(msg)))
 		return 0
 
 	func scroll(x: int, y: int) -> int:
+		## scroll_to (0x4F4730): the map window's view centred on the hex (its redraw)
+		if not battle.auto_react:
+			battle.call_deferred("scroll_to_hex", x, y)
 		return 0
 
 	func speech() -> int:
@@ -6819,8 +6889,9 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return MissionScripts.run_speech(battle.w, battle.rng, self)
 
 	func end_dialog(msg: int) -> int:
-		## 0x4DD390 in the sortie: the refusal's text (MES.PCK); its first choice
-		battle.sortie_say(battle.mes(msg))
+		## 0x4DD390 in the sortie (the deploy hook's refusal, MES.PCK): its window on the
+		## sortie screen; the hook looks only at the abort codes, so its answer is 0
+		battle.sortie_objective = msg
 		return 0
 
 	func box(msg: int, args: Array, kind: int) -> int:
@@ -6831,11 +6902,11 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 				[GameData.exe_text(battle.campaign, l0 + 8), 0]], 1)
 
 	func line(msg: int, args := []) -> int:
-		## 0x4521C0: a message, or one of Pd2.exe's own strings (an address)
-		if msg >= 0x500000:
-			battle.say(GameData.exe_text(battle.campaign, msg, _args(args)))
-		else:
-			battle.say_msg(msg, _args(args))
+		## 0x4521C0: ui_message_line(text, red) of a message, or of one of Pd2.exe's own
+		## strings (an address)
+		var t: String = GameData.exe_text(battle.campaign, msg, _args(args)) if msg >= 0x500000 else battle.msg(msg, _args(args))
+		battle.say(t.replace("@", "\n").strip_edges())
+		battle.script_window(battle.line_wait.bind(t, true))
 		return 0
 
 	func prompt(msg: int, args := []) -> int:
@@ -6845,41 +6916,145 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 
 	func fuse(msg: int, low: int) -> int:
 		## 0x429200: the fuse list, "%3d分" from low x 5 in steps of 5 (25 - low entries)
+		## (DS:0x514240 per row), under a header window of the question; a right click -2
 		var opts := []
 		for i in 25 - low:
-			opts.append([battle.uif("UI_MINUTES", [(low + i) * 5]), i])
-		opts.append([battle.ui("UI_CANCEL"), -2])
-		return battle.ask_choice(battle.msg(msg), opts, 0)
+			opts.append([GameData.exe_text(battle.campaign, 0x514240, [(low + i) * 5]), i])
+		opts.append(["", -2])
+		return battle.ask_choice(battle.msg(msg), opts, 0, "fuse")
 
 	func blast_start(x: int, y: int) -> int:
 		battle.say(battle.uif("UI_BLAST", [x, y]))
 		return 0
 
 	func anim_frame(player: int, x: int, y: int, i: int, dy: int, dx: int) -> bool:
-		return battle.anim_frame(player, x, y, i, dy, dx, [])
+		var skipped: bool = battle.anim_frame(player, x, y, i, dy, dx, [])
+		if skipped:
+			_shot_skip = true
+		return skipped
 
 	func blast(x: int, y: int) -> int:
 		## 0x417410 (anime_bomb): 0x80000 when a click skipped it
 		battle.say(battle.uif("UI_BLAST", [x, y]))
 		return 0x80000 if battle.anim_player(0x417410, x, y) else 0
 
-	## DASH script 13's talk windows (0x48BF90 / 0x48C260 with a portrait and a text): the
-	## message log; the base-screen lines of 0x452200 (MES.PCK), the data window's text
+	## DASH script 13's windows: the talk windows (0x48BF90 / 0x48C260 / 0x48C2B0, a
+	## portrait and a text), the centred red line (0x452200), the escape's data window
+	## (ui_window_print, its pictures), the fades (0x4875D0 / 0x487AE0), the radar's point
+	## (0x48BA40) and route (0x453CD0), the shot's hit and kill animations (0x4101A0 /
+	## 0x4103A0), the pauses (ui_wait)
 	func talk(face: int, msg: int, args: Array, x: int, place: int) -> int:
-		battle.say(_text(msg, args))
-		return 0
+		var t := _text(msg, args)
+		battle.say(t)
+		var h: int = battle.talk_slot()
+		if h < 0:                                    # (all five in use)
+			line(0x518B90)                           # "Event window full."
+			return 0x10000
+		battle.script_window(battle.talk_open.bind(h, face, t, x, place))
+		return h
 
 	func talk_more(h: int, msg: int, args: Array) -> int:
-		battle.say(_text(msg, args))
+		var t := _text(msg, args)
+		battle.say(t)
+		if h >= 0 and h < 5 and battle.talk_used[h]:
+			battle.script_window(battle.talk_print.bind(h, t))
+		return 0
+
+	func talk_close(h: int) -> int:
+		battle.talk_close(h)
 		return 0
 
 	func notice(msg: int, args := []) -> int:
+		## 0x452200(text, red 1): a centred line at y 0xAA until a click (MES.PCK)
 		battle.say(battle.mes(msg))
+		battle.script_window(battle.note_line.bind(battle.mes(msg)))
 		return 0
 
 	func print_text(msg: int, args := []) -> int:
-		if msg < 0x500000:
-			battle.say(battle.msg(msg, _args(args)))
+		## ui_window_print into the escape's data window: its first print (DS:0x51C788, a
+		## clear) is the picture window's, the others the text window's
+		if msg == 0x51C788:
+			battle.script_window(battle.data_open)
+		elif msg < 0x500000:
+			var a := _args(args)
+			if msg == 0x13B:
+				## (0x4B34E7's pushes: the name, the working set's machine +4, +5, the
+				## unit's melee 0x4509E0 and +6, its recon 0x450A80 and +7, 0x450AF0 and +8,
+				## the pockets +0x17; unit 0x2F)
+				var w: Pd2World = battle.w
+				var m := Pd2World.s8(w.ub(0x2F, 0xC))
+				var rr := Sight.recon_range(w, 0x2F)
+				a = [a[0] if a.size() > 0 else "", w.machine(m, 4), w.machine(m, 5),
+						Ai.machine_melee_of(w, 0x2F), w.machine(m, 6), rr.x, w.machine(m, 7),
+						rr.y, w.machine(m, 8), w.machine(m, 0x17)]
+			var t: String = battle.msg(msg, a)
+			battle.say(t)
+			battle.script_window(battle.data_print.bind(t))
+		return 0
+
+	func picture() -> int:
+		## the data window's pictures of unit 0x2F's machine (+0x19): datau.pac (0x40DFE0),
+		## then hidan.pac (0x40E410), at (8, 6)
+		battle.script_window(battle.data_picture)
+		return 0
+
+	func fade(level: int) -> int:
+		battle.script_window(battle.fade_to.bind(level))
+		return 0
+
+	func fade_level() -> int:
+		return battle.fade_lvl
+
+	func ping(x: int, y: int) -> int:
+		battle.script_window(battle.radar_ping.bind(Vector2i(x, y)))
+		return 0
+
+	func wait() -> int:
+		## 0x453CD0 in script 13's stage 0: the route from DS:0x51C678 / 0x51C67A to
+		## DS:0x50AD95 / 0x50AD97 drawn on the radar, 4 px squares every 4 px, 17 ms each
+		var w: Pd2World = battle.w
+		var p0 := Vector2i(Flight.s16(w.mem8(0x51C678) | w.mem8(0x51C679) << 8) * 0x18 + 8,
+				Flight.s16(w.mem8(0x51C67A) | w.mem8(0x51C67B) << 8) * 0x18 + 8)
+		var q := MissionScripts.m13_ds95(w)
+		var p1 := Vector2i(q.x * 0x18 + 8, q.y * 0x18 + 0x20)
+		battle.script_window(battle.radar_route.bind(p0, p1))
+		return 0
+
+	func ui_wait(ms: int) -> int:
+		## ui_wait 0x452650: a plain pause
+		battle.script_pause(ms)
+		return 0
+
+	func date_window() -> int:
+		## ui_date_window 0x4361C0: the panel's TIME and PASSES boxes printed again
+		if not battle.auto_react:
+			battle.call_deferred("_refresh_info")
+		return 0
+
+	var _shot_skip := false
+
+	func blast_open() -> int:
+		_shot_skip = false
+		return 0
+
+	func shot_anim() -> int:
+		## 0x4101A0 for 0x40F590(0x2F, 0)'s record (script 13's board): the hit's player of
+		## 0x2F's launcher kind at 0x2E's hex (with its random draws for kinds 0 / 1), unless
+		## the shooter's animation was skipped by a click (RULES.md 5.25)
+		var w: Pd2World = battle.w
+		if options & 0x10 or _shot_skip:
+			return 0
+		var lid := w.launcher_id(0x2F, 0)
+		var ak := w.launcher(lid, 9) >> 4 if lid != -1 else 9
+		Action.anim_hit(w, battle.rng, self, ak, w.sb(0x2E, 9), w.sb(0x2E, 10))
+		return 0
+
+	func hit_anim() -> int:
+		## 0x4103A0: the kill's player (0x420CD0) at 0x2E's hex, the hex emptied at its end
+		var w: Pd2World = battle.w
+		if options & 0x10:
+			return 0
+		Action.anim_kill(w, battle.rng, self, w.sb(0x2E, 9), w.sb(0x2E, 10))
 		return 0
 
 	func _text(msg: int, args: Array) -> String:
@@ -7229,15 +7404,25 @@ class BattleDropHooks extends Drop.Hooks:
 		return 0 if battle.ask_prompt(battle.msg(msg, args), true) else 1
 
 	func drop_menu(u: int) -> int:
-		return battle.ask_choice(battle.ui("UI_DROP_MENU"), [[battle.ui("UI_DROP_ONE"), 0],
-			[battle.ui("UI_DROP_ALL"), 1], [battle.ui("UI_CANCEL"), -2]], 1)
+		## 0x44C7F0: 0x40C090 of DS:0x514DB8 / 0x514DD0 (降下 / 一斉降下), 10 columns at the
+		## cursor, a right click cancelling
+		return battle.ask_choice("", [[GameData.exe_text(battle.campaign, 0x514DB8), 0],
+			[GameData.exe_text(battle.campaign, 0x514DD0), 1], ["", -2]], 1, "drop_menu")
 
 	func pick(units: Array) -> int:
+		## 0x44A7E0: a row per passenger, message 499 (%b 0x7F, the machine's code, the
+		## pilot's given and family names), 21 columns at the cursor, a right click cancelling
 		var opts := []
+		var codes: Array = GameData.tables(battle.campaign).get("machine_codes", [])
+		var names: Array = GameData.tables(battle.campaign).crew_names
 		for k in units:
-			opts.append([battle.unit_name(k), k])
-		opts.append([battle.ui("UI_CANCEL"), -2])
-		return battle.ask_choice(battle.ui("UI_DROP_WHO"), opts, -2)
+			var m := Pd2World.s8(w.ub(k, 0xC))
+			var c := Pd2World.s8(w.ub(k, 0xB))
+			var id := Pd2World.s8(w.crew[16 * c]) if c >= 0 else -1
+			var nm: Array = names[id] if id >= 0 and id < names.size() else ["", ""]
+			opts.append([battle.msg(0x1F3, [0x7F, codes[m] if m >= 0 and m < codes.size() else "", nm[0], nm[1]]), k])
+		opts.append(["", -2])
+		return battle.ask_choice("", opts, -2, "drop_who")
 
 	func drop_click(k: int, hexes: Array) -> Variant:
 		return battle.ask_hex(battle.uif("UI_DROP_WHERE", [battle.unit_name(k)]), hexes, -2)
@@ -7338,7 +7523,19 @@ func _cmd_withdraw() -> void:
 
 
 func _withdraw() -> void:
-	var code := Debrief.scenario_command(w, script_no, rng, mission_hooks)
+	var code := -1
+	if auto_react or _headless():
+		code = Debrief.scenario_command(w, script_no, rng, mission_hooks)
+	else:
+		# (its scenario hook's windows, e.g. DASH script 13's talks, wait for the player:
+		# the hook runs on a worker thread meanwhile)
+		busy = true
+		var th := Thread.new()
+		th.start(func(): return Debrief.scenario_command(w, script_no, rng, mission_hooks))
+		while th.is_alive():
+			await get_tree().process_frame
+		code = th.wait_to_finish()
+		busy = false
 	if code == -1:
 		say(uif("UI_NOT_PORTED_HOOK", ["0x51F038", script_no]))
 		return
@@ -7480,11 +7677,205 @@ func machine_name(m: int) -> String:
 	return mach[m] if m >= 0 and m < mach.size() else "-"
 
 
+# --- the mission scripts' windows (BattleMissionHooks) --------------------------------
+
+var talk_used := [false, false, false, false, false]   # DS:0x5240D8: the talk windows in use
+var _talk_holds := [null, null, null, null, null]
+var _talk_texts := [null, null, null, null, null]       # the text windows (DS:0x5240E0)
+var _data_hold: Control = null                          # the escape's data window pair
+var _data_pics := 0
+var fade_lvl := 100                                     # 0x487AE0: the palette's level
+var _fade_rect: ColorRect = null
+
+
+func script_window(fn: Callable) -> void:
+	## a script's window drawn on the main thread: the script's worker thread waits for it
+	## (its clicks, its animation); from the main thread (an init during the briefing, a
+	## withdraw) it opens and the script goes on
+	if auto_react or _headless():
+		return
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		fn.call()
+		return
+	call_deferred("_script_window_run", fn)
+	react_sem.wait()
+
+
+func _script_window_run(fn: Callable) -> void:
+	await fn.call()
+	react_sem.post()
+
+
+func script_pause(ms: int) -> void:
+	## ui_wait in a script: the worker thread sleeps (the windows stay drawn)
+	if auto_react or _headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
+		return
+	OS.delay_msec(ms)
+
+
+func note_line(t: String) -> void:
+	## 0x452200(text, red 1): "%a4F" and the line in a framed window of its length at
+	## ((80 - (len + 2)) / 2 x 8, 0xAA) (flags 1), then a click
+	var n := mini(GameWindow.text_cols(t), 76)
+	if GameWindow.text_cols(t) > 76:
+		t = GameWindow.fit(t, 76)
+	var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, t.split("\n").size(), 1)
+	gw.waits = true
+	_hold([gw])
+	await gw.print_text("\u0001" + char(0x4F) + t + "\n")
+	_close_window(gw)
+
+
+func line_wait(t: String, red: bool) -> void:
+	## ui_message_line (0x452300) from a script: its line, the script waiting for its click
+	show_line(t, red)
+	if _line_open != null and is_instance_valid(_line_open):
+		await lines_done
+
+
+func talk_slot() -> int:
+	## 0x48BF90's free slot (of five), taken
+	for i in 5:
+		if not talk_used[i]:
+			talk_used[i] = true
+			return i
+	return -1
+
+
+func talk_open(h: int, face: int, t: String, x: int, place: int) -> void:
+	## 0x48BF90: at x (place its y), or with x -1 by place: 0 (0xB8, 0x90), 1 (0x18, 0x2C),
+	## 2 (0x158, 0x2C), 3 (0x18, 0xF4), 4 (0x158, 0xF4); a framed window 31 x 6 (16 px
+	## lines) with dface.pac's portrait at (8, 8) and the text in an unframed one (20 x 6,
+	## flags 1) at (+0x60, +8)
+	var y := place
+	if x == -1:
+		var at: Array = {1: [0x18, 0x2C], 2: [0x158, 0x2C], 3: [0x18, 0xF4], 4: [0x158, 0xF4]}.get(place, [0xB8, 0x90])
+		x = at[0]
+		y = at[1]
+	var outer := GameWindow.text_window(x, y, 0x1F, 6, 0)
+	outer.waits = false
+	if face >= 0:
+		outer.blit("%s/images/dface/%02d.bmp" % [GameData.ROOT, face], 8, 8)
+	var inner := GameWindow.text_window(x + 0x60, y + 8, 0x14, 6, 1, false)
+	inner.waits = true
+	var hold := _hold([outer, inner])
+	if react_panel == hold:
+		react_panel = null
+	_talk_holds[h] = hold
+	_talk_texts[h] = inner
+	await talk_print(h, t)
+
+
+func talk_print(h: int, t: String) -> void:
+	## 0x48C260 / ui_window_print into talk window h: its '@' and full window wait
+	var gw = _talk_texts[h]
+	var hold = _talk_holds[h]
+	if gw == null or not is_instance_valid(gw):
+		return
+	if GameWindow.translated(t):
+		t = GameWindow.fit(t, 0x14)
+	hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	await gw.print_text(t)
+	if is_instance_valid(hold):
+		hold.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func talk_close(h: int) -> void:
+	## 0x48C2B0: talk window h closed (-2: all); the escape's data window with them
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		for i in (range(5) if h == -2 else [h]):
+			if i >= 0 and i < 5:
+				talk_used[i] = false
+		call_deferred("talk_close", h)
+		return
+	for i in (range(5) if h == -2 else [h]):
+		if i < 0 or i >= 5:
+			continue
+		talk_used[i] = false
+		if _talk_holds[i] != null and is_instance_valid(_talk_holds[i]):
+			_talk_holds[i].queue_free()
+		_talk_holds[i] = null
+		_talk_texts[i] = null
+	if h == -2 and _data_hold != null and is_instance_valid(_data_hold):
+		_data_hold.queue_free()
+		_data_hold = null
+
+
+func data_open() -> void:
+	## script 13's escape: the picture window (framed, 14 x 10, flags 0) at (0xB0, 0x28) and
+	## the text window (framed, 18 x 10, flags 1) at (0x130, 0x28)
+	var pw := GameWindow.text_window(0xB0, 0x28, 0xE, 10, 0)
+	pw.waits = false
+	var tw := GameWindow.text_window(0x130, 0x28, 0x12, 10, 1)
+	tw.waits = true
+	_data_hold = _hold([pw, tw])
+	if react_panel == _data_hold:
+		react_panel = null
+	_data_hold.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_data_pics = 0
+
+
+func data_picture() -> void:
+	if _data_hold == null or not is_instance_valid(_data_hold):
+		return
+	var pw: GameWindow = _data_hold.get_child(0)
+	var m := Pd2World.s8(w.ub(0x2F, 0xC))
+	var pic := w.umachine(0x2F, 0x19) if m >= 0 else 0
+	if _data_pics == 0:
+		pw.blit("%s/%s/images/datau/%02d.bmp" % [GameData.ROOT, campaign, pic], 8, 6)
+	else:
+		pw.blit("%s/images/hidan/%02d.bmp" % [GameData.ROOT, pic], 8, 6)
+	_data_pics += 1
+
+
+func data_print(t: String) -> void:
+	if _data_hold == null or not is_instance_valid(_data_hold):
+		return
+	var tw: GameWindow = _data_hold.get_child(1)
+	if GameWindow.translated(t):
+		t = GameWindow.fit(t, 0x12)
+	_data_hold.mouse_filter = Control.MOUSE_FILTER_STOP
+	await tw.print_text(t)
+	_data_hold.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+func fade_to(level: int) -> void:
+	## 0x4875D0: the screen's palette taken to level (0 black, 100 normal, 200 white) 5 at a
+	## time, 17 ms a step
+	if _fade_rect == null or not is_instance_valid(_fade_rect):
+		_fade_rect = ColorRect.new()
+		_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fade_rect.size = get_viewport().get_visible_rect().size
+		_fade_rect.color = Color(0, 0, 0, 0)
+		hud_layer.add_child(_fade_rect)
+	while fade_lvl != level:
+		fade_lvl = int(move_toward(fade_lvl, level, 5))
+		_fade_rect.color = Color(0, 0, 0, (100 - fade_lvl) / 100.0) if fade_lvl <= 100 else Color(1, 1, 1, (fade_lvl - 100) / 100.0)
+		hud_layer.move_child(_fade_rect, -1)
+		await get_tree().create_timer(0.017).timeout
+
+
+func radar_ping(c: Vector2i) -> void:
+	## 0x48BA40 on the flight window; the route's window (0x453CD0's) closes after it
+	var r := _radar()
+	if r.visible:
+		await r.ping(c)
+	r.route = []
+	r.queue_redraw()
+
+
+func radar_route(p0: Vector2i, p1: Vector2i) -> void:
+	var r := _radar()
+	if r.visible:
+		await r.route_line(p0, p1)
+
+
 func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
 	## The debrief's screens as the game shows them (ui/debrief_view.gd: the pictures, the
-	## texts, the results), then the debrief panel: its other lines (new items, recruits ..:
-	## not drawn the game's way yet), then the next mission (game_mode_loop: the mission
-	## start 0x416CF0 with the debrief's save) or the way back to the mission list.
+	## texts, the results, the lists), then game_mode_loop goes on (RULES.md 5.18): the next
+	## mission's start (0x416CF0 with the debrief's save) while the campaign goes on (mode 1,
+	## DS:0x50AD92 up to 20), else the title. The tests' runs (auto_react, headless) stop at
+	## debrief_done and drive the next round themselves.
 	if not screens.is_empty() and not auto_react and not _headless():
 		var dv := DebriefView.new()
 		dv.battle = self
@@ -7496,31 +7887,20 @@ func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
 		for s in screens:                # (no screens shown: the tunes still start in turn)
 			if s[0] == "music":
 				GameAudio.music_start(int(s[1]))
-	if debrief_panel:
-		debrief_panel.queue_free()
-	debrief_panel = PanelContainer.new()
-	var theme := Theme.new()
-	theme.default_font_size = 8
-	debrief_panel.theme = theme
-	debrief_panel.position = Vector2(220, 20)
-	hud_layer.add_child(debrief_panel)
-	var box := VBoxContainer.new()
-	debrief_panel.add_child(box)
-	var text := RichTextLabel.new()
-	text.bbcode_enabled = true
-	text.fit_content = true
-	text.custom_minimum_size = Vector2(420, 0)
-	text.text = "\n".join(lines) if not lines.is_empty() else ui("UI_MISSION_OVER")
-	box.add_child(text)
+	debrief_lines = lines
+	debrief_next = nxt
+	debrief_done = true
+	if auto_react or _headless():
+		return
 	if not nxt.is_empty():
-		var go := Button.new()
-		go.text = ui("UI_NEXT_MISSION")
-		go.pressed.connect(_next_mission.bind(nxt))
-		box.add_child(go)
-	var back := Button.new()
-	back.text = ui("UI_BACK_TO_MISSIONS")
-	back.pressed.connect(func(): get_tree().change_scene_to_file("res://ui/boot.tscn"))
-	box.add_child(back)
+		_next_mission(nxt)
+	else:
+		_to_title()
+
+
+func _to_title() -> void:
+	## game_mode_loop's title (StartWindow) again
+	get_tree().change_scene_to_file("res://ui/boot.tscn")
 
 
 func _debrief_screens_now(screens: Array) -> void:
