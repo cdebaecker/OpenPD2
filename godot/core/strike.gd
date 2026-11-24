@@ -314,6 +314,7 @@ static func _occupant(w: Pd2World, x: int, y: int) -> int:
 
 ## 0x4E1A90: s's strike with slot `slot` at (x, y), over `pts` or the single hex.
 static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int, pts: Variant, hooks: Hooks, easy := false) -> int:
+	Flight.refresh_panels(w)          # (0x40F590's first call: ui_refresh_panels)
 	var anims := hooks.anims
 	var akind := w.launcher(w.launcher_id(s, slot), 9) >> 4
 	if anims:
@@ -370,6 +371,8 @@ static func fire(w: Pd2World, rng: Pd2Random, s: int, slot: int, x: int, y: int,
 		if not w.campaign and not laid and (wh < 3 or wh == Action.MINE_WARHEAD) and tx + MAP * ty >= 0 \
 				and Action.mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
+			if w.on_map(tx, ty):
+				Flight.refresh_panels(w)      # (0x473330 -> 0x40F590's first call: ui_refresh_panels)
 			if anims and w.on_map(tx, ty):
 				Action.anim_bomb(w, rng, hooks, tx, ty)
 			w.F[tx + MAP * ty] &= 0x3F

@@ -61,6 +61,7 @@ static func fire_area(w: Pd2World, rng: Pd2Random, x: int, y: int, r: int) -> Ar
 ## 0x415150: resolve one shot of s's slot in fire mode `mode` at (x, y) over `targets`.
 static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode: int, x: int, y: int,
 		targets: Array = [], hooks: AiHooks = null, easy := false) -> int:
+	Flight.refresh_panels(w)          # (0x40F590's first call: ui_refresh_panels)
 	if hooks == null:
 		hooks = AiHooks.new()
 	var side := 3 if w.is_enemy(s) else 0
@@ -158,6 +159,8 @@ static func fire_resolution(w: Pd2World, rng: Pd2Random, s: int, slot: int, mode
 				skipped = anim_hit(w, rng, hooks, akind, tx, ty)
 		if not w.campaign and not blocked and (wh < 3 or wh == MINE_WARHEAD) and mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
+			if w.on_map(tx, ty):
+				Flight.refresh_panels(w)      # (0x473330 -> 0x40F590's first call: ui_refresh_panels)
 			if anims and w.on_map(tx, ty):
 				anim_bomb(w, rng, hooks, tx, ty)        # 0x473330 -> 0x417410
 			w.F[tx + MAP * ty] &= 0x3F
@@ -532,6 +535,8 @@ static func step_mine_blast(w: Pd2World, rng: Pd2Random, x: int, y: int, u: int,
 	if not w.on_map(x, y):
 		return 0
 	hooks.mine_blast(x, y)
+	if w.on_map(x, y):
+		Flight.refresh_panels(w)      # (0x473330 -> 0x40F590's first call: ui_refresh_panels)
 	if hooks.anims:                      # (rules.step_mine_blast: anime_bomb, the kill's; no shooter)
 		if hooks.has_method("anim_view"):
 			hooks.anim_view(-1, -1, x, y)      # 0x40F730's framing for a record without a shooter

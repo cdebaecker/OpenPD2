@@ -230,6 +230,7 @@ static func intercept(w: Pd2World, rng: Pd2Random, s: int, slot: int, t: int, pl
 		hooks.anim_flight(1)                    # stage 1, chosen or not
 	if chosen != -1:
 		w.set_slot_count(t, chosen, w.slot_count(t, chosen) - 1)
+		Flight.refresh_panels(w)          # (the interceptor's record: 0x40F590's first call: ui_refresh_panels)
 		var aa := W.s8(w.ucrew(t, 11))
 		var sq := aa * aa
 		var lid := w.launcher_id(t, chosen)

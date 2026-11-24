@@ -183,6 +183,13 @@ class Hooks:
 		return 0
 
 
+## 0x40F590 from a mission script: ui_refresh_panels first (rules.script_blast_open), then
+## its window (hooks.blast_open: 0 or an abort code).
+static func script_blast_open(w: Pd2World, hooks: Hooks) -> int:
+	Flight.refresh_panels(w)
+	return hooks.blast_open()
+
+
 static func g(w: Pd2World, grp: int, f: int) -> int:
 	return w.groups[35 * grp + f]
 
@@ -1086,7 +1093,7 @@ static func m02_speech(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 
 
 static func m02_blow(w: Pd2World, b: int, live: int, hooks: Hooks) -> int:
-	var res := hooks.blast_open()
+	var res := script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	ds_or(w, 0x50AD78, 0x40 if b == 0 else 0x80)
@@ -1278,7 +1285,7 @@ static func m02_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		return res
 	if res == 0:
 		return 0
-	res = hooks.blast_open()
+	res = script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	res = hooks.blast_start(x, y)                 # (its skip is not looked at)
@@ -2381,7 +2388,7 @@ static func m07_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		return r3
 	if r3 == 0:
 		return 0
-	r3 = hooks.blast_open()
+	r3 = script_blast_open(w, hooks)
 	if r3 in AI_ABORT:
 		return r3
 	r3 = hooks.blast_start(x2, y2)
@@ -3385,7 +3392,7 @@ static func m12_blast(w: Pd2World, rng: Pd2Random, n: int, live: int, hooks: Hoo
 	var base := 0x51C128 + 0x3C * (n - 1)
 	var skip := false
 	if live:
-		var r0 := hooks.blast_open()
+		var r0 := script_blast_open(w, hooks)
 		if r0 in AI_ABORT:
 			return r0
 		var x0 := static_s16(w, base)
@@ -4206,7 +4213,7 @@ static func m15_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 
 static func m15_blast(w: Pd2World, rng: Pd2Random, b: int, live: int, hooks: Hooks) -> int:
 	if live:
-		var r0 := hooks.blast_open()
+		var r0 := script_blast_open(w, hooks)
 		if r0 in AI_ABORT:
 			return r0
 		var a := 0x51C940 + 20 * b
@@ -4681,7 +4688,7 @@ static func m16_blast(w: Pd2World, rng: Pd2Random, n: int, live: int, hooks: Hoo
 	var k: int = M16_SITES[n][1]
 	var skip := false
 	if live:
-		var r0 := hooks.blast_open()
+		var r0 := script_blast_open(w, hooks)
 		if r0 in AI_ABORT:
 			return r0
 		var x0 := static_s32(w, t)
@@ -4815,7 +4822,7 @@ static func m16_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 			return res
 		if res == 0:
 			return 0
-		res = hooks.blast_open()
+		res = script_blast_open(w, hooks)
 		if res in AI_ABORT:
 			return res
 		var x := w.sb(u, 9)
@@ -5111,7 +5118,7 @@ static func m16_board(w: Pd2World, u: int, t: int, hooks: Hooks) -> int:
 		return res
 	if res == 0:
 		return 0
-	res = hooks.blast_open()
+	res = script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	var x := w.sb(u, 9)
@@ -5765,7 +5772,7 @@ static func m20_tiles(w: Pd2World, n: int, hooks: Hooks) -> int:
 
 
 static func m20_blast(w: Pd2World, x: int, y: int, hooks: Hooks) -> int:
-	var res := hooks.blast_open()
+	var res := script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	res = hooks.blast_start(x, y)
@@ -6242,7 +6249,7 @@ static func m19_capture(w: Pd2World, u: int, hooks: Hooks) -> int:
 		w.O[i] = (k + 1) & 0xFF
 	var hx := w.sb(h, 9)
 	var hy := w.sb(h, 10)
-	res = hooks.blast_open()
+	res = script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	res = hooks.blast_start(hx, hy)
@@ -6397,7 +6404,7 @@ static func m19_tiles(w: Pd2World, rng: Pd2Random, n: int, hooks: Hooks) -> int:
 static func m19_bomb(w: Pd2World, rng: Pd2Random, i: int, hooks: Hooks) -> int:
 	var v := Pd2World.s8(w.mem8(0x50AC1F + 4 * i))
 	if v == 1 and not w.ds8(0x50AD50) & 1:
-		var res := hooks.blast_open()
+		var res := script_blast_open(w, hooks)
 		if res in AI_ABORT:
 			return res
 		hooks.blast_at(0xE, 0x37)
@@ -7438,7 +7445,7 @@ static func m21_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		return 0
 	var ux := w.sb(u, 9)
 	var uy := w.sb(u, 10)
-	r8 = hooks.blast_open()
+	r8 = script_blast_open(w, hooks)
 	if r8 in AI_ABORT:
 		return r8
 	r8 = hooks.blast_start(ux, uy)
@@ -7910,7 +7917,7 @@ static func m11_flood(w: Pd2World, c: int, hooks: Hooks) -> int:
 
 
 static func m11_breach(w: Pd2World, i: int, live: int, hooks: Hooks) -> int:
-	var res := hooks.blast_open()
+	var res := script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	hooks.blast_at(0x16, 0x15)
@@ -8449,7 +8456,7 @@ static func m22_command(w: Pd2World, rng: Pd2Random, u: int, hooks: Hooks) -> in
 		return 0
 	var ux := w.sb(u, 9)
 	var uy := w.sb(u, 10)
-	r4 = hooks.blast_open()
+	r4 = script_blast_open(w, hooks)
 	if r4 in AI_ABORT:
 		return r4
 	r4 = hooks.blast_start(ux, uy)
@@ -9090,7 +9097,7 @@ static func m13_counter(w: Pd2World, a: int) -> void:
 
 
 static func m13_last_blast(w: Pd2World, rng: Pd2Random, hooks: Hooks, st: Dictionary) -> int:
-	var res := hooks.blast_open()
+	var res := script_blast_open(w, hooks)
 	if res in AI_ABORT:
 		return res
 	var skip := false
@@ -9150,7 +9157,7 @@ static func m13_board(w: Pd2World, rng: Pd2Random, hooks: Hooks) -> int:
 		var x := w.sb(0x2E, 9)
 		var y := w.sb(0x2E, 10)
 		w.setb(0x2E, 0, w.ub(0x2E, 0) | 0x10)
-		var res := hooks.blast_open()
+		var res := script_blast_open(w, hooks)
 		if res in AI_ABORT:
 			return res
 		w.setb(0x2F, 0, w.ub(0x2F, 0) | 0x10)

@@ -147,6 +147,7 @@ static func hit(w: Pd2World, rng: Pd2Random, t: int, dmg: int, u: int) -> int:
 
 ## 0x4ED380: u's pocket p round (warhead wh) thrown at (x, y), over pts or the single hex.
 static func throw(w: Pd2World, rng: Pd2Random, u: int, p: int, wh: int, x: int, y: int, pts: Variant, hooks: Hooks, easy := false) -> int:
+	Flight.refresh_panels(w)          # (0x40F590's first call: ui_refresh_panels)
 	var side := 0 if w.sb(u, 0x36) < 3 else 3
 	var self_hit := false
 	var anims := hooks.anims
@@ -189,6 +190,8 @@ static func throw(w: Pd2World, rng: Pd2Random, u: int, p: int, wh: int, x: int, 
 		if not w.campaign and not laid and (wh < 3 or wh == Action.MINE_WARHEAD) and tx + MAP * ty >= 0 \
 				and Action.mine_at(w, tx, ty):
 			hooks.mine_blast(tx, ty)
+			if w.on_map(tx, ty):
+				Flight.refresh_panels(w)      # (0x473330 -> 0x40F590's first call: ui_refresh_panels)
 			if anims:
 				Action.anim_bomb(w, rng, hooks, tx, ty)
 			w.F[tx + MAP * ty] &= 0x3F

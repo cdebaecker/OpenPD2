@@ -209,6 +209,7 @@ static func _kill_anim(w: Pd2World, hooks: BombHooks, x: int, y: int) -> void:
 ## 0x480280: the 15 timed explosives count down; one at 0 goes off over its hex and the
 ## six around it (rules.timed_explosives). options: DS:0x551D29.
 static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = null, options := 0) -> int:
+	Flight.refresh_panels(w)          # (0x40F590's first call: ui_refresh_panels)
 	if hooks == null:
 		hooks = BombHooks.new()
 	var easy := options & 2 != 0
@@ -246,6 +247,8 @@ static func timed_explosives(w: Pd2World, rng: Pd2Random, hooks: BombHooks = nul
 				if not w.campaign and Action.mine_at(w, hx, hy):
 					if not skip:
 						hooks.mine_blast(hx, hy)
+						if w.on_map(hx, hy):
+							Flight.refresh_panels(w)      # (0x473330 -> 0x40F590's first call: ui_refresh_panels)
 						explosion_clear(w, hx, hy, options)
 					w.F[hx + 72 * hy] &= 0x3F
 					if o != -1 and w.active(o) and w.unit_class(o) < 2:

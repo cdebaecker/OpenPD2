@@ -3659,6 +3659,14 @@ animation players run inside the rules, and three of their effects change the ga
 at seeds 1 and 9, 271 / 271 at seed 5), `verify_bombs` (300 / 300) and
 `verify_mine_step_anims` (300 / 300), with every frame's wait scripted (a click or not).
 
+**The panels' refresh.** 0x40F590's first call is ui_refresh_panels (0x4363D0): with the
+radar flag DS:0x50DD44 at 1 the grid is freed and the flag goes to 0 (`refresh_panels`, in
+fire_resolution, strike_fire, timed_explosives and item_throw at their start, the
+interception after its round is spent, the mine blasts after their on-map test, and the
+scripts' explosion window). mission_loop also refreshes after the turn script's stages,
+command_loop after the マップ menu, unit_command_menu after the mission command, and
+strike_executor after radio(8).
+
 **The record.** Each shot builds one (0x40F590): its kind is the launcher's +9 high nibble
 (0–9 in the data), and a 4-byte row of DS:0x512F40 by kind gives the ANIME.PCK entries of
 the hit (+3) and the miss (+4); the kill's is 7, a bomb's 6.
