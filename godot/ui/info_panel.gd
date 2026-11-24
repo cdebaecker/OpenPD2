@@ -368,8 +368,6 @@ func _gui_input(ev: InputEvent) -> void:
 	super(ev)
 
 
-var _armed := -1
-
 
 var _last_cam := Vector2(-1, -1)
 var _last_zoom := Vector2(-1, -1)

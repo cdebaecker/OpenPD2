@@ -206,6 +206,7 @@ func list_window(x: int, y: int, cols: int, labels: Array, cancel: bool) -> int:
 	## 0x452A10(NULL, n, list, x, y, cols, .., right click allowed): the pick; -2 on a right
 	## click when allowed
 	var gw := GameWindow.select_window(x, y, cols, 0, 1, labels, cols, [], cancel)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.pal16 = title.pal16()
 	gw.role = "title_list"
 	var hold := _window_hold(gw)

@@ -246,6 +246,14 @@ static func radar_redraw(w: Pd2World, hooks: Hooks) -> int:
 	return hooks.radar_draw()
 
 
+## ui_refresh_panels 0x4363D0, its rule part (rules.refresh_panels): with DS:0x50DD44 at 1,
+## 0x43F060 frees the grid (grid_init clears a new one) and the flag goes to 0.
+static func refresh_panels(w: Pd2World) -> void:
+	if w.radar == 1:
+		w.radar = 0
+		w.grid.fill(0)
+
+
 ## 0x43E510, the radar map: a cleared grid the first time, groups marked, DS:0x50DD44 = 1.
 static func grid_init(w: Pd2World, hooks: Hooks, param := 0) -> int:
 	var res := hooks.radar_window(param)

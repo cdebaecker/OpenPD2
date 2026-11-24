@@ -136,9 +136,9 @@ func _layout() -> void:
 	if items.size() > SCROLL_SHOWN:
 		var sx := (cols - 3) * 8 + 16
 		var sy := _hh + 6
-		_all_regions.append([sx, sy, sx + 14, sy + 14, 0])               # up
-		_all_regions.append([sx, sy + 0x11, sx + 14, sy + 0x8F, 0])      # the track
-		_all_regions.append([sx, sy + 0x90, sx + 14, sy + 0x9E, 0])      # down
+		_all_regions.append([sx, sy, sx + 14, sy + 14, 2])               # up (type 2: filled, blinks)
+		_all_regions.append([sx, sy + 0x11, sx + 14, sy + 0x8F, 0])      # the track (type 0)
+		_all_regions.append([sx, sy + 0x90, sx + 14, sy + 0x9E, 2])      # down
 		_draw_scroll(sx + 1, sy + 0x11)
 	_dirty = true
 	queue_redraw()
@@ -885,7 +885,33 @@ func _gui_input(ev: InputEvent) -> void:
 		var h := _region_at(ev.position)
 		if h != _hover:
 			_hover = h
+			_armed = -1                    # (moving off the row clears the press)
 			queue_redraw()
+		return
+	if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		# the release (0x40BD30 / 0x437AC0): over the row pressed, it answers; a region of a
+		# type other than 0 blinks twice first
+		accept_event()
+		var r0 := _region_at(ev.position)
+		if _armed == -1 or r0 != _armed or _waiting:
+			_armed = -1
+			return
+		_armed = -1
+		if int(_all_regions[r0][4]) != 0:
+			for k in 2:
+				_hover = -1
+				queue_redraw()
+				await get_tree().create_timer(blink_ms / 1000.0).timeout
+				if not is_inside_tree():
+					return
+				_hover = r0
+				queue_redraw()
+				await get_tree().create_timer(blink_ms / 1000.0).timeout
+				if not is_inside_tree():
+					return
+			_hover = -1
+			queue_redraw()
+		_act(r0, ev.position)
 		return
 	if not (ev is InputEventMouseButton and ev.pressed):
 		return
@@ -908,6 +934,18 @@ func _gui_input(ev: InputEvent) -> void:
 	var r := _region_at(ev.position)
 	if r < 0:
 		return
+	# the press only arms the region (0x40BC20; type 3 acts at once)
+	if int(_all_regions[r][4]) != 3:
+		_armed = r
+		return
+	_act(r, ev.position)
+
+
+var _armed := -1                 # the region pressed, answered on its release
+var blink_ms := 60               # the release's blink: 0x40C090's windows 60 ms, 0x452A10's lists 50
+
+
+func _act(r: int, pos: Vector2) -> void:
 	var nshown := mini(items.size(), SCROLL_SHOWN)
 	if r < regions.size():
 		chosen.emit(r)
@@ -918,7 +956,7 @@ func _gui_input(ev: InputEvent) -> void:
 		if k == 0 and scroll > 0:
 			scroll -= 1
 		elif k == 1:
-			var ry := int(ev.position.y) - (_hh + 6 + 0x11 + 1)
+			var ry := int(pos.y) - (_hh + 6 + 0x11 + 1)
 			scroll = clampi(items.size() * ry >> 7, 0, items.size() - SCROLL_SHOWN)
 		elif k == 2 and scroll + SCROLL_SHOWN < items.size():
 			scroll += 1

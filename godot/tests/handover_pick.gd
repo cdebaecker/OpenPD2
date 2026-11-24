@@ -76,7 +76,8 @@ func _init() -> void:
 	print("debrief 0x%X, campaign %d, script %d, step %d, picked one %s, asked %s, first row %s" % [
 		res, w.campaign, w.script_no, w.ds16(0x50AD8E), picked_one, asked, pick_texts])
 	print("next battle: %s" % ("none" if nb == null else "%s chunk %d, script %d" % [nb.campaign, nb.mission_index + 1, nb.script_no]))
-	ok = res == 0x80 and w.campaign == 0 and w.script_no == 12 and picked_one and asked 		and nb != null and nb.campaign == "dash" and nb.script_no == 12
+	# (0x80: game_mode_loop chained the next mission; the debrief may end and chain within a frame)
+	ok = (res == 0x80 or res == -1) and w.campaign == 0 and w.script_no == 12 and picked_one and asked 		and nb != null and nb.campaign == "dash" and nb.script_no == 12
 	print("hand-over pick: %s" % ("ok" if ok else "FAILED"))
 	quit(0 if ok else 1)
 

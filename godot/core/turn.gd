@@ -33,7 +33,9 @@ static func turn_upkeep(w: Pd2World, rng: Pd2Random, phase: int, options := 0, s
 				w.setb(u, 0xD, w.ub(u, 0xD) + 1)
 		elif w.ub(u, 0xD) < 100:
 			w.setb(u, 0xD, mini(100, rng.r16(5) + 1 + w.ub(u, 0xD)))
-		var leader := w.ucrew(selected, 0)
+		# (the panel's unit DS:0x50DE02; at -1 the game reads units[-1]'s crew, outside the
+		# table: taken as no pilot, RULES.md 5.23)
+		var leader := w.ucrew(selected, 0) if selected >= 0 else 0xFF
 		if (not camp and phase == PHASE_ENEMY) or not (options & OPTION_TRAINING):
 			continue
 		if W.s8(leader) in TRAINING_ACES[camp]:

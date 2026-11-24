@@ -443,7 +443,7 @@ func _begin_battle() -> void:
 	Mission.rebuild_occupancy(w)
 	MissionScripts.run_start(w, rng, mission_hooks)   # the start script (table 0x51F0F8)
 	w.phase = 0
-	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
+	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER, options, panel_ds)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
 	if auto_react or not Drop.pending(w):
@@ -774,6 +774,9 @@ func _plan_view_open() -> void:
 	plan_view.position = Vector2.ZERO
 
 
+var plan_xms_shown := ""          # the XMS line last shown (tests)
+
+
 func _plan_region(i: int) -> void:
 	## the screen's regions (0x438210(9), DS:0x514968): pages A-D, the orders, the plans'
 	## list, done, the area maps, XMS (a note: DS:0x50CBE4 0x514A98 "XMS : USE", else
@@ -806,6 +809,7 @@ func _plan_region(i: int) -> void:
 			# 0x452200(text, 0): "XMS : USE" / "XMS : unUSE", a framed line as wide as the
 			# text at ((80 - (n + 2)) / 2 x 8, 0xAA), no red, until a click
 			var t := plan_exe(0x514A98 if w.mem8(0x50CBE4) else 0x514AA4)
+			plan_xms_shown = t
 			var n := mini(GameWindow.text_cols(t), 76)
 			var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
 			gw.waits = not _headless()
@@ -1296,6 +1300,7 @@ func _plan_site_window(a: Array) -> void:
 	for lb in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(lb)))
 	var gw := GameWindow.select_window(0x178, 0xE0, ic, 0, 0, labels, ic, [], true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = "plan_site"
 	hold.add_child(gw)
 	if blinking or a[2] >= 0:
@@ -1402,6 +1407,7 @@ func objective_window(parent: Control, sz: Vector2, t: String) -> GameWindow:
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(l)))
 	var gw := GameWindow.select_window(0x80 + 0x150, 0x90, ic, 0, 0, labels.slice(0, 2), ic, [], false)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	hold.add_child(gw)
 	hold.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and ev.pressed:
@@ -1461,6 +1467,7 @@ func _plan_list_window(a: Array) -> void:
 	hold.size = Vector2(PlanView.W, PlanView.H)
 	hold.mouse_filter = Control.MOUSE_FILTER_STOP
 	var gw := GameWindow.select_window(at.x, at.y, ic, 0, 0, labels, ic, [], true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = "plan_list"
 	hold.add_child(gw)
 	hold.gui_input.connect(func(ev: InputEvent):
@@ -2057,6 +2064,7 @@ func _sortie_list_win(x: int, y: int, cols: int, labels: Array, regs: Array, hea
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(l)))
 	var gw := GameWindow.select_window(x, y, ic, head_rows if head != "" else 0, 1, labels, ic, regs, true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = role
 	gw.waits = false
 	if head != "":
@@ -2275,6 +2283,7 @@ func _sortie_slot_list(saving: bool) -> void:
 	for r in rows:
 		ic = maxi(ic, GameWindow.text_cols(str(r)))
 	var gw := GameWindow.select_window(0x78, 0x70, ic, 0, 0, rows, ic, [], true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = "sortie_slots"
 	var hold := Control.new()
 	hold.size = Vector2(MAIN_W, MAIN_H)
@@ -2649,6 +2658,7 @@ func _sortie_system_list() -> void:
 		labels.append(sys[i] if sys.size() > i else "")
 		ic = maxi(ic, GameWindow.text_cols(labels[i]))
 	var gw := GameWindow.select_window(0x1B2 - 0xD8 * sortie_page, 0x13A, ic, 0, 0, labels, ic, [], true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = "sortie_system"
 	hold.add_child(gw)
 	hold.gui_input.connect(func(ev: InputEvent):
@@ -2977,7 +2987,7 @@ func _equip_advance() -> void:
 			Equipment.save_reg_unit(campaign, w.reg_unit)
 		var lines := []
 		for n in hk.notes:
-			lines.append(equip_msg(n))
+			lines.append(equip_note(n))
 		equip_text = "\n".join(lines)
 		if equip_sess.done:
 			await screen_fade(0)              # (0x454E60 leaves faded out; the sortie fades in again)
@@ -2988,9 +2998,19 @@ func _equip_advance() -> void:
 	else:
 		var lines := []
 		for n in dh.notes:
-			lines.append(equip_msg(n))
+			lines.append(equip_note(n))
 		equip_text = "\n".join(lines)
 	_equip_draw()
+
+
+## the armament screen's notes shown by 0x452200 with its red flag 0 (the debug menu's
+## 0x459AA2, the template menu's 登録完了 at 0x45C1F7 / 0x45C43B); the others are 0x452170
+const EQUIP_PLAIN_NOTES := [0x5159DC, 0x515BD0, 0x515BC4]
+
+
+func equip_note(id: int) -> String:
+	## a note's text, "\u0002" first when it is not red (note_box)
+	return ("\u0002" if id in EQUIP_PLAIN_NOTES else "") + equip_msg(id)
 
 
 func equip_msg(id: int) -> String:
@@ -3065,7 +3085,10 @@ func _equip_draw() -> void:
 			_equip_press("menu"))
 	if equip_text != "":
 		for l in equip_text.split("\n"):
-			note_box(l)
+			if l.begins_with("\u0002"):
+				note_box(l.substr(1), false)
+			else:
+				note_box(l)
 		equip_text = ""
 	if equip_request == null:
 		return
@@ -3173,6 +3196,7 @@ func _equip_machine_list(ents: Array) -> void:
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(l))           # (engine-side: a longer translation widens it)
 	var gw := GameWindow.select_window(0x78, 0x80, ic, 1, 1, labels, ic, regs, true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.role = "equip_machine"
 	gw.pal16 = equip_view.palette16() if equip_view else []
 	gw.waits = false
@@ -3260,6 +3284,7 @@ func _equip_list(x: int, y: int, cols: int, labels: Array, regs: Array, head: St
 	for l in labels:
 		ic = maxi(ic, GameWindow.text_cols(str(l)))
 	var gw := GameWindow.select_window(x, y, ic, 1 if head != "" else 0, 1, labels, ic, regs, true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	if x + gw.size.x > MAIN_W:
 		gw.position.x = maxi(0, MAIN_W - int(gw.size.x)) & ~7
 	gw.role = role
@@ -4106,8 +4131,10 @@ func _map_menu() -> void:
 	gw.chosen.connect(func(v: int):
 		_close_window(gw)
 		if v == 0:
-			_area_map()
-		elif v == 1:
+			_area_map()                     # (its end refreshes the panels)
+			return
+		refresh_panels()                    # command_loop: ui_refresh_panels after 0x43A3E0
+		if v == 1:
 			_height_menu())
 
 
@@ -4165,6 +4192,7 @@ func _area_map_finished(res: Array) -> void:
 
 
 func _area_map_done(res: Array) -> void:
+	refresh_panels()                      # command_loop: ui_refresh_panels after 0x43A3E0
 	radar_hide()
 	busy = false
 	for r in res:
@@ -4806,10 +4834,29 @@ func _units_list() -> void:
 var panel_unit := -1              # a unit the panel shows that isn't the selected one (0x466790)
 
 
+var panel_ds := -1                # DS:0x50DE02: the unit 0x466790 last showed (-1 at a mission's
+                                  # load, 0x466760, and at a refresh that closes the radar)
+
+
 func panel_refresh() -> void:
 	if info_panel and is_instance_valid(info_panel):
 		info_panel.unit = panel_unit if panel_unit != -1 and w.active(panel_unit) else selected
 		info_panel.refresh()
+		panel_ds = info_panel.unit
+
+
+func refresh_panels(full := true) -> void:
+	## ui_refresh_panels 0x4363D0: with DS:0x50DD44 at 1, 0x43F060 closes the radar (its
+	## windows; the grid freed, so grid_init clears it next time), 0x466790(0, -1) (the
+	## panel's unit -1) and the flag to 0. (full false: mission_loop's stage-2 test, 0x43F060
+	## and the flag only.) Any thread.
+	if w.radar != 1:
+		return
+	w.radar = 0
+	w.grid.fill(0)
+	if full:
+		panel_ds = -1
+	call_deferred("radar_hide")
 
 
 func _set_mode(m: String) -> void:
@@ -6865,7 +6912,7 @@ func _enemy_phase() -> Array:
 	_view_reset(0)
 	Turn.recon_pass(w, 0)                # still the player's phase
 	w.phase = 3
-	Turn.turn_upkeep(w, rng, Turn.PHASE_ENEMY)
+	Turn.turn_upkeep(w, rng, Turn.PHASE_ENEMY, options, panel_ds)
 	Turn.refill_ap(w, Turn.PHASE_ENEMY)
 	Turn.clear_view(w, 3)
 	Turn.recon_pass(w, 3)
@@ -6883,7 +6930,7 @@ func _enemy_phase() -> Array:
 	Ai.progress_cb = Callable()
 	Turn.support_fire(w, 3)
 	w.phase = 0
-	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER)
+	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER, options, panel_ds)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
 	_script_turn(0)
@@ -7083,6 +7130,12 @@ func _player_phase() -> void:
 class BattleMissionHooks extends MissionScripts.Hooks:
 	var battle
 
+	## 0x43BA20's cols by the label array (or its first label) the call passes: the list
+	## window is that wide, its labels printed "%NNs" (read at each call site)
+	const DIALOG_COLS := {0x517F88: 6, 0x50CBC1: 4, 0x517F80: 4, 0x517F78: 4, 0x51AD78: 0xA,
+		0x50CBB9: 4, 0x51E840: 0xE, 0x51D864: 0xC, 0x51E200: 4, 0x51E220: 4, 0x51E8CC: 0x10,
+		0x51E894: 8, 0x51E908: 0xE, 0x51E948: 0xE}
+
 	func dialog(msg: int, args: Array, choices: int) -> int:
 		## 0x43BA20 with its choice labels (MissionScripts.CHOICES: the label arrays the
 		## mission passes, e.g. 実行 / 中止 DS:0x50CBC1, はい / いいえ DS:0x517F88); the escape
@@ -7111,7 +7164,8 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		## 0x43BA20 with choices: the text window and the list at (x + 0x150, y), no right
 		## click (open_order; the list as wide as its widest label)
 		battle.say(text.replace("@", "\n").strip_edges())
-		return int(battle.ask_order(text, labels.slice(0, maxi(choices, 2)), 0))
+		var key: int = arr if arr is int else (int(arr[0]) if arr is Array and not arr.is_empty() else 0)
+		return int(battle.ask_order(text, labels.slice(0, maxi(choices, 2)), DIALOG_COLS.get(key, 0)))
 
 	func message(msg: int, args := []) -> int:
 		## 0x43BA20 without choices: the framed 40 x 5 window centred, the text and its '@'
@@ -7389,6 +7443,11 @@ class BattleFlightHooks extends Flight.Hooks:
 
 
 class BattleStrikeHooks extends Strike.Hooks:
+	func panels_refreshed() -> void:
+		## (0x4363D0's display part: the panel's unit -1, the flight window closed)
+		battle.panel_ds = -1
+		battle.call_deferred("radar_hide")
+
 	func anim_flight(stage: int) -> void:
 		battle.anim_flight(stage, anim_rec)
 
@@ -7752,13 +7811,9 @@ func _script_turn(stage: int) -> void:
 		if w.fault != "":
 			say("[color=red]rules fault: %s[/color]" % w.fault)
 			w.fault = ""
-	# mission_loop then: ui_refresh_panels (0x4363D0) after stages 1 and 0, and for stage 2
-	# the same test: with DS:0x50DD44 at 1, 0x43F060 closes the radar (its windows, the grid
-	# freed: grid_init clears it next time) and the flag goes to 0
-	if w.radar == 1:
-		w.radar = 0
-		w.grid.fill(0)
-		call_deferred("radar_hide")
+	# mission_loop then: ui_refresh_panels (0x4363D0) after stages 1 and 0; for stage 2 its
+	# own test (0x436868): with DS:0x50DD44 at 1, 0x43F060 and the flag to 0
+	refresh_panels(stage != 2)
 
 
 func _script_state() -> void:
@@ -7972,16 +8027,16 @@ func script_pause(ms: int) -> void:
 	OS.delay_msec(ms)
 
 
-func note_line(t: String) -> void:
-	## 0x452200(text, red 1): "%a4F" and the line in a framed window of its length at
-	## ((80 - (len + 2)) / 2 x 8, 0xAA) (flags 1), then a click
+func note_line(t: String, red := true) -> void:
+	## 0x452200(text, red): with red "%a4F" first, the line in a framed window of its length
+	## at ((80 - (len + 2)) / 2 x 8, 0xAA) (flags 1), then a click
 	var n := mini(GameWindow.text_cols(t), 76)
 	if GameWindow.text_cols(t) > 76:
 		t = GameWindow.fit(t, 76)
 	var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, t.split("\n").size(), 1)
 	gw.waits = true
 	_hold([gw])
-	await gw.print_text("\u0001" + char(0x4F) + t + "\n")
+	await gw.print_text(("\u0001" + char(0x4F) if red else "") + t + "\n")
 	_close_window(gw)
 
 
@@ -7996,17 +8051,18 @@ var _notes: Array = []
 var _note_on := false
 
 
-func note_box(t: String) -> void:
-	## 0x452170 on the pre-battle screens (the sortie's and the armament's notes): note_line
-	## one after another, each until its click
+func note_box(t: String, red := true) -> void:
+	## 0x452170 on the pre-battle screens (the sortie's and the armament's notes; 0x452200
+	## with red 0 for a few): note_line one after another, each until its click
 	if auto_react or _headless():
 		return
-	_notes.append(t)
+	_notes.append([t, red])
 	if _note_on:
 		return
 	_note_on = true
 	while not _notes.is_empty():
-		await note_line(_notes.pop_front())
+		var it: Array = _notes.pop_front()
+		await note_line(it[0], it[1])
 	_note_on = false
 
 
@@ -8246,14 +8302,21 @@ func _cmd_mission() -> void:
 	var u := selected
 	busy = true
 	if auto_react:
-		MissionScripts.run_command(w, rng, u, mission_hooks)
+		_mission_cmd_refresh(MissionScripts.run_command(w, rng, u, mission_hooks))
 		_mission_cmd_done()
 		return
 	view_w = w.duplicate_world()
 	move_thread = Thread.new()
 	move_thread.start(func():
-		MissionScripts.run_command(w, rng, u, mission_hooks)
+		_mission_cmd_refresh(MissionScripts.run_command(w, rng, u, mission_hooks))
 		call_deferred("_mission_cmd_finished"))
+
+
+func _mission_cmd_refresh(r: Variant) -> void:
+	## unit_command_menu's entry 0xB: ui_refresh_panels after the hook, unless it returned 1
+	## or an abort code
+	if not (r is int and (r == 1 or r in [0x10000, 0x20000, 0x40000])):
+		refresh_panels()
 
 
 func _cmd_explosives() -> void:
@@ -8781,6 +8844,7 @@ func _open_pick(rows: Array, picked: Array) -> void:
 	for k in 9:
 		regs.append([0x80 + 0x18 * k, 8, 0x90 + 0x18 * k, 0x27, 2])
 	var lst := GameWindow.select_window(0x38, 0x50, 0x2A, 2, 1, rows, 0x2A, regs, true)
+	lst.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	lst.role = "pick"
 	lst.waits = false
 	_pick_hold([cw, lst])
@@ -9320,6 +9384,7 @@ func _debug_open(kind: String, data: Array) -> void:
 				for l in labels:
 					ic = maxi(ic, GameWindow.text_cols(str(l)))
 				var gw := GameWindow.select_window(0, 0, ic, 0, 0, labels, ic, [], true)
+				gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 				gw.role = "debug_menu"
 				var hold := _debug_hold(gw)
 				gw.chosen.connect(func(v: int): done.call(v, hold))
@@ -9334,6 +9399,7 @@ func _debug_open(kind: String, data: Array) -> void:
 			hd.waits = false
 			hd.print_text(" ".repeat(extra) + wsp(GameData.exe_raw(campaign, head), [""]))
 			var gw := GameWindow.select_window(0, 0x20, cols, 0, 0, rows, cols, [], true)
+			gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 			gw.role = "debug_list"
 			var hold := _debug_hold(gw)
 			hold.add_child(hd)

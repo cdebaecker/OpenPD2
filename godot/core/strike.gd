@@ -686,6 +686,9 @@ static func _hurt(w: Pd2World, k: int, s: int, t: int, gi: int, hooks: Hooks) ->
 			var res := hooks.radio(8, gi)
 			if res in ABORT:
 				return res
+			Flight.refresh_panels(w)          # (0x4E3BC5 / 0x4E42C5: ui_refresh_panels)
+			if hooks.has_method("panels_refreshed"):
+				hooks.panels_refreshed()
 		Action.destroy(w, t)
 	return 0
 

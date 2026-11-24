@@ -38,7 +38,11 @@ var title := ""                 # the mission's name
 var page_title := ""
 var lines: Array = []           # the page's lines (text)
 var views: Array = []           # Plan.view_step's windows and pictures
-var blink: Variant = null       # the blink waiting for a click
+var blink: Variant = null:      # the blink waiting for a click
+	set(v):
+		blink = v
+		_t_started = false
+var _t_started := false         # (the blink's first draw made: its off phase is drawn too)
 var orders := ""                # "" none, "open" (plan_gb), "closed" (plan_gc put back)
 var note := ""                  # the XMS box's text, until a click
 var maps_i := -1                # the area map shown (0x444500), -1 none
@@ -111,6 +115,7 @@ func _process(delta: float) -> void:
 	if _t >= 0.133:                      # 0x85 ms
 		_t = 0.0
 		_on = not _on
+		_t_started = true
 		queue_redraw()
 
 
@@ -244,6 +249,9 @@ func _draw() -> void:
 		_xor([[fx, fy, fx + 0x16, fy + 0x16, 2]], 15)
 	if blink != null and _on:
 		_draw_blink(blink)
+	elif blink != null and blink[0] == "cell" and _t_started:
+		# 0x4DD9D0's off phase draws the outline in colour 0 (not the background back)
+		draw_rect(Rect2(8 + 24 * blink[1] + 0.5, 0x20 + 24 * blink[2] + 0.5, 23, 23), pal(0), false, 1.0)
 	if note != "":
 		_frame(0xC0, 0xB0, 0x18, 2, 16)
 		_text(note, 0xC0 + 8, 0xB0 + 10)
@@ -343,7 +351,8 @@ func _draw_blink(b: Array) -> void:
 		"rect":
 			draw_rect(Rect2(0xB0 + 2 * b[1], 0x50 + 2 * b[2], 2 * (b[3] - b[1]) + 1, 2 * (b[4] - b[2]) + 1), pal(int(b[5])), false, 1.0)
 		"cell":
-			draw_rect(Rect2(8 + 24 * b[1], 0x20 + 24 * b[2], 24, 24), pal(15), false, 2.0)
+			# 0x4DD9D0: a 1 px outline (x 24 + 8, y 24 + 0x20)-(+0x17, +0x17), mode 0, colour 15
+			draw_rect(Rect2(8 + 24 * b[1] + 0.5, 0x20 + 24 * b[2] + 0.5, 23, 23), pal(15), false, 1.0)
 		"rects":
 			for q in [[b[1], b[2], b[3], b[4]], [b[5], b[6], b[7], b[8]]]:
 				draw_rect(Rect2(0xB0 + 2 * q[0], 0x50 + 2 * q[1], 2 * (q[2] - q[0]) + 1, 2 * (q[3] - q[1]) + 1), pal(int(b[9])), false, 1.0)

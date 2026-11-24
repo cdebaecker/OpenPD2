@@ -193,6 +193,7 @@ func _kabe_list(x: int, hy: int, cols: int, hrows: int, head: String, rows: Arra
 	for r in rows:
 		ic = maxi(ic, GameWindow.text_cols(str(r)))
 	var gw := GameWindow.select_window(x, 0x80, ic, 0, 0, rows, ic, [], true)
+	gw.blink_ms = 50                 # (a 0x452A10 list: 50 ms blinks)
 	gw.pal16 = pal
 	gw.role = "debrief_list"
 	add_child(gw)

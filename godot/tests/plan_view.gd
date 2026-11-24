@@ -2,7 +2,7 @@ extends SceneTree
 ## The operation plan's window (ui/plan_view.gd) in play, on PD2's mission 1:
 ## 1. page B (its hook blinks four points on the mini-map, one per click): each click
 ##    shows the next lines and the next blink (Plan.view_step), then the page is done.
-## 2. the XMS spot (region 8): its box ("XMS : USE" / "XMS : unUSE"), gone on a click.
+## 2. the XMS spot (region 8): its line ("XMS : USE" / "XMS : unUSE"), 0x452200.
 ## 3. the orders (region 4): plan_gb.pac while they are open, plan_gc.pac after them.
 ## 4. done (region 6): the window closes, the sortie screen opens.
 
@@ -15,7 +15,7 @@ func _init() -> void:
 	b.mission_index = 0
 	root.add_child(b)
 	await process_frame
-	var v: PlanView = b.plan_view
+	var v = b.plan_view                 # (untyped: -s scripts cannot name GameData-dependent classes)
 	ok = ok and v != null
 	b._plan_region(1)
 	var shown := []
@@ -28,13 +28,9 @@ func _init() -> void:
 		and v.views.any(func(x): return x[0] == "pic" and x[1] == "mmap.pac")
 	print("page B: %d blinks, lines by step %s, done with %d lines" % [n, str(shown), v.lines.size()])
 	ok = ok and page_ok
-	b._plan_region(8)
-	var xms: bool = v.note.begins_with("XMS")
-	var ev := InputEventMouseButton.new()
-	ev.pressed = true
-	ev.button_index = MOUSE_BUTTON_LEFT
-	v._gui_input(ev)
-	xms = xms and v.note == ""
+	b._plan_region(8)                  # (0x452200's line; headless, its wait goes on at once)
+	await process_frame
+	var xms: bool = str(b.plan_xms_shown).begins_with("XMS")
 	print("XMS box: %s" % str(xms))
 	ok = ok and xms
 	b._plan_region(4)
