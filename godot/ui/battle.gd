@@ -294,10 +294,7 @@ func _ready() -> void:
 	add_child(anime_view)
 	cam = Camera2D.new()
 	cam.zoom = Vector2.ONE                # (the map window at the game's 1:1: 48 x 36 px hexes)
-	cam.limit_left = 0
-	cam.limit_top = 0
-	cam.limit_right = MAP * TILE_W + TILE_W / 2
-	cam.limit_bottom = MAP * TILE_H
+	_cam_limits()
 	add_child(cam)
 	_build_hud()
 	if resume:
@@ -323,10 +320,7 @@ func _scene_setup() -> void:
 	add_child(anime_view)
 	cam = Camera2D.new()
 	cam.zoom = Vector2.ONE                # (the map window at the game's 1:1: 48 x 36 px hexes)
-	cam.limit_left = 0
-	cam.limit_top = 0
-	cam.limit_right = MAP * TILE_W + TILE_W / 2
-	cam.limit_bottom = MAP * TILE_H
+	_cam_limits()
 	add_child(cam)
 	_build_hud()
 
@@ -436,33 +430,47 @@ func _begin_battle() -> void:
 	w.set_ds8(0x50ADF2, 0)               # mission_loop clears the end code first
 	Mission.layers_reset(w)
 	Mission.start_units(w)
+	if auto_react or (_headless() and not Drop.pending(w)):
+		var ec := _begin_rules()
+		if ec:
+			_end_mission(ec)
+			return
+		_begin_done()
+		return
+	# the turn script's stage 2 (the approach's flight window and radio: 0x4403D0), the
+	# start script and the first turn start wait for the player: a worker thread runs them
+	busy = true
+	view_w = w.duplicate_world()
+	ai_thread = Thread.new()
+	ai_thread.start(func():
+		var ec := _begin_rules()
+		call_deferred("_begin_finished", ec))
+
+
+func _begin_rules() -> int:
+	## mission_loop from the turn script's stage 2 to the first turn start; the end code
+	## when a script set one (the mission ends), else 0
 	_script_turn(2)
 	if w.ds8(0x50ADF2):                  # the end code after the start script: the mission ends
-		_end_mission(w.ds8(0x50ADF2))
-		return
+		return w.ds8(0x50ADF2)
 	Mission.rebuild_occupancy(w)
 	MissionScripts.run_start(w, rng, mission_hooks)   # the start script (table 0x51F0F8)
 	w.phase = 0
 	Turn.turn_upkeep(w, rng, Turn.PHASE_PLAYER, options, panel_ds)
 	Turn.refill_ap(w, Turn.PHASE_PLAYER)
 	w.phase = 3
-	if auto_react or not Drop.pending(w):
-		_turn_start()
-		_begin_done()
-		return
-	# a transport waits for the player: the first turn start runs on a worker thread
-	busy = true
-	view_w = w.duplicate_world()
-	ai_thread = Thread.new()
-	ai_thread.start(func():
-		_turn_start()
-		call_deferred("_begin_finished"))
+	_turn_start()
+	return 0
 
 
-func _begin_finished() -> void:
+func _begin_finished(ec := 0) -> void:
 	ai_thread.wait_to_finish()
 	ai_thread = null
+	view_w = null
 	busy = false
+	if ec:
+		_end_mission(ec)
+		return
 	_begin_done()
 
 
@@ -3760,25 +3768,52 @@ func view_tl(pos: Vector2 = Vector2.INF) -> Vector2:
 	return tl
 
 
-func map_view_cells() -> Rect2i:
-	## the map window's area in cells (the engine's map window: the screen left of the info
-	## panel): its origin (DS:0x551D20 / 0x551D24, the cell at its top-left) and its columns
-	## and rows (window +0x18 / +0x1C)
+## The map DIB (0x407A30): hex 1's cell at its origin (the world's (48, 36)), 0xD20 x 0x9D8
+## pixels: hexes 1-70 across, 1-70 down
+const DIB_X := 48
+const DIB_Y := 36
+const DIB_W := 0xD20
+const DIB_H := 0x9D8
+
+
+func _map_size() -> Vector2:
+	## the engine's map window: the screen left of the info panel
 	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
-	var mw := 432.0 * sc
-	var mh := get_viewport().get_visible_rect().size.y
+	return Vector2(432.0 * sc, get_viewport().get_visible_rect().size.y)
+
+
+func _cam_limits() -> void:
+	## 0x4066F0 / 0x407A30: the window's pixel origin from 0 to the DIB's size less the
+	## window's; the screen right of the map window is the info panel's
+	var vs := get_viewport().get_visible_rect().size
+	var ms := _map_size()
+	cam.limit_left = DIB_X
+	cam.limit_top = DIB_Y
+	cam.limit_right = DIB_X + DIB_W + int(vs.x - ms.x)
+	cam.limit_bottom = DIB_Y + DIB_H + int(vs.y - ms.y)
+
+
+func map_view_cells() -> Rect2i:
+	## the map window's area in cells: its origin (DS:0x551D20 / 0x551D24, the pixel origin
+	## / (0x30, 0x24) + 1) and its columns and rows (window +0x18 / +0x1C: (w + 0x2F) / 0x30,
+	## (h + 0x23) / 0x24)
+	var ms := _map_size()
 	var tl := view_tl()
-	var oy := int(floor((tl.y + 1.0) / TILE_H))
-	var ox := int(floor((tl.x + 1.0 - (TILE_W / 2.0 if oy & 1 else 0.0)) / TILE_W))
-	return Rect2i(clampi(ox, 0, 71), clampi(oy, 0, 71), int(mw / (TILE_W * cam.zoom.x)), int(mh / (TILE_H * cam.zoom.y)))
+	var ox := int(floor(tl.x / TILE_W))
+	var oy := int(floor(tl.y / TILE_H))
+	return Rect2i(clampi(ox, 0, 71), clampi(oy, 0, 71), int(ms.x + 0x2F) / 0x30, int(ms.y + 0x23) / 0x24)
 
 
 func set_view_origin(ox: int, oy: int) -> void:
-	## 0x4066F0: the map window's origin cell, at most 0x47 less its size, at least 1
+	## 0x4066F0: the map window's origin cell, at most 0x47 less its size, at least 1; the
+	## pixel origin ((ox - 1) x 0x30, (oy - 1) x 0x24) whatever the row's parity, kept
+	## inside the DIB
 	var v := map_view_cells()
+	var ms := _map_size()
 	ox = maxi(1, mini(ox, 0x47 - v.size.x))
 	oy = maxi(1, mini(oy, 0x47 - v.size.y))
-	var tl := hex_center(Vector2i(ox, oy)) - Vector2(TILE_W / 2.0, TILE_H / 2.0)
+	var tl := Vector2(clampf(ox * TILE_W, DIB_X, maxf(DIB_X, DIB_X + DIB_W - ms.x)),
+			clampf(oy * TILE_H, DIB_Y, maxf(DIB_Y, DIB_Y + DIB_H - ms.y)))
 	cam.position = tl + get_viewport().get_visible_rect().size / cam.zoom / 2.0
 	if info_panel and is_instance_valid(info_panel):
 		info_panel.view_frame()
@@ -3794,38 +3829,31 @@ func minimap_scroll(px: int, py: int) -> void:
 
 
 func _map_edge_scroll(p: Vector2) -> bool:
-	## ui_map_click's mouse move (0x47AC70 case 0): the cursor on the map window's first
-	## column scrolls it a hex left (scroll_to 0x4066F0), on the first row up, on the last
-	## row down, on the last column right (one each move, while the map goes on); the
-	## engine's map window is the screen left of the info panel, its cells the zoomed hexes
-	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
-	var mw := 432.0 * sc                          # (the info panel's left edge)
-	var mh := get_viewport().get_visible_rect().size.y
-	if p.x >= mw or busy:
+	## ui_map_click's mouse move (0x47AC70 case 0): the cursor's cell (its column shifted
+	## 0x18 px on an odd row: x - ((row + DS:0x551D24) & 1) x 0x18); on the first column the
+	## origin goes a hex left, the last right, else on the first row up, the last down
+	## (scroll_to 0x4066F0, kept inside the map)
+	var ms := _map_size()
+	if p.x >= ms.x or busy:
 		return false
-	var cw := TILE_W * cam.zoom.x
-	var ch := TILE_H * cam.zoom.y
-	var cols := int(mw / cw)
-	var rows := int(mh / ch)
-	var row := int(p.y / ch)
-	var col := int(p.x / cw)
-	var d := Vector2.ZERO
+	var v := map_view_cells()
+	var row := int(p.y) / TILE_H
+	var col := int(floor((p.x - ((row + v.position.y) & 1) * 0x18) / TILE_W))
+	var d := Vector2i.ZERO
 	if col < 1:
-		d = Vector2(-TILE_W, 0)
-	elif col < cols - 1:
+		d = Vector2i(-1, 0)
+	elif col < v.size.x - 1:
 		if row < 1:
-			d = Vector2(0, -TILE_H)
-		elif row >= rows - 1:
-			d = Vector2(0, TILE_H)
+			d = Vector2i(0, -1)
+		elif row >= v.size.y - 1:
+			d = Vector2i(0, 1)
 	else:
-		d = Vector2(TILE_W, 0)
-	if d == Vector2.ZERO:
+		d = Vector2i(1, 0)
+	if d == Vector2i.ZERO:
 		return false
-	var np := (cam.position + d).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
-	if np == cam.position:
-		return false
-	cam.position = np
-	return true
+	var before := cam.position
+	set_view_origin(v.position.x + d.x, v.position.y + d.y)
+	return cam.position != before
 
 
 func _unhandled_input(ev: InputEvent) -> void:
@@ -4144,11 +4172,12 @@ class BattleAreaMapHooks extends Flight.AreaMapHooks:
 	var battle
 
 	func radar_window(param: int) -> int:
-		battle.call_deferred("radar_show", RadarView.take(battle.w))
+		battle.call_deferred("radar_show", RadarView.take(battle.w), param)
 		return 0
 
 	func radar_draw() -> int:
 		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		battle.w.grid.fill(0)               # (0x43F150 clears the grid once drawn: only the drawing reads it)
 		return 0
 
 	func air_report() -> int:
@@ -4159,7 +4188,7 @@ class BattleAreaMapHooks extends Flight.AreaMapHooks:
 		return int(battle.ask_radar("region"))
 
 	func point(g: int, x: int, y: int) -> Variant:
-		return battle.ask_radar("cell")
+		return battle.ask_radar("cell", Vector2i(x, y))
 
 	func confirm(g: int, x: int, y: int) -> int:
 		var w: Pd2World = battle.w
@@ -4195,28 +4224,27 @@ func _area_map_done(res: Array) -> void:
 	refresh_panels()                      # command_loop: ui_refresh_panels after 0x43A3E0
 	radar_hide()
 	busy = false
-	for r in res:
-		say("Group %s heads for %d-%d." % [GameData.call_sign(campaign, Flight.gb(w, r[0], 1)), r[1], r[2]])
 	_after_command()
 
 
-func ask_radar(kind: String) -> Variant:
+func ask_radar(kind: String, start := Vector2i(-1, -1)) -> Variant:
 	## the flight window's picks on a worker thread: "region" (0-20) or "cell" (Vector2i or
 	## null). auto_react / the main thread: close / null.
 	if not scripted.is_empty():
 		return scripted.pop_front()
 	if auto_react or OS.get_thread_caller_id() == OS.get_main_thread_id():
 		return 20 if kind == "region" else null
-	call_deferred("_open_radar_pick", kind)
+	call_deferred("_open_radar_pick", kind, start)
 	react_sem.wait()
 	return react_answer
 
 
-func _open_radar_pick(kind: String) -> void:
+func _open_radar_pick(kind: String, start := Vector2i(-1, -1)) -> void:
 	var r := _radar()
 	_radar_front(r)
 	r.fire_cell = Vector2i(Flight.s16(w.ds16(0x50AD95)), Flight.s16(w.ds16(0x50AD97)))
-	r.pick = kind
+	r.start_cell = start
+	r.pick_open(kind)
 	r.pick_cb = func(v: Variant):
 		react_answer = v
 		react_sem.post()
@@ -4861,6 +4889,7 @@ func refresh_panels(full := true) -> void:
 
 func _set_mode(m: String) -> void:
 	mode = m
+	fire_marks = []
 	_update_move_map()
 
 
@@ -5541,11 +5570,17 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 		if fire_list:
 			_fire_range_list()
 		return
+	_fire_click_marks(u, fmode, h)
 	if check[0] == Action.FIRE_CONFIRM:
 		# 0x1AD shows the AP needed, the AP left and the distance (cmd_fire 0x4262DF); 0x1AC none
 		var up := w.pos(u)
 		var args := [cost, w.sb(u, 0xE), Pd2World.hexdist(up.x, up.y, h.x, h.y)] if check[1] == 0x1AD else []
+		var lid0 := w.launcher_id(u, slot)
+		if lid0 != -1 and w.launcher(lid0, 9) >> 4 == 1 and not auto_react and not _headless():
+			await get_tree().create_timer(0xA7 / 1000.0).timeout     # (kind 1: ui_wait 0xA7 first)
 		_confirm(msg(check[1], args), _do_fire.bind(u, fmode, h), -1, func():
+			fire_marks = []
+			overlay.queue_redraw()
 			if fire_list:
 				_fire_range_list())             # the loop goes on: its list again (cmd_fire)
 		return
@@ -5553,6 +5588,35 @@ func _cmd_fire(h: Vector2i, fmode: int) -> void:
 
 
 var fire_list := false            # option 0x2000 answered yes: the in-range list before each click
+var fire_marks: Array = []        # cmd_fire's marks after the click (the target map's cleared)
+
+
+func _fire_click_marks(u: int, fmode: int, h: Vector2i) -> void:
+	## cmd_fire (0x425AF0) after the target's click: ui_map_hover clears the target map's
+	## marks; with no blast radius (the anti-air modes 6 / 7 / 10, or a radius of 0) the
+	## clicked hex is marked, else blast_area's hexes: for a launcher of kind 0 only those
+	## holding a spotted unit of the other side of the mode's class (ground: class < 2,
+	## anti-air: > 1), for kinds 1 and 2 all of them (set_target_mark)
+	var lid := w.launcher_id(u, slot)
+	if lid == -1:
+		return
+	var aa := fmode in [6, 7, 10]
+	var radius := 0 if aa else w.launcher(lid, 9) & 7
+	var kind := w.launcher(lid, 9) >> 4
+	fire_marks = []
+	if radius == 0:
+		fire_marks = [h]
+	else:
+		for p in Ai.blast_area(w, h.x, h.y, radius):
+			var q: Vector2i = p
+			if kind == 0:
+				var o := w.O[q.x + MAP * q.y] - 1 if w.on_map(q.x, q.y) else -1
+				if o != -1 and w.sb(o, 0x36) > 2 and w.ub(o, 0) & 0x10 \
+						and ((not aa and w.unit_class(o) < 2) or (aa and w.unit_class(o) > 1)):
+					fire_marks.append(q)
+			elif kind == 1 or kind == 2:
+				fire_marks.append(q)
+	overlay.queue_redraw()
 
 
 func _fire_range_question(then := Callable()) -> void:
@@ -5666,6 +5730,7 @@ func _fire_finished(u: int, before: Dictionary) -> void:
 
 func _fire_done(u: int, before: Dictionary) -> void:
 	busy = false
+	fire_marks = []                       # (ui_map_hover_clear at the shot's end)
 	var hit := false
 	for q in w.n_units:
 		if w.ub(q, 0xD) < before[q]:
@@ -6973,8 +7038,9 @@ func _radar_front(r: RadarView) -> void:
 	r.visible = true
 
 
-func radar_show(snap: Dictionary) -> void:
+func radar_show(snap: Dictionary, param := 0) -> void:
 	var r := _radar()
+	r.close_button = param == 1           # (0x43E510(1): the area map's 戻る)
 	r.snap = snap
 	_radar_front(r)
 	r.queue_redraw()
@@ -7404,12 +7470,21 @@ class BattleFlightHooks extends Flight.Hooks:
 	## and the window drawn on the main thread.
 	var battle
 
+	func radar_ping(x: int, y: int) -> int:           # 0x48BA40 from 0x43CC90: a contact flashed
+		battle.script_window(battle.radar_ping.bind(Vector2i(x, y)))
+		return 0
+
+	func air_anim_draw(a: Vector2i, b: Vector2i) -> int:   # 0x441D70 past the radar check
+		battle.script_window(battle.radar_air_anim.bind(a, b))
+		return 0
+
 	func radar_window(param: int) -> int:           # 0x43E510: the window opens
-		battle.call_deferred("radar_show", RadarView.take(battle.w))
+		battle.call_deferred("radar_show", RadarView.take(battle.w), param)
 		return 0
 
 	func radar_draw() -> int:                        # 0x43F150: the grid redrawn
 		battle.call_deferred("radar_update", RadarView.take(battle.w))
+		battle.w.grid.fill(0)               # (0x43F150 clears the grid once drawn: only the drawing reads it)
 		return 0
 
 	func air_report() -> int:                        # 0x43E9D0: the status list
@@ -7423,7 +7498,7 @@ class BattleFlightHooks extends Flight.Hooks:
 
 	func radio_say(msg: int, args: Array, code: Variant) -> int:
 		var t: String = battle.msg(msg, battle.radio_args(args))
-		battle.say_msg(msg, battle.radio_args(args))
+		battle.say(t.replace("@", "\n").strip_edges())   # (the log only: 0x4896C0 prints through 0x489140 alone)
 		if code is int:
 			if battle.auto_react or battle._headless() or OS.get_thread_caller_id() == OS.get_main_thread_id():
 				battle.call_deferred("radar_say", t, code)
@@ -8219,9 +8294,28 @@ func radar_ping(c: Vector2i) -> void:
 
 
 func radar_route(p0: Vector2i, p1: Vector2i) -> void:
+	## 0x453CD0 (script 13): 4 px squares every 4 px in colour 15 (mode 0), in the window's DIB
 	var r := _radar()
 	if r.visible:
-		await r.route_line(p0, p1)
+		await r.route_line(p0, p1, 4, 4, 15, false)
+
+
+func radar_air_anim(a: Vector2i, b: Vector2i) -> void:
+	## 0x441D70: a flash at a (0x48BA40); unless b is a, the line from (a x 0x18 + 0x14, a y
+	## x 0x18 + 0x2C) to b's: 2 px squares every 2 px XORed in colour 7, drawn twice (on, then
+	## off), then a flash at b
+	var r := _radar()
+	if not r.visible:
+		return
+	await r.ping(a)
+	if a == b:
+		return
+	var p0 := Vector2i(a.x * 0x18 + 0x14, a.y * 0x18 + 0x2C)
+	var p1 := Vector2i(b.x * 0x18 + 0x14, b.y * 0x18 + 0x2C)
+	await r.route_line(p0, p1, 2, 2, 7, true)
+	await r.route_line(p0, p1, 2, 2, 7, true, true)
+	r.route = []
+	await r.ping(b)
 
 
 func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
@@ -9205,7 +9299,10 @@ func _draw_cells(dw: Pd2World, vr: Rect2, done_cells: Dictionary) -> void:
 	for h in hex_pick:
 		if h is Vector2i:
 			marked[h] = true
-	if fire_map != null and mode != "move" and mode != "carry":
+	if not fire_marks.is_empty():
+		for hx in fire_marks:
+			marked[hx] = true
+	elif fire_map != null and mode != "move" and mode != "carry":
 		for ly in fire_map.h:
 			for lx in fire_map.w:
 				if fire_map.at(lx, ly) == 1:
@@ -9224,27 +9321,40 @@ func _draw_cells(dw: Pd2World, vr: Rect2, done_cells: Dictionary) -> void:
 	# (DASH's branch and redraw_hex stripe by in_view(x, y, 0) alone; the engine redraws the
 	# whole map, so its single-hex redraws do not stripe those hexes again)
 	var unstripe3 := campaign == "pd2" and dw.phase == 3 and (options & 8) != 0
+	var order := []
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
-			if not dw.on_map(x, y) or done_cells.has(x + MAP * y):
+			var edge := (y & 1) == 1 and (x == 0 or x == 0x46)
+			if done_cells.has(x + MAP * y) or not (dw.on_map(x, y) or edge):
+				continue
+			var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
+			if edge:
+				# (an odd row's half tiles at the edges, 0x48D6D0: never in view, so masked)
+				overlay.draw_texture(MapPieces.stripes(), o)
 				continue
 			done_cells[x + MAP * y] = true
-			var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
 			if not Ai.in_view(dw, x, y, 0) and not (unstripe3 and Ai.in_view(dw, x, y, 3)):
 				overlay.draw_texture(MapPieces.stripes(), o)
-			if MissionScripts.target_mark_at(dw, x, y) or marked.has(Vector2i(x, y)):
-				overlay.draw_texture(MapPieces.hexmark(), o)
-			var f := dw.layer(dw.F, x, y)
-			if f & 1:
-				overlay.draw_texture(MapPieces.smoke(campaign), o)
-			var u := dw.O[x + MAP * y] - 1
-			if u >= 0 and dw.active(u):
-				_draw_unit(dw, u, o, see_all, large)
-			if campaign == "dash" and options & 0x8000:
-				if f & 0x80:
-					overlay.draw_texture(MapPieces.mark(0), o + Vector2(24, 8))
-				if f & 0x10 and dw.phase == 0:     # (a strike only in the player's phase)
-					overlay.draw_texture(MapPieces.mark(1), o + Vector2(24, 10))
+			order.append(Vector2i(x, y))
+	if campaign == "dash":
+		order.reverse()
+	for c: Vector2i in order:
+		var x := c.x
+		var y := c.y
+		var o := Vector2(x * TILE_W + (TILE_W / 2 if y & 1 else 0), y * TILE_H)
+		if MissionScripts.target_mark_at(dw, x, y) or marked.has(Vector2i(x, y)):
+			overlay.draw_texture(MapPieces.hexmark(), o)
+		var f := dw.layer(dw.F, x, y)
+		if f & 1:
+			overlay.draw_texture(MapPieces.smoke(campaign), o)
+		var u := dw.O[x + MAP * y] - 1
+		if u >= 0 and dw.active(u):
+			_draw_unit(dw, u, o, see_all, large)
+		if campaign == "dash" and options & 0x8000:
+			if f & 0x80:
+				overlay.draw_texture(MapPieces.mark(0), o + Vector2(24, 8))
+			if f & 0x10 and dw.phase == 0:     # (a strike only in the player's phase)
+				overlay.draw_texture(MapPieces.mark(1), o + Vector2(24, 10))
 
 
 func _draw_unit(dw: Pd2World, u: int, o: Vector2, see_all: bool, large: bool) -> void:

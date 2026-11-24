@@ -490,6 +490,7 @@ const PICTURE_WORDS := {
 	"plan_gb": [[28, 86, 91, 97, [214], "UI_PLAN_NOTES", Color8(247, 193, 131)],
 		[202, 86, 236, 95, [139, 92], "UI_PLAN_DECIDE", Color8(220, 220, 220)]],
 	"amap": [[357, 234, 426, 246, [245, 139, 195], "UI_PLAN_CLOSE", Color.BLACK]],
+	"ido_gb": [[25, 2, 56, 12, [245], "UI_BACK", Color.BLACK]],      # the flight window's 戻る (0x43E510(1))
 }
 
 

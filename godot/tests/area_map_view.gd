@@ -13,8 +13,14 @@ func _init() -> void:
 	b.plan_window = false
 	b.sortie_window = false
 	root.add_child(b)
-	for i in 300:
+	# (the approach's radio and the player's phase line wait for clicks, as the game's)
+	for i in 6000:
 		await process_frame
+		var gw = _waiting(b)
+		if gw != null:
+			gw.outside(MOUSE_BUTTON_LEFT)
+		elif i > 60 and not b.busy and (b._line_open == null or not is_instance_valid(b._line_open)):
+			break
 	b._area_map()
 	var r = null
 	for i in 120:
@@ -36,3 +42,13 @@ func _init() -> void:
 	var ok := over and closed
 	print("flight window over the panel %s, closed by its button %s: %s" % [over, closed, "ok" if ok else "FAILED"])
 	quit(0 if ok else 1)
+
+
+func _waiting(n: Node):
+	if n.get("_waiting") == true and n.is_visible_in_tree():
+		return n
+	for c in n.get_children():
+		var r = _waiting(c)
+		if r != null:
+			return r
+	return null

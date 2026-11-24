@@ -15,26 +15,51 @@ extends Control
 ##   SHIFT / RETURN);
 ## - the radio (0x488DE0 / 0x489140 / 0x489390): its talk windows' portraits (Evkao.pac,
 ##   or Event.pac for the second kind) and the line at the positions of the window code.
-## Colours: the battle's 16-colour palette (the import's tactical one; KOMA's pixels are
-## colours 0-15 of it).
+## Colours: 0x43E510 sets the window's 16 colours from DS:0x50D6A1 (0x487120, as the sortie
+## screen's); KOMA's pixels are colours 0-15 of it.
 
 const W := 640
 const H := 400
 var battle
-var snap := {}                 # the world's state when last drawn (copied on the turn's thread)
+var snap := {}:                # the world's state when last drawn (copied on the turn's thread)
+	set(v):
+		snap = v
+		if not v.is_empty():
+			_process_grid()
 var faces := {}                # talk window slot -> [pac, index, x, y]
 var codes := {}                # window group (code >> 4) -> the code shown
 var lines := {}                # window group -> [text, x, y, width (chars)]
 var wins := {}                 # window group -> its GameWindow (0x489140)
+var line_codes := {}           # window group -> the line's code (0x489140's table DS:0x5240C0)
 var _label_wins: Array = []
 var _label_texts: Array = []
 var _tex := {}
 var _koma: Array = []
+var _top: Control = null       # what the game draws into the DIB over the list's windows
+var close_button := false      # 0x43E510(1) (the area map): ido_gb.pac's 戻る at (0x238, 0x180)
+var cells := {}                # 0x43F150's cell windows (DS:0x50DD38): Vector2i -> draws
+
+
+class TopLayer extends Control:
+	var rv
+	func _draw() -> void:
+		rv._draw_top(self)
 
 
 func _init() -> void:
 	size = Vector2(W, H)
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	_top = TopLayer.new()
+	_top.rv = self
+	_top.size = size
+	_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_top)
+
+
+func _redraw() -> void:
+	queue_redraw()
+	if _top:
+		_top.queue_redraw()
 
 
 func tex(path: String) -> Texture2D:
@@ -62,11 +87,24 @@ func koma(t: int) -> Texture2D:
 	return _koma[t] if t >= 0 and t < _koma.size() else null
 
 
+var _pal: Array = []
+
+
+func palette16() -> Array:
+	## DS:0x50D6A1's 16 colours (B, G, R, 0), the window's (0x487120 from 0x43E510)
+	if _pal.is_empty() and battle and battle.w:
+		for i in 16:
+			var a := 0x50D6A1 + 4 * i
+			_pal.append(Color8(battle.w.mem8(a + 2), battle.w.mem8(a + 1), battle.w.mem8(a)))
+	return _pal
+
+
 func pal(i: int) -> Color:
-	var p: Array = GameData.palette
-	if i < 0 or i >= p.size():
-		return Color.WHITE
-	return Color8(int(p[i][0]), int(p[i][1]), int(p[i][2]))
+	var p := palette16()
+	if p.is_empty():
+		var t: Array = GameData.palette
+		return Color8(int(t[i][0]), int(t[i][1]), int(t[i][2])) if i >= 0 and i < t.size() else Color.WHITE
+	return p[i] if i >= 0 and i < 16 else Color.WHITE
 
 
 func text_color(code: int) -> Color:
@@ -111,19 +149,38 @@ func _draw() -> void:
 	var sm := tex("%s/%s/images/smap/%02d.bmp" % [root, battle.campaign, mi])
 	if sm:
 		draw_texture(sm, Vector2(8, 0x20))
+	if close_button:
+		# 0x43E510(1): ido_gb.pac (72 x 16, 戻る) at (0x238, 0x180), its word translated
+		var bimg: Image = load("res://ui/game_window.gd").picture_image(root + "/images/ido_gb/00.bmp", "ido_gb")
+		if bimg:
+			draw_texture(ImageTexture.create_from_image(bimg), Vector2(0x238, 0x180))
+			load("res://ui/game_window.gd").draw_picture_words(self, "ido_gb", Vector2(0x238, 0x180))
 	if snap.is_empty():
 		return
 	_labels()
 	_draw_grid()
 	_draw_list()
+
+
+func _draw_top(ci: CanvasItem) -> void:
+	## over the list's windows (the game draws these into the window's DIB): the radio's
+	## portraits (0x488DE0), 0x453CD0's squares, the picks' XORs
+	var root: String = GameData.ROOT
 	for slot in faces:
 		var f: Array = faces[slot]
 		var t := tex("%s/images/%s/%02d.bmp" % [root, f[0], f[1]])
 		if t:
-			draw_texture(t, Vector2(f[2], f[3]))
-	for q in route:                       # 0x453CD0's squares (its window at (8, 0x20))
-		draw_rect(Rect2(Vector2(8, 0x20) + Vector2(q), Vector2(4, 4)), pal(15))
-	_draw_pick()
+			ci.draw_texture(t, Vector2(f[2], f[3]))
+	if not route.is_empty():
+		if route_xor:
+			var ops := []
+			for q in route:
+				ops.append([q.x, q.y, q.x + route_size - 1, q.y + route_size - 1, 2])
+			_xor(ops, route_colour, ci)
+		else:
+			for q in route:
+				ci.draw_rect(Rect2(Vector2(q), Vector2(route_size, route_size)), pal(route_colour))
+	_draw_pick(ci)
 
 
 func _labels() -> void:
@@ -145,6 +202,7 @@ func _labels() -> void:
 		gw.lh = 12
 		gw.framed = false
 		gw.black = true
+		gw.pal16 = palette16()
 		gw.code = 0x75
 		gw.waits = false
 		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -170,8 +228,20 @@ var pick := ""                  # "region" / "cell" while the area map waits, el
 var pick_cb: Callable           # the answer: a region (0-20) / a cell (Vector2i, or null)
 var _hover_r := -1
 var _pressed_r := -1
+var _region_lit := true          # (the release's blink)
+var start_cell := Vector2i(-1, -1)   # 0x440670's param_1: the group's cell, lit first
+var _moved := false
 var _hover_c := Vector2i(-1, -1)
 var fire_cell := Vector2i(-1, -1)   # DS:0x50AD95 / 0x50AD97: not taken
+
+
+func pick_open(kind: String) -> void:
+	pick = kind
+	_moved = false
+	_hover_r = -1
+	_pressed_r = -1
+	_hover_c = start_cell if kind == "cell" else Vector2i(-1, -1)
+	_redraw()
 
 
 static func region_at(p: Vector2) -> int:
@@ -203,17 +273,22 @@ func _pick_input(ev: InputEvent) -> bool:
 	if ev is InputEventMouseMotion:
 		if pick == "region":
 			_hover_r = region_at(ev.position)
+			if _hover_r == -1:
+				_pressed_r = -1       # (off every region: the press dropped)
 		else:
-			_hover_c = cell_at(ev.position)
-		queue_redraw()
+			var c0 := cell_at(ev.position)
+			if c0.x != -1:
+				_moved = true
+				_hover_c = c0
+		_redraw()
 	elif ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
 		if pick == "region":
 			var r := region_at(ev.position)
 			if ev.pressed:
 				_pressed_r = r
-			elif r != -1 and r == _pressed_r:
-				_answer(r)            # the release on the region pressed (0x202)
-		elif ev.pressed:
+			elif r != -1 and _pressed_r != -1 and not _region_blinking:
+				_release_region(r)     # 0x437AC0's 0x202: the region under the pointer
+		elif ev.pressed and _moved:
 			var c := cell_at(ev.position)
 			if c.x != -1 and c != fire_cell and _blink_k < 0:
 				_blink(c)
@@ -222,6 +297,28 @@ func _pick_input(ev: InputEvent) -> bool:
 			_answer(null)             # 0x204: 0 (the area map asks a row again)
 		# (a right click on the regions: -2, which 0x43A570 ignores)
 	return true
+
+
+var _region_blinking := false
+
+
+func _release_region(r: int) -> void:
+	## 0x437AC0 on the release: the region blinks twice (off, 50 ms, on, 50 ms), then off,
+	## then it is the answer
+	_region_blinking = true
+	_hover_r = r
+	for k in 2:
+		_region_lit = false
+		_redraw()
+		await get_tree().create_timer(0.05).timeout
+		_region_lit = true
+		_redraw()
+		await get_tree().create_timer(0.05).timeout
+	_region_lit = false
+	_redraw()
+	_region_blinking = false
+	_region_lit = true
+	_answer(r)
 
 
 var _blink_c := Vector2i(-1, -1)
@@ -241,22 +338,37 @@ func _blink(c: Vector2i) -> void:
 			while Time.get_ticks_msec() <= end:
 				await get_tree().process_frame
 		_blink_k = k
-		queue_redraw()
+		_redraw()
 	_blink_k = -1
 	_answer(c)
 
 
-var route: Array = []          # 0x453CD0's squares drawn so far (Vector2i, its window's)
+var route: Array = []          # 0x453CD0's squares drawn so far (Vector2i, the window's DIB)
+var route_size := 4
+var route_colour := 15
+var route_xor := false
+static var route_skip := false   # DS:0x523E58: a right click during a route skips the waits from then on
 
 
-func route_line(p0: Vector2i, p1: Vector2i) -> void:
-	## 0x453CD0 (script 13's route): over max(|dx|, |dy|) / 4 steps, the point 4 i along
-	## the line (_line_step 0x4539A0) filled 4 x 4 in colour 15, a 17 ms wait after each
-	route = []
-	var n := maxi(absi(p1.x - p0.x), absi(p1.y - p0.y)) / 4
+func route_line(p0: Vector2i, p1: Vector2i, step := 4, sz := 4, colour := 15, xor := false, erase := false) -> void:
+	## 0x453CD0: over max(|dx|, |dy|) / step steps, the point step x i along the line
+	## (_line_step 0x4539A0) filled sz x sz in colour (mode 0 set, 4 XOR: drawn a second
+	## time it goes), a 17 ms wait after each unless skipped (DS:0x523E58)
+	if not erase:
+		route = []
+	route_size = sz
+	route_colour = colour
+	route_xor = xor
+	var n := maxi(absi(p1.x - p0.x), absi(p1.y - p0.y)) / step
 	for i in n:
-		route.append(Ai.line_step(p0.x, p0.y, p1.x, p1.y, 4 * i))
-		queue_redraw()
+		if erase:
+			if not route.is_empty():
+				route.pop_front()
+		else:
+			route.append(Ai.line_step(p0.x, p0.y, p1.x, p1.y, step * i))
+		_redraw()
+		if route_skip:
+			continue
 		var end := Time.get_ticks_msec() + 0x11
 		while Time.get_ticks_msec() <= end and is_inside_tree():
 			await get_tree().process_frame
@@ -272,9 +384,9 @@ func ping(c: Vector2i) -> void:
 			while Time.get_ticks_msec() <= end and is_inside_tree():
 				await get_tree().process_frame
 		_blink_k = k
-		queue_redraw()
+		_redraw()
 	_blink_k = -1
-	queue_redraw()
+	_redraw()
 
 
 func _answer(v: Variant) -> void:
@@ -282,39 +394,63 @@ func _answer(v: Variant) -> void:
 	_hover_r = -1
 	_pressed_r = -1
 	_hover_c = Vector2i(-1, -1)
-	queue_redraw()
+	_redraw()
 	var cb := pick_cb
 	pick_cb = Callable()
 	if cb.is_valid():
 		cb.call(v)
 
 
-func _draw_pick() -> void:
+func _draw_pick(ci: CanvasItem) -> void:
 	## 0x4380C0: the hovered region XORed in its colour (+0x11: 15) by its type (+0x10: rows
 	## an outline, the close button a fill); 0x440670: the hovered cell's inside XOR 7
 	## ((x 0x18 + 9, y 0x18 + 0x21)-(x 0x18 + 0x1F, y 0x18 + 0x37), type 2). XORed over the
 	## pictures' own indices (GameWindow.xor_patch)
-	if pick == "region" and _hover_r != -1:
+	## (0x4380C0 passes (x1 - 1, y1 - 1): rows (400, y0)-(494, y0 + 0xA), the close button
+	## (0x24A, 0x181)-(0x276, 0x18C))
+	if pick == "region" and _hover_r != -1 and _region_lit:
 		if _hover_r == 20:
-			_xor([[0x24A, 0x181, 0x24A + 0x2D, 0x181 + 0xC, 2]], 15)
+			_xor([[0x24A, 0x181, 0x276, 0x18C, 2]], 15, ci)
 		else:
 			var ry := 0x1A + 0x12 * _hover_r
-			_xor([[400, ry, 400 + 95, ry + 0xB, 1]], 15)
-	elif _blink_k >= 0:                  # (a cell's click, or a script's point 0x48BA40)
+			_xor([[400, ry, 494, ry + 0xA, 1]], 15, ci)
+	elif _blink_k >= 0:                  # (a cell's click, or a point 0x48BA40)
 		var bx := _blink_c.x * 0x18 + 9
 		var by := _blink_c.y * 0x18 + 0x21
 		var ops := []
 		for j in range(maxi(0, _blink_k - 3), mini(11, _blink_k) + 1):
 			ops.append([bx + j, by + j, bx + 0x16 - j, by + 0x16 - j, 1])
 		if not ops.is_empty():
-			_xor(ops, 7)
+			_xor_cell(_blink_c, ops, 7, ci)
 	elif pick == "cell" and _hover_c.x != -1:
 		var cx := _hover_c.x * 0x18 + 9
 		var cy := _hover_c.y * 0x18 + 0x21
-		_xor([[cx, cy, cx + 0x16, cy + 0x16, 2]], 7)
+		_xor_cell(_hover_c, [[cx, cy, cx + 0x16, cy + 0x16, 2]], 7, ci)
 
 
-func _xor(ops: Array, c: int) -> void:
+func _xor_cell(c: Vector2i, ops: Array, col: int, ci: CanvasItem) -> void:
+	## the XOR over a cell as drawn: its window's black and counters when it has one (0x46C370
+	## mode 4 on the DIB), else the pictures under it
+	if not cells.has(c):
+		_xor(ops, col, ci)
+		return
+	var idx := _cell_indices(c)
+	var ox := 8 + 24 * c.x
+	var oy := 0x20 + 24 * c.y
+	for op in ops:
+		for yy in range(op[1], op[3] + 1):
+			for xx in range(op[0], op[2] + 1):
+				var inside: bool = op[4] == 2 or yy == op[1] or yy == op[3] or xx == op[0] or xx == op[2]
+				if inside and xx - ox >= 0 and xx - ox < 24 and yy - oy >= 0 and yy - oy < 24:
+					var k := (yy - oy) * 24 + xx - ox
+					idx[k] = idx[k] ^ col
+	var img := Image.create(24, 24, false, Image.FORMAT_RGB8)
+	for k in 24 * 24:
+		img.set_pixel(k % 24, k / 24, pal(idx[k]))
+	ci.draw_texture(ImageTexture.create_from_image(img), Vector2(ox, oy))
+
+
+func _xor(ops: Array, c: int, ci: CanvasItem = null) -> void:
 	var root: String = GameData.ROOT
 	var mi: int = battle.mission_index if battle else 0
 	var camp: String = battle.campaign if battle else "dash"
@@ -324,13 +460,15 @@ func _xor(ops: Array, c: int) -> void:
 		pal16.append(pal(i))
 	var r: Array = load("res://ui/game_window.gd").xor_patch(layers, ops, c, pal16)   # (not static: -s tools compile this before the GameData autoload)
 	if not r.is_empty():
-		draw_texture(r[0], r[1])
+		(ci if ci else self).draw_texture(r[0], r[1])
 
 
 func _gui_input(ev: InputEvent) -> void:
 	if _pick_input(ev):
 		return
 	## the radio's click waits (ui_wait_click): a left or right click anywhere goes on
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_RIGHT and not route.is_empty():
+		route_skip = true              # (0x453CD0's ui_wait(.., 0x11, 1) answering 10)
 	if ev is InputEventMouseButton and ev.pressed:
 		var gw: Variant = waiting()
 		if gw:
@@ -351,47 +489,131 @@ func _shown(g: int) -> bool:
 	return (g > 11 or g & 1 or G[2] & 0x30) and G[0x16] != 0xFF and snap.alive[g]
 
 
-func _draw_grid() -> void:
+func _here(x: int, y: int) -> bool:
+	## a group alive on the cell (0x43F150's first two passes: any of the 64)
+	for g in 64:
+		var G: Array = snap.groups[g]
+		if Flight.s8(G[0x16]) >= 0 and snap.alive[g] and Flight.s8(G[0x16]) == x and Flight.s8(G[0x17]) == y:
+			return true
+	return false
+
+
+func _process_grid() -> void:
+	## 0x43F150 on a snapshot's grid (the rules clear it after each redraw): a marked cell
+	## without bit 0 and with no group loses its window; one without bit 7 and with a group
+	## gets one (black); one with bit 0 or 7 and a window is drawn again: tile 0x19 at its top
+	## left when groups are there, up to three player groups' counters (+4) on the second
+	## row and the computer's on the third, more as one counter (0x15 + type, 0x18 from type
+	## 3, 0x14 mixed) and their count ("%2d" at column 1, 8 px font, colour 7). A cell not
+	## marked keeps what it shows.
 	var grid: PackedByteArray = snap.grid
-	for y in 16:
-		for x in 16:
-			var mark := grid[16 * y + x] if 16 * y + x < grid.size() else 0
-			var own := []
-			var foe := []
-			for g in 64:
-				var G: Array = snap.groups[g]
-				if Flight.s8(G[0x16]) != x or Flight.s8(G[0x17]) != y or Flight.s8(G[0x16]) < 0 or not snap.alive[g]:
-					continue
-				if (g < 20 or G[0x21] & 0xF0 < 0x21) and (g > 11 or g & 1 or G[2] & 0x30):
-					own.append(g)
-				elif g >= 20 and G[0x21] & 0xF0 > 0x20:
-					foe.append(g)
-			var here := not own.is_empty() or not foe.is_empty()
-			if not ((here and not mark & 0x80) or mark & 1):
+	for i in 256:
+		var mark := grid[i] if i < grid.size() else 0
+		var c := Vector2i(i & 15, i >> 4)
+		if mark and not mark & 1 and not _here(c.x, c.y):
+			cells.erase(c)
+	for i in 256:
+		var mark := grid[i] if i < grid.size() else 0
+		var c := Vector2i(i & 15, i >> 4)
+		if mark and not mark & 0x80 and _here(c.x, c.y) and not cells.has(c):
+			cells[c] = []
+	for i in 256:
+		var mark := grid[i] if i < grid.size() else 0
+		var c := Vector2i(i & 15, i >> 4)
+		if not mark & 0x81 or not cells.has(c):
+			continue
+		var own := []
+		var foe := []
+		for g in 64:
+			var G: Array = snap.groups[g]
+			if Flight.s8(G[0x16]) != c.x or Flight.s8(G[0x17]) != c.y or Flight.s8(G[0x16]) < 0 or not snap.alive[g]:
 				continue
-			var cx := 8 + 24 * x
-			var cy := 0x20 + 24 * y
-			draw_rect(Rect2(cx, cy, 24, 24), pal(0))
-			if not mark & 0x81 or not here:
+			if (g < 20 or G[0x21] & 0xF0 < 0x21) and (g > 11 or g & 1 or G[2] & 0x30):
+				own.append(g)
+			elif g >= 20 and G[0x21] & 0xF0 > 0x20:
+				foe.append(g)
+		var ops := []
+		if not own.is_empty() or not foe.is_empty():
+			ops.append(["tile", 0, 0, 0x19])
+		for side in 2:
+			var gs: Array = own if side == 0 else foe
+			if gs.is_empty():
 				continue
-			_tile(cx, cy, 0, 0, 0x19)
-			for side in 2:
-				var gs: Array = own if side == 0 else foe
-				if gs.is_empty():
-					continue
-				if gs.size() <= 3:
-					for i in gs.size():
-						_tile(cx, cy, 1 + side, i, snap.groups[gs[i]][4])
-				else:
-					var types := {}
-					for g in gs:
-						types[(snap.groups[g][2] >> 1) & 7] = true
-					var t := 0x14
-					if types.size() == 1:
-						var ty: int = types.keys()[0]
-						t = 0x15 + ty if ty < 3 else 0x18
-					_tile(cx, cy, 1 + side, 0, t)
-					_text("%02d" % gs.size(), cx + 8, cy + 8 * (1 + side) - 3, 0xF0, 10)
+			if gs.size() <= 3:
+				for k in gs.size():
+					ops.append(["tile", 1 + side, k, snap.groups[gs[k]][4]])
+			else:
+				var types := {}
+				for g in gs:
+					types[(snap.groups[g][2] >> 1) & 7] = true
+				var t := 0x14
+				if types.size() == 1:
+					# (the game's own counter takes the computer's last type when both are on
+					# the cell, and the computer's transports draw tile 0x19: both left out)
+					var ty: int = types.keys()[0]
+					t = 0x15 + ty if ty < 3 else 0x18
+				ops.append(["tile", 1 + side, 0, t])
+				ops.append(["num", 1 + side, gs.size()])
+		cells[c] = ops
+
+
+func _draw_grid() -> void:
+	for c: Vector2i in cells:
+		var cx := 8 + 24 * c.x
+		var cy := 0x20 + 24 * c.y
+		draw_rect(Rect2(cx, cy, 24, 24), pal(0))
+		for op in cells[c]:
+			if op[0] == "tile":
+				_tile(cx, cy, op[1], op[2], op[3])
+			else:
+				_ank_text(cx + 8, cy + 8 * int(op[1]), "%2d" % int(op[2]), pal(7))
+
+
+static var _ank := PackedByteArray()
+
+
+func _ank_text(x: int, y: int, t: String, col: Color) -> void:
+	## the cell window's 8 px font (flags 2: FONT_ANK.DAT)
+	if _ank.is_empty():
+		var p: String = GameData.ROOT + "/font_ank.dat"
+		_ank = FileAccess.get_file_as_bytes(p) if FileAccess.file_exists(p) else PackedByteArray()
+	for i in t.length():
+		var k := t.unicode_at(i)
+		if _ank.size() < (k + 1) * 8:
+			continue
+		for r in 8:
+			var bb := _ank[k * 8 + r]
+			for cc in 8:
+				if (bb >> (7 - cc)) & 1:
+					draw_rect(Rect2(x + 8 * i + cc, y + r, 1, 1), col)
+
+
+func _cell_indices(c: Vector2i) -> PackedByteArray:
+	## a drawn cell's 24 x 24 colour indices (black, its KOMA tiles), for the XORs over it
+	var out := PackedByteArray()
+	out.resize(24 * 24)
+	if _koma_raw.is_empty():
+		var path := "%s/%s/koma.dat" % [GameData.ROOT, battle.campaign]
+		_koma_raw = FileAccess.get_file_as_bytes(path) if FileAccess.file_exists(path) else PackedByteArray()
+	for op in cells[c]:
+		if op[0] != "tile":
+			continue
+		var t: int = op[3]
+		if _koma_raw.size() < 32 * (t + 1):
+			continue
+		for yy in 8:
+			for xx in 8:
+				var bb := 7 - xx
+				var v := ((_koma_raw[32 * t + 24 + yy] >> bb) & 1) << 3 | ((_koma_raw[32 * t + 16 + yy] >> bb) & 1) << 1 \
+						| ((_koma_raw[32 * t + 8 + yy] >> bb) & 1) << 2 | ((_koma_raw[32 * t + yy] >> bb) & 1)
+				out[(8 * int(op[1]) + yy) * 24 + 8 * int(op[2]) + xx] = v
+	for op in cells[c]:
+		if op[0] == "num":
+			pass                         # (the count's pixels: left out of the XOR's base)
+	return out
+
+
+var _koma_raw := PackedByteArray()
 
 
 func _tile(cx: int, cy: int, row: int, col: int, t: int) -> void:
@@ -488,6 +710,8 @@ func _draw_list() -> void:
 		gw.lh = 12
 		gw.framed = false
 		gw.black = true
+		gw.solid_raw = 0x51               # (0x43E9D0: the record's +0x65 = 0x47: ido_g's green)
+		gw.pal16 = palette16()
 		gw.code = 0x75
 		gw.waits = false
 		gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -575,7 +799,7 @@ func radio_face(a: int, code: int, b: int) -> void:
 		y = a
 	codes[grp] = code
 	faces[second + grp * 2] = ["event" if second else "evkao", a, x, y]
-	queue_redraw()
+	_redraw()
 
 
 func radio_say(text: String, code: int) -> Variant:
@@ -602,6 +826,9 @@ func radio_say(text: String, code: int) -> Variant:
 				x = 0x178; y = 0x88; wd = 0x1E
 			elif n == 0xB:
 				x = 0x178; y = 0x108; wd = 0x1E
+	if line_codes.get(grp, 0) != 0 and line_codes[grp] != code:
+		radio_close(grp)                # (another code in the group: its windows closed first)
+	line_codes[grp] = code
 	lines[grp] = [text, x, y, wd]
 	if GameWindow.translated(text):
 		lines[grp][0] = GameWindow.fit(text, wd)        # (engine-side: a translation wraps at its words)
@@ -610,10 +837,11 @@ func radio_say(text: String, code: int) -> Variant:
 	var gw: Variant = wins.get(grp)
 	if gw == null or not is_instance_valid(gw):
 		gw = GameWindow.text_window(x, y, wd, 7, 1)
+		gw.pal16 = palette16()
 		gw.waits = false
 		add_child(gw)
 		wins[grp] = gw
-	queue_redraw()
+	_redraw()
 	return gw
 
 
@@ -625,8 +853,9 @@ func radio_close(n: int) -> void:
 		faces.erase(2 * g + 1)
 		lines.erase(g)
 		codes.erase(g)
+		line_codes.erase(g)
 		if wins.has(g):
 			if is_instance_valid(wins[g]):
 				wins[g].queue_free()
 			wins.erase(g)
-	queue_redraw()
+	_redraw()

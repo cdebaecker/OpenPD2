@@ -101,11 +101,12 @@ static func hexmark() -> Texture2D:
 
 
 static func stripes() -> Texture2D:
-	## out of view: the tile's even pixel columns black (mask 0x55)
+	## out of view (0x48D0E0): the mask 0x55 rotated a bit each row, a checkerboard of black
+	## (DIB index 10) pixels over the tile
 	if not _tex.has("stripes"):
 		var img := _img(48, 36)
 		for y in 36:
-			for x in range(0, 48, 2):
+			for x in range(y & 1, 48, 2):
 				img.set_pixel(x, y, Color.BLACK)
 		_tex["stripes"] = ImageTexture.create_from_image(img)
 	return _tex["stripes"]
@@ -155,6 +156,8 @@ static func number(ci: CanvasItem, at: Vector2, value: int, colour: int, large: 
 	for i in s.length():
 		var n := s.unicode_at(i) - 48
 		if large:
+			# (0x48E480 writes all 8 x 7 pixels: the digit on colour 0, as the small ones)
+			ci.draw_rect(Rect2(at.x + 8 * i, at.y, 8, 7), col(0))
 			for r in 7:
 				var b := d[n * 7 + r] if d.size() > n * 7 + r else 0
 				for x in 8:

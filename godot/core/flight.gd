@@ -181,6 +181,8 @@ static func area_map(w: Pd2World, hooks: AreaMapHooks) -> Array:
 			Ai.group_retarget(w, r, p.x, p.y)
 			setgb(w, r, 2, (gb(w, r, 2) & 0xDF) | 0x10)
 			out.append([r, p.x, p.y])
+			if hooks.has_method("air_report"):
+				hooks.air_report()                 # (0x43A570: the status list again, 0x43E9D0)
 	return out
 
 

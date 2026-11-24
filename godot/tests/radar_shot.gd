@@ -5,7 +5,7 @@ extends SceneTree
 ## A live group is put in flight (on cell 6, 9); the window opens through the flight
 ## engine's own path (Flight.grid_init with the battle's hooks: the groups marked), then
 ## a talk window (code 0x1A: the first window group, kind 1, number 10) shows portrait 0 and a radio line. Exits 1 when the
-## window did not open or holds no marked cell.
+## window did not open or shows no cell.
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -33,10 +33,8 @@ func _init() -> void:
 		await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_viewport().get_texture().get_image().save_png(args[2])
-	var marked := 0
-	for v in w.grid:
-		if v:
-			marked += 1
+	# (0x43F150 clears the grid once drawn: the cells it opened are the window's)
+	var marked: int = b.radar_view.cells.size() if b.radar_view else 0
 	print("radar: open %s, marked cells %d, talk windows %d" % [b.radar_view != null and b.radar_view.visible,
 			marked, b.radar_view.faces.size() if b.radar_view else 0])
 	quit(0 if b.radar_view != null and b.radar_view.visible and marked > 0 else 1)
