@@ -10,6 +10,8 @@ extends Node
 ## - music / sfx: volumes 0-10;
 ## - music_source: "ask" (the title's list, as the game), "cd", "midi";
 ## - skip_logos: the logos not played at start;
+## - map_window: the battle's map window, "full" (the screen left of the panel: 9 x 14
+##   cells) or "game" (the game's default without userinf.dat: 0x180 x 0x168, 8 x 10 cells);
 
 var path := "user://settings.cfg"   # (tests point it elsewhere)
 const LANGUAGES := ["auto", "en", "fr", "ja"]
@@ -28,6 +30,7 @@ var music := 10
 var sfx := 10
 var music_source := "ask"
 var skip_logos := false
+var map_window := "full"
 var geometry := Rect2i()               # the window's last place and size (x1-x3 only)
 
 var _headless := false
@@ -56,6 +59,7 @@ func load_file() -> void:
 	sfx = clampi(int(c.get_value("options", "sfx", sfx)), 0, 10)
 	music_source = _pick(str(c.get_value("options", "music_source", music_source)), SOURCES, music_source)
 	skip_logos = bool(c.get_value("options", "skip_logos", skip_logos))
+	map_window = "game" if str(c.get_value("options", "map_window", map_window)) == "game" else "full"
 	var g: Variant = c.get_value("window", "geometry", null)
 	if g is Rect2i:
 		geometry = g
@@ -71,6 +75,7 @@ func save_file() -> void:
 	c.set_value("options", "sfx", sfx)
 	c.set_value("options", "music_source", music_source)
 	c.set_value("options", "skip_logos", skip_logos)
+	c.set_value("options", "map_window", map_window)
 	if geometry.size != Vector2i.ZERO:
 		c.set_value("window", "geometry", geometry)
 	c.save(path)

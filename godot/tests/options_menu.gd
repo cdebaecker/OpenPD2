@@ -49,7 +49,7 @@ func _init() -> void:
 		l = _find(boot.title.holder, "title_list")
 	var rows: Array = l.items if l.items.size() > 0 else []
 	print("rows %d: %s" % [rows.size(), rows])
-	ok = ok and rows.size() == 9
+	ok = ok and rows.size() == 10
 	l.answer(2)
 	await process_frame
 	await process_frame
@@ -64,7 +64,7 @@ func _init() -> void:
 		l = _find(boot.title.holder, "title_list")
 	var row2: String = str(l.items[2])
 	print("pace row after the step: %s" % row2)
-	l.answer(8)                                  # Back
+	l.answer(9)                                  # Back
 	var back := false
 	for i in 60:
 		await process_frame

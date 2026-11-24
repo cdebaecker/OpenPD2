@@ -3628,6 +3628,7 @@ func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	hud_layer = layer
 	add_child(layer)
+	_map_mask()
 	var panel := PanelContainer.new()
 	hud_panel = panel
 	panel.position = Vector2(4, 4)
@@ -3777,9 +3778,29 @@ const DIB_H := 0x9D8
 
 
 func _map_size() -> Vector2:
-	## the engine's map window: the screen left of the info panel
+	## the engine's map window: the screen left of the info panel, or (the Options' "game")
+	## the game's default size without userinf.dat, 0x180 x 0x168 (0x407A30's minimum)
 	var sc := win_root.scale.x if win_root and is_instance_valid(win_root) else 1.0   # (not _win_root(): it raises the windows)
+	if Settings.map_window == "game":
+		return Vector2(0x180 * sc, 0x168 * sc)
 	return Vector2(432.0 * sc, get_viewport().get_visible_rect().size.y)
+
+
+func _map_mask() -> void:
+	## (the Options' "game" size) the screen around the smaller map window is black, under
+	## the panel and the windows
+	if Settings.map_window != "game" or hud_layer == null:
+		return
+	var ms := _map_size()
+	var vs := get_viewport().get_visible_rect().size
+	for r in [Rect2(ms.x, 0, vs.x - ms.x, vs.y), Rect2(0, ms.y, ms.x, vs.y - ms.y)]:
+		var cr := ColorRect.new()
+		cr.color = Color.BLACK
+		cr.position = r.position
+		cr.size = r.size
+		cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_layer.add_child(cr)
+		hud_layer.move_child(cr, 0)
 
 
 func _cam_limits() -> void:
@@ -3861,6 +3882,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 	# thread: no world nor camera yet, so the map takes no input)
 	if w == null or cam == null:
 		return
+	if ev is InputEventMouse and not Rect2(Vector2.ZERO, _map_size()).has_point(ev.position):
+		return                            # (outside the map window: its clicks are not the map's)
 	if ev is InputEventMouseMotion:
 		var hv := hex_at(get_global_mouse_position())
 		if ev.button_mask == 0 and _map_edge_scroll(ev.position):
