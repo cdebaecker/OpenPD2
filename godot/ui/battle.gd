@@ -30,7 +30,7 @@ var squad: Array = []
 var sandbox := false            # the stand-in squad (no player group formed)
 var names := {}
 var selected := -1
-var mode := "move"          # move / fire / aimed
+var mode := ""              # the command in progress: "" none (command_loop), move / fire / aimed / aa / carry / item
 var move_mode := 1          # 0 high speed, 1 normal, 2 careful
 var slot := 0
 var item_pocket := 0     # the pocket the item command uses (mode "item")
@@ -293,7 +293,7 @@ func _ready() -> void:
 	anime_view.load_pack(campaign)
 	add_child(anime_view)
 	cam = Camera2D.new()
-	cam.zoom = Vector2(0.5, 0.5)
+	cam.zoom = Vector2.ONE                # (the map window at the game's 1:1: 48 x 36 px hexes)
 	cam.limit_left = 0
 	cam.limit_top = 0
 	cam.limit_right = MAP * TILE_W + TILE_W / 2
@@ -322,7 +322,7 @@ func _scene_setup() -> void:
 	anime_view.load_pack(campaign)
 	add_child(anime_view)
 	cam = Camera2D.new()
-	cam.zoom = Vector2(0.5, 0.5)
+	cam.zoom = Vector2.ONE                # (the map window at the game's 1:1: 48 x 36 px hexes)
 	cam.limit_left = 0
 	cam.limit_top = 0
 	cam.limit_right = MAP * TILE_W + TILE_W / 2
@@ -429,9 +429,9 @@ func _begin_battle() -> void:
 	# formed) it is skipped, as before; with them, the game's loop runs
 	mission_hooks.stub_speech_window = sandbox
 	# a new mission (mission_loop 0x436690 with DS:0x50AD94 = 0): the loader's layer reset
-	# (0x482910), start_units (0x437490), [mission script stage 2: not ported], the
-	# occupancy rebuilt (0x483030), [the mission's start script: not ported], the player's
-	# upkeep and AP, then the turn start (LAB_00436b39)
+	# (0x482910), start_units (0x437490), the turn script's stage 2, the occupancy rebuilt
+	# (0x483030), the mission's start script, the player's upkeep and AP, then the turn
+	# start (LAB_00436b39)
 	MissionScripts.run_load(w)           # mission_loop's first call: the load script (0x51F1B8)
 	w.set_ds8(0x50ADF2, 0)               # mission_loop clears the end code first
 	Mission.layers_reset(w)
@@ -474,7 +474,10 @@ func _begin_done() -> void:
 	var landed := squad.filter(func(u): return w.active(u))
 	if not landed.is_empty():
 		_select(landed[0])
-		cam.position = hex_center(w.pos(landed[0]))
+	if _scan_pending:
+		_scan_pending = false
+		await _scan_show()
+	_player_phase()
 	if sandbox:
 		say("Turn 1. %d DoLLS dropped; %d enemy units on the map." % [squad.size(), _count_side(3)])
 	else:
@@ -494,7 +497,8 @@ class BattleSortieHooks extends Campaign.SortieHooks:
 		return MissionScripts.run_deploy(battle.w, battle.mission_hooks)
 
 	func dialog(msg: int, arg: Array) -> int:
-		battle.sortie_say(battle.mes(msg, [battle.sortie_arg(arg), ""]))
+		## 0x4DD390 with no choices (the start check's requirement refusals): its window
+		battle.sortie_dialogs.append(battle.mes(msg, [battle.sortie_arg(arg), ""]))
 		return 0
 
 	func note(code: int, who: int) -> int:
@@ -704,7 +708,7 @@ func sortie_say(t: String) -> void:
 	sortie_text = t
 
 
-var sortie_objective := -1        # a deploy refusal's 0x4DD390 window (MES id) to show
+var sortie_dialogs: Array = []    # 0x4DD390's message windows (no choices) to show on the sortie
 
 
 # --- the briefing (0x4DD2F0) and the operation plan (0x443F60, "plan_g.pac") ------------
@@ -729,8 +733,10 @@ func _plan() -> void:
 	if hud_panel:
 		hud_panel.visible = false
 	plan_st = {"mode": "page", "k": 0, "g": 0, "ask": null, "i": 0, "j": 0}
+	_fade_now(0)                          # 0x443F60: the window drawn black, then faded in
 	_plan_view_open()
 	_plan_draw()
+	screen_fade(100)
 
 
 var plan_view: PlanView = null
@@ -797,7 +803,23 @@ func _plan_region(i: int) -> void:
 			if plan_view:
 				plan_view.maps_i = 0
 		8:
-			plan_view.note = plan_exe(0x514A98 if w.mem8(0x50CBE4) else 0x514AA4)
+			# 0x452200(text, 0): "XMS : USE" / "XMS : unUSE", a framed line as wide as the
+			# text at ((80 - (n + 2)) / 2 x 8, 0xAA), no red, until a click
+			var t := plan_exe(0x514A98 if w.mem8(0x50CBE4) else 0x514AA4)
+			var n := mini(GameWindow.text_cols(t), 76)
+			var gw := GameWindow.text_window(((80 - (n + 2)) / 2) * 8, 0xAA, n, 1, 1)
+			gw.waits = not _headless()
+			var hold := Control.new()
+			hold.size = Vector2(PlanView.W, PlanView.H)
+			hold.mouse_filter = Control.MOUSE_FILTER_STOP
+			hold.add_child(gw)
+			hold.gui_input.connect(func(ev: InputEvent):
+				if ev is InputEventMouseButton and ev.pressed:
+					gw.outside(ev.button_index))
+			plan_view.add_child(hold)
+			await gw.print_text(t + "\n")
+			if is_instance_valid(hold):
+				hold.queue_free()
 	_plan_draw()
 
 
@@ -990,6 +1012,7 @@ func _plan_button(text: String, f: Callable, disabled := false) -> Button:
 
 
 func _plan_done() -> void:
+	await screen_fade(0)                  # (0x443F60's 完了: faded out)
 	plan_code = 0
 	plan_panel.queue_free()
 	plan_panel = null
@@ -1330,6 +1353,37 @@ func _plan_objective_window(m: int) -> void:
 		_plan_draw())
 
 
+func _sortie_dialog_windows() -> void:
+	## 0x4DD390 with no choices: a framed window at (0x98, 0x90), 40 x 5 of 12 px (flags 1),
+	## the text and a '@' (DS:0x51EDFC) unless it ends with one, a click; one after another
+	var texts := sortie_dialogs.duplicate()
+	sortie_dialogs = []
+	for t in texts:
+		if sortie_panel == null or not is_instance_valid(sortie_panel):
+			return
+		var hold := Control.new()
+		hold.size = Vector2(MAIN_W, MAIN_H)
+		hold.mouse_filter = Control.MOUSE_FILTER_STOP
+		var tw := GameWindow.text_window(0x98, 0x90, 0x28, 5, 1)
+		tw.lh = 12
+		tw._layout()
+		tw.role = "sortie_dialog"
+		tw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hold.add_child(tw)
+		hold.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.pressed:
+				tw.outside(ev.button_index))
+		sortie_panel.add_child(hold)
+		var x: String = t
+		if GameWindow.translated(x):
+			x = GameWindow.fit(x, 0x28)
+		if not x.ends_with("@"):
+			x += "@"
+		await tw.print_text(x)
+		if is_instance_valid(hold):
+			hold.queue_free()
+
+
 func objective_window(parent: Control, sz: Vector2, t: String) -> GameWindow:
 	## 0x4DD390: the text in a framed window ((0x24 - 4) / 2 x 8 = 0x80, 0x90) 40 x 5 of 12
 	## px (flags 1), its two answers DS:0x50E06D (無視, 再考) a 4-column list at (0x80 +
@@ -1635,7 +1689,9 @@ func _sortie() -> void:
 		if Flight.gb(w, g, 2) & 1 and (g >= 12 or g % 2 == 0):
 			sortie_sel = g
 			break
+	_fade_now(0)                          # 0x45ED60: drawn black, then faded in
 	_sortie_draw()
+	screen_fade(100)
 
 
 func _auto_sortie_actions() -> Array:
@@ -1890,9 +1946,8 @@ func _auto_plan(dry: Pd2World, ground_groups: int, air: bool, arm4: bool) -> Dic
 
 
 func _sortie_draw(confirm := false) -> void:
-	## the sortie screen (ui/sortie_view.gd: 0x45ED60's windows and regions); the roster's /
-	## bulk menu's lists and questions, the start question and the system menu's save /
-	## load / abort questions still in a plain panel over it
+	## the sortie screen (ui/sortie_view.gd: 0x45ED60's windows and regions); its lists,
+	## questions and notes are the game's windows over it
 	if sortie_panel:
 		sortie_panel.queue_free()
 	if hud_panel:
@@ -1913,12 +1968,8 @@ func _sortie_draw(confirm := false) -> void:
 	sortie_panel.add_child(sortie_view)
 	sortie_view.refresh()
 	sortie_view.pressed.connect(_sortie_region)
-	if sortie_objective >= 0:
-		var og := objective_window(sortie_panel, Vector2(MAIN_W, MAIN_H), mes(sortie_objective))
-		og.role = "sortie_objective"
-		og.chosen.connect(func(v: int):
-			if v >= 0:
-				sortie_objective = -1)
+	if not sortie_dialogs.is_empty():
+		_sortie_dialog_windows()
 	if sortie_text != "":
 		# a note of the start's checks / the roster / the system menu: 0x45ED60's framed
 		# window (0x98, 0xB4) 40 x 2 of 12 px, then '@'
@@ -2156,9 +2207,11 @@ func _sortie_question(confirm: bool) -> void:
 			Campaign.sortie_start(w, yes)
 			if yes:
 				Plan.pre_battle_round(w, brief_code, plan_code, 0)
+				await screen_fade(0)          # (0x45ED60 leaves faded out; the map's window has its own colours)
 				sortie_panel.queue_free()
 				sortie_panel = null
 				hud_panel.visible = hud_bar
+				_fade_now(100)
 				_begin_battle()
 			else:
 				_sortie_draw())
@@ -2176,7 +2229,7 @@ func _sortie_question(confirm: bool) -> void:
 		if line is String:                   # a save made in a battle: 0x498070's note 0x519F0C
 			sortie_loading = 0x29
 			sortie_text = SaveFiles.exe(0x519F0C)
-			show_line(sortie_text)
+			note_box(sortie_text)
 			call_deferred("_sortie_draw")
 			return
 		_sortie_box(SaveFiles.slot_line(s, 0x519EE8).substr(4), 1, func(yes: bool):
@@ -2213,7 +2266,7 @@ func _sortie_slot_list(saving: bool) -> void:
 			int(t.get("year", 1980)) - 1980 + 0x50, int(t.get("month", 1)), int(t.get("day", 1)), int(t.get("hour", 0)), int(t.get("minute", 0))]))
 		picks.append(sl)
 	if rows.is_empty():
-		show_line(mes(10 if saving else 0xD))
+		note_box(mes(10 if saving else 0xD))
 		sortie_saving = -1
 		sortie_loading = -1
 		call_deferred("_sortie_draw")
@@ -2263,7 +2316,7 @@ func _sortie_region(r: int, at: Vector2) -> void:
 			0:
 				var code := Campaign.group_join(w, g, c)
 				if JOIN_MESSAGES.has(code):
-					show_line(mes(JOIN_MESSAGES[code]))
+					note_box(mes(JOIN_MESSAGES[code]))
 				elif w.crew_pool_n <= sortie_pool_first:
 					sortie_pool_first = 0
 			1:
@@ -2282,7 +2335,7 @@ func _sortie_region(r: int, at: Vector2) -> void:
 		match (r - 0x18) % 3:
 			0:
 				if Campaign.sortie_drop(w, g, c) == 1:
-					show_line(mes(0x1CE))
+					note_box(mes(0x1CE))
 				elif Flight.gb(w, g, 5) <= sortie_member_first:
 					sortie_member_first = 0
 			1:
@@ -2437,7 +2490,7 @@ func _sortie_list_items(kind: int, keep: int) -> void:
 		rows.append(wsp("%-18s%2d", [nm, count[it]]))
 		items.append(it)
 	if rows.is_empty():
-		show_line(mes([0x1DF, 0x1E0, 0x1E1][kind]))
+		note_box(mes([0x1DF, 0x1E0, 0x1E1][kind]))
 		return
 	var asking := keep >= 0
 	var gw := _sortie_list_win(0xE8, 0x60, 0x14, rows, [], "", 0, not asking, "sortie_list_items")
@@ -2576,9 +2629,11 @@ func _sortie_arm(c: int) -> void:
 	## sub-region 1 of a card: the armament screen 0x454E60, the player's pilots only (crew
 	## +2: the line DS:0x516728)
 	if w.cb(c, 2) != 0:
-		show_line(GameData.exe_text(campaign, 0x516728))
+		note_box(GameData.exe_text(campaign, 0x516728))
 		return
+	await screen_fade(0)                  # 0x45ED60 fades out, 0x454E60 draws and fades in
 	_equip_begin(c)
+	screen_fade(100)
 
 
 func _sortie_system_list() -> void:
@@ -2925,8 +2980,10 @@ func _equip_advance() -> void:
 			lines.append(equip_msg(n))
 		equip_text = "\n".join(lines)
 		if equip_sess.done:
+			await screen_fade(0)              # (0x454E60 leaves faded out; the sortie fades in again)
 			equip_sess = {}
 			_sortie_draw()
+			screen_fade(100)
 			return
 	else:
 		var lines := []
@@ -2981,7 +3038,7 @@ var equip_info := 0               # DS:0x523E74: the pilot's window (0) or the m
 
 func _equip_draw() -> void:
 	## the armament screen (ui/equip_view.gd: 0x454E60's pictures, windows and regions); its
-	## lists and questions still in a plain panel over it, its notes as message lines
+	## lists, questions and notes (0x452170) are the game's windows over it
 	if sortie_panel:
 		sortie_panel.queue_free()
 	sortie_panel = Control.new()
@@ -3008,7 +3065,7 @@ func _equip_draw() -> void:
 			_equip_press("menu"))
 	if equip_text != "":
 		for l in equip_text.split("\n"):
-			show_line(l)
+			note_box(l)
 		equip_text = ""
 	if equip_request == null:
 		return
@@ -3752,8 +3809,6 @@ func _unhandled_input(ev: InputEvent) -> void:
 	if w == null or cam == null:
 		return
 	if ev is InputEventMouseMotion:
-		if ev.button_mask & MOUSE_BUTTON_MASK_RIGHT or ev.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
-			cam.position = (cam.position - ev.relative / cam.zoom).clamp(Vector2.ZERO, Vector2(MAP * TILE_W, MAP * TILE_H))
 		var hv := hex_at(get_global_mouse_position())
 		if ev.button_mask == 0 and _map_edge_scroll(ev.position):
 			pass
@@ -3769,13 +3824,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 			hex_pick_rc = false
 			_answer_hex(-2)
 		elif ev.position.distance_to(_rpress) < 4 and selected != -1 and not busy and react_look.is_empty() 				and w.active(selected) and not w.is_enemy(selected) and hex_pick.is_empty():
+			_set_mode("")                       # (a command's right click ends it: its menu again)
 			open_command_menu(selected)
 	elif ev is InputEventMouseButton and ev.pressed:
-		if ev.button_index == MOUSE_BUTTON_WHEEL_UP:
-			cam.zoom = (cam.zoom * 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
-		elif ev.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			cam.zoom = (cam.zoom / 1.15).clamp(Vector2(0.15, 0.15), Vector2(3, 3))
-		elif ev.button_index == MOUSE_BUTTON_LEFT and not react_look.is_empty():
+		if ev.button_index == MOUSE_BUTTON_LEFT and not react_look.is_empty():
 			var rl := react_look
 			react_look = []
 			_show_reaction_units(rl[0], rl[1], rl[2])
@@ -3875,7 +3927,7 @@ func _command_over() -> void:
 
 
 func _loop_idle() -> bool:
-	return not busy and move_thread == null and react_panel == null and hex_pick.is_empty() 			and (_line_open == null or not is_instance_valid(_line_open)) and FIRE_MODES.get(mode, -1) == -1 			and mode != "carry" and mode != "item" and not mission_over
+	return not busy and move_thread == null and react_panel == null and hex_pick.is_empty() 			and (_line_open == null or not is_instance_valid(_line_open)) and mode == "" and not mission_over
 
 
 func open_command_menu(u: int, back := Callable()) -> void:
@@ -3886,12 +3938,11 @@ func open_command_menu(u: int, back := Callable()) -> void:
 	## and machine windows), 8 search, 9 conceal, 10 carry / release, 11 the mission's own
 	if busy or mission_over or auto_react:
 		return
-	if back.is_valid():
-		_loop_u = u
+	# (unit_command_menu loops: after each command its menu again at the cursor, until a
+	# right click, the unit destroyed or no AP left after a move; LAB_004ef3a3)
+	if back.is_valid() or u != _loop_u:
 		_loop_back = back
-	elif u != _loop_u:
-		_loop_u = -1                      # (another unit's menu: not the list's loop)
-		_loop_back = Callable()
+	_loop_u = u
 	_loop_due = false
 	var labels := command_menu_labels(u)
 	var n := labels.size()
@@ -3954,7 +4005,7 @@ func _panel_region(k: int) -> void:
 		return
 	match k:
 		4:
-			_next_unit()                         # the face: the next DoLL (scroll_to)
+			face_click(false)                    # the face: 0x47AC70 case 4
 		11:
 			_cmd_withdraw()                      # 撤退: 0x1DE
 		14:
@@ -3970,18 +4021,56 @@ func _panel_region(k: int) -> void:
 			# which mission_loop takes as the mission's end code (the title after it)
 			_confirm(msg(0x1DF), func(): _end_mission(0x81), 0)
 		22:
-			if selected != -1:
-				_cmd_pocket_menu()               # the weapons' box: ui_machine_status
+			# the weapons' box: ui_machine_status for an own unit, 0x467880's windows for another
+			var pu: int = info_panel.unit if info_panel and is_instance_valid(info_panel) else selected
+			if pu != -1 and w.active(pu):
+				if w.sb(pu, 0x36) == 0:
+					_cmd_pocket_menu()
+				else:
+					info_windows(pu)
 		23:
-			# the picture: 0x467880 for the selected unit when it is an active own one
-			if selected != -1 and w.active(selected) and not w.is_enemy(selected):
-				_cmd_pocket_menu()
+			# the picture: 0x467880's windows for an active own unit
+			var pu: int = info_panel.unit if info_panel and is_instance_valid(info_panel) else selected
+			if pu != -1 and w.active(pu) and w.sb(pu, 0x36) == 0:
+				info_windows(pu)
 		13:
 			_all_orders()                        # 一斉: 0x429540
 		10:
 			_map_menu()                          # マップ: 0x43A3E0
 		15:
 			_orders_sheet()                      # 指令書: 0x43BA20 with WMES 0x1A2
+		0x13:
+			# (200, 0)-(0xCF, 0): the version line DS:0x5188E0 as a message line
+			show_line(SaveFiles.exe(0x5188E0))
+		0x11:
+			# (0xB9, 0xE1)-(0xBC, 0xE5): the panel's unit's crew of name id 0, 4, 6 or 7
+			# flips DS:0x551D29 bit 0x20 (the game's own debug switch)
+			var pu: int = info_panel.unit if info_panel and is_instance_valid(info_panel) else selected
+			if pu >= 0 and Pd2World.s8(w.ub(pu, 0xB)) >= 0 and Pd2World.s8(w.ucrew(pu, 0)) in [0, 4, 6, 7]:
+				options = options ^ 0x20
+				mission_hooks.options = options
+		5, 6, 7, 0x14:
+			# with bit 0x20: bits 0x100 / 2 / 8 / 0x80 flipped
+			if options & 0x20:
+				options = options ^ {5: 0x100, 6: 2, 7: 8, 0x14: 0x80}[k]
+				mission_hooks.options = options
+				_update_move_map()
+		2:
+			# (0, 399)-(7, 399), with bit 0x20: the panel's unit refilled: its AP (0x450690),
+			# condition 100, its parts' damage cleared (+1 = 0, +2's low nibble), and in the
+			# PD2 campaign its slots' and pockets' states (+0x10 + 2 k & 0xCF, +0x1C + 2 p & 0x3F)
+			var pu: int = info_panel.unit if info_panel and is_instance_valid(info_panel) else selected
+			if options & 0x20 and pu >= 0:
+				w.setb(pu, 0xE, Move.max_ap(w, pu) & 0xFF)
+				w.setb(pu, 0xD, 100)
+				w.setb(pu, 1, 0)
+				w.setb(pu, 2, w.ub(pu, 2) & 0xF0)
+				if w.campaign != 0:
+					for q in 6:
+						w.setb(pu, 0x10 + 2 * q, w.ub(pu, 0x10 + 2 * q) & 0xCF)
+					for q in 12:
+						w.setb(pu, 0x1C + 2 * q, w.ub(pu, 0x1C + 2 * q) & 0x3F)
+				_update_move_map()
 
 
 const PANEL_X := 432              # the info panel's client in the main window (DS:0x554FB8)
@@ -4115,6 +4204,14 @@ func ask_order(text: String, labels: Array, cols: int) -> Variant:
 	call_deferred("_open_order", text, labels, cols)
 	react_sem.wait()
 	return react_answer
+
+
+func order_message(t: String) -> void:
+	## 0x43BA20 without choices: its window, the text with its '@' click, closed
+	var gw := open_order(t, [])
+	gw.waits = true
+	await gw.print_text(gw.get_meta("text"))
+	_close_window(gw)
 
 
 func _open_order(text: String, labels: Array, cols: int) -> void:
@@ -4483,7 +4580,7 @@ func _all_conceal_answer(u: int) -> int:
 
 
 func _look_unit(u: int) -> void:
-	cam.position = hex_center(w.pos(u))
+	scroll_to_hex(w.pos(u).x, w.pos(u).y)    # (scroll_to 0x4F4730)
 	overlay.queue_redraw()
 
 
@@ -4706,9 +4803,12 @@ func _units_list() -> void:
 		open_command_menu(u, _units_list))      # (then the list again: 0x4EFC60 loops)
 
 
+var panel_unit := -1              # a unit the panel shows that isn't the selected one (0x466790)
+
+
 func panel_refresh() -> void:
 	if info_panel and is_instance_valid(info_panel):
-		info_panel.unit = selected
+		info_panel.unit = panel_unit if panel_unit != -1 and w.active(panel_unit) else selected
 		info_panel.refresh()
 
 
@@ -4729,7 +4829,7 @@ func _fire_command(m: String) -> void:
 	fire_list = false
 	_open_weapon(u, FIRE_MODES[m], 0, func(v: int):
 		if v == -2:
-			_set_mode("move")
+			_set_mode("")
 			_command_over()
 		elif v < 4:
 			slot = v
@@ -4753,6 +4853,7 @@ func _set_slot(i: int) -> void:
 
 func _select(u: int) -> void:
 	selected = u
+	panel_unit = -1
 	slot = 0
 	for k in 4:
 		if w.launcher_id(u, k) != -1:
@@ -4783,17 +4884,88 @@ func _next_unit() -> void:
 		return
 	var i := alive.find(selected)
 	_select(alive[(i + 1) % alive.size()])
-	cam.position = hex_center(w.pos(selected))
+	scroll_to_hex(w.pos(selected).x, w.pos(selected).y)
+
+
+func _view_on(u: int) -> bool:
+	## the map window's origin is the one scroll_to would give for u's hex
+	var v := map_view_cells()
+	var p := w.pos(u)
+	var ox := maxi(1, mini(p.x - ((v.size.x - 1) >> 1), 0x47 - v.size.x))
+	var oy := maxi(1, mini(p.y - ((v.size.y - 1) >> 1), 0x47 - v.size.y))
+	return v.position == Vector2i(ox, oy)
+
+
+func _show_unit(u: int) -> void:
+	## 0x466790: the panel shows u (an own unit is the selected one)
+	if u < 0:
+		return
+	scroll_to_hex(w.pos(u).x, w.pos(u).y)
+	if w.sb(u, 0x36) == 0:
+		_select(u)
+	else:
+		panel_unit = u
+	panel_refresh()
+
+
+func face_click(back: bool) -> void:
+	## 0x47AC70 case 4 (a left click on the face) and case -2 inside (8, 0x30)-(0x57, 0x8F)
+	## (a right click): with no active panel unit, view_first_doll; when the view is not on
+	## the panel's unit, scroll_to it; else the next (back: the previous) active own unit by
+	## index: forward from it (an enemy's: from 0), past 0xFD view_first_doll; back from it
+	## (an enemy's: from 0x28) down to 0, then once more from 0x27
+	if busy or mission_over:
+		return
+	var u: int = info_panel.unit if info_panel and is_instance_valid(info_panel) else selected
+	if u < 0 or not w.active(u):
+		for k in 254:
+			if w.active(k) and not w.is_enemy(k):
+				_show_unit(k)
+				return
+		return
+	if not _view_on(u):
+		scroll_to_hex(w.pos(u).x, w.pos(u).y)
+		return
+	var own := func(k: int) -> bool: return w.active(k) and w.sb(k, 0x36) == 0
+	if not back:
+		var k := 0 if w.sb(u, 0x36) > 2 else u
+		k += 1
+		while k <= 0xFD and not own.call(k):
+			k += 1
+		if k > 0xFD:
+			for f in 254:
+				if own.call(f):
+					_show_unit(f)
+					return
+			return
+		_show_unit(k)
+		return
+	var start := 0x28 if w.sb(u, 0x36) > 2 else u
+	for wrap in 2:
+		var k := start - 1
+		while k >= 0 and not own.call(k):
+			k -= 1
+		if k >= 0:
+			_show_unit(k)
+			return
+		start = 0x28
 
 
 func _click(h: Vector2i) -> void:
 	if not w.on_map(h.x, h.y):
 		return
 	var o := w.O[h.x + MAP * h.y] - 1
-	if o != -1 and o in squad and (mode == "move" or o == selected):
-		_select(o)
-		if w.active(o) and not w.is_enemy(o):
-			open_command_menu(o)                 # 0x4EF600: an own unit's command menu
+	if mode == "":
+		# command_loop 0x4EF600 (ui_map_click 0x47AC70 mode 0): an own unit's hex opens its
+		# command menu; an ally's (side 1-2), or a spotted enemy's (+0 bit 0x10, or option
+		# 0x40), shows it in the panel (0x466790)
+		if o != -1 and w.sb(o, 0x36) == 0 and o in squad:
+			_select(o)
+			if w.active(o):
+				open_command_menu(o)
+		elif o != -1 and (w.sb(o, 0x36) < 3 or w.ub(o, 0) & 0x10 or options & 0x40):
+			panel_unit = o
+			panel_refresh()
 		return
 	if selected == -1 or not w.active(selected):
 		return
@@ -4840,7 +5012,11 @@ func say_msg(id: int, args := []) -> void:
 	## a message line (ui_message_line 0x452300), also in the log
 	var t := msg(id, args)
 	say(t.replace("@", "\n").strip_edges())
-	if not auto_react:
+	if auto_react:
+		return
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		script_window(line_wait.bind(t, false))     # (0x452300 waits for its click: so does the flow)
+	else:
 		show_line(t)
 
 
@@ -4900,9 +5076,14 @@ func _move_done(u: int, h: Vector2i, res: Array) -> void:
 			say("%s: contact." % unit_name(u))
 		if r & 4 or not w.active(u):
 			say("%s lost." % unit_name(u))
+	# the move entry's loop (0x4EE8D0): clicks go on while the unit can move; then the
+	# menu again, unless its AP are spent
+	if not (w.active(u) and Action.can_move(w, u)):
+		_set_mode("")
+		if w.active(u) and w.sb(u, 0xE) == 0:
+			_loop_u = -1
+			_loop_back = Callable()
 	_after_command()
-	if w.active(u) and not Action.can_move(w, u):
-		say("%s cannot move any further." % unit_name(u))
 
 
 # --- the move command's questions --------------------------------------------------
@@ -5391,7 +5572,7 @@ func _fire_range_list() -> void:
 	gw.chosen.connect(func(v: int):
 		_close_window(gw)
 		if v >= 0:
-			cam.position = hex_center(w.pos(units[v]))
+			scroll_to_hex(w.pos(units[v]).x, w.pos(units[v]).y)    # (scroll_to 0x4F4730)
 			_fire_range_list())
 
 
@@ -5445,9 +5626,11 @@ func _fire_done(u: int, before: Dictionary) -> void:
 			say("%s hits %s: %d damage" % [unit_name(u), unit_name(q), before[q] - w.ub(q, 0xD)])
 	if not hit:
 		say("%s fires: no hit." % unit_name(u))
+	# cmd_fire's target loop goes on while the AP, the rounds and the unit last (option
+	# 0x2000's list before each of its clicks); then the command menu again
+	if not (mode in FIRE_MODES and selected == u and w.active(u) and w.slot_count(u, slot) > 0 			and w.sb(u, 0xE) >= Move.fire_ap(w, u, slot, FIRE_MODES[mode])):
+		_set_mode("")
 	_after_command()
-	# cmd_fire's target loop goes on while the AP, the rounds and the unit last: option
-	# 0x2000's list comes before each of its clicks
 	if fire_list and mode in FIRE_MODES and selected == u and w.active(u) and w.slot_count(u, slot) > 0 			and w.sb(u, 0xE) >= Move.fire_ap(w, u, slot, FIRE_MODES[mode]):
 		_fire_range_list()
 
@@ -6261,7 +6444,7 @@ func _do_item(u: int, p: int, ap: int, h: Vector2i) -> void:
 			say("%s: %d damage" % [unit_name(q), before[q][0] - w.ub(q, 0xD)])
 		elif w.is_enemy(q) and w.ub(q, 0) & 0x10 and not before[q][1]:
 			say("%s spotted" % unit_name(q))
-	mode = "move"
+	mode = ""
 	_after_command()
 
 
@@ -6333,7 +6516,7 @@ func _cmd_carry_click(h: Vector2i) -> void:
 				say_msg(why)
 			else:
 				say("%s picks up %s." % [unit_name(u), unit_name(o)])
-			_set_mode("move")
+			_set_mode("")
 			_after_command(), 1)                     # 0x427410: a message box, kind 1
 	else:
 		var carried := w.ub(u, 0x34)
@@ -6342,7 +6525,7 @@ func _cmd_carry_click(h: Vector2i) -> void:
 			if not carried in squad:
 				pass
 			say("%s sets down %s." % [unit_name(u), unit_name(carried)])
-			_set_mode("move")
+			_set_mode("")
 			_after_command(), 1)                     # 0x426FD6: a message box, kind 1
 
 
@@ -6632,6 +6815,7 @@ func _turn_start() -> void:
 	w.phase = 0
 	_view_reset(0)
 	Turn.recon_pass(w, 0)
+	_scan_window()                        # WMES 0x1FE's window, 500 ms, the date window
 	_airdrop()                            # 0x44AEA0
 	_strikes(0)
 	AiTurn.refresh_strikes(w, 0)         # 0x483ED0(0)
@@ -6827,6 +7011,71 @@ func _end_turn_finish(res: int, undefined: Array, end_code := 0) -> void:
 		_next_unit()
 	_update_move_map()
 	_check_end()
+	if not mission_over:
+		_player_phase()
+
+
+var _scan_pending := false
+var _scan_win: GameWindow = null
+
+
+func _scan_window() -> void:
+	## mission_loop's turn change: a framed 18 x 1 window centred with WMES 0x1FE (索敵マップ
+	## 作成中) while the views are worked out, the map redrawn (0x4F3DA0), a 500 ms wait
+	## (0x452740), the window closed, then ui_date_window. On the main thread (the first
+	## turn's start) it is shown by _begin_done.
+	if auto_react or _headless():
+		return
+	if OS.get_thread_caller_id() == OS.get_main_thread_id():
+		_scan_pending = true
+		return
+	call_deferred("_scan_open")
+	OS.delay_msec(500)
+	call_deferred("_scan_close")
+
+
+func _scan_show() -> void:
+	_scan_open()
+	await get_tree().create_timer(0.5).timeout
+	_scan_close()
+
+
+func _scan_open() -> void:
+	var gw := GameWindow.text_window(0, 0, 0x12, 1, 0)
+	gw.waits = false
+	gw.position = Vector2(((MAIN_W - int(gw.size.x)) >> 4) << 3, (MAIN_H - int(gw.size.y)) >> 1)
+	gw.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_win_root().add_child(gw)
+	gw.print_text(msg(0x1FE))
+	_scan_win = gw
+
+
+func _scan_close() -> void:
+	if _scan_win != null and is_instance_valid(_scan_win):
+		_scan_win.queue_free()
+	_scan_win = null
+	_refresh_info()                       # ui_date_window 0x4361C0
+
+
+func _player_phase() -> void:
+	## mission_loop's player phase: ui_date_window, view_first_doll (scroll_to the first own
+	## active unit by index), then ui_message_line WMES 0x1E1 (ユーザーターン開始) until its
+	## click, then command_loop; with no own unit active and no mouse button held the phase
+	## is skipped
+	if auto_react or _headless():
+		return
+	_refresh_info()
+	var first := -1
+	for u in 254:
+		if w.active(u) and not w.is_enemy(u):
+			first = u
+			break
+	if first != -1:
+		scroll_to_hex(w.pos(first).x, w.pos(first).y)
+	elif not (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
+		_end_turn()
+		return
+	show_line(msg(0x1E1))
 
 
 # --- the mission's event scripts (MissionScripts; DS:0x50CE72 selects them) --------------
@@ -6859,15 +7108,17 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 			a = [nm[0], nm[1]]
 		## (a question of Pd2.exe's own, e.g. mission 8's pickup point 0x51AEFC)
 		var text: String = GameData.exe_text(battle.campaign, msg, a) if msg >= 0x500000 else battle.msg(msg, a)
-		if choices > 2 and labels.size() >= choices:
-			var opts := []
-			for i in choices:
-				opts.append([labels[i], i])
-			return int(battle.ask_choice(text, opts, 0))
-		return 0 if battle.ask_choice(text, [[labels[0], true], [labels[1], false]], true) else 1
+		## 0x43BA20 with choices: the text window and the list at (x + 0x150, y), no right
+		## click (open_order; the list as wide as its widest label)
+		battle.say(text.replace("@", "\n").strip_edges())
+		return int(battle.ask_order(text, labels.slice(0, maxi(choices, 2)), 0))
 
 	func message(msg: int, args := []) -> int:
-		battle.say_msg(msg, args)
+		## 0x43BA20 without choices: the framed 40 x 5 window centred, the text and its '@'
+		## click (open_order)
+		var t: String = battle.msg(msg, _args(args))
+		battle.say(t.replace("@", "\n").strip_edges())
+		battle.script_window(battle.order_message.bind(t))
 		return 0
 
 	func note(msg: int) -> int:
@@ -6889,9 +7140,9 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return MissionScripts.run_speech(battle.w, battle.rng, self)
 
 	func end_dialog(msg: int) -> int:
-		## 0x4DD390 in the sortie (the deploy hook's refusal, MES.PCK): its window on the
-		## sortie screen; the hook looks only at the abort codes, so its answer is 0
-		battle.sortie_objective = msg
+		## 0x4DD390 with no choices in the sortie (the deploy hook's refusal, MES.PCK): its
+		## window on the sortie screen; the hook looks only at the abort codes
+		battle.sortie_dialogs.append(battle.mes(msg))
 		return 0
 
 	func box(msg: int, args: Array, kind: int) -> int:
@@ -6910,9 +7161,10 @@ class BattleMissionHooks extends MissionScripts.Hooks:
 		return 0
 
 	func prompt(msg: int, args := []) -> int:
-		## ui_prompt_at_cursor: the text carries its own two words (設置 / 中止); 0 the first
+		## ui_prompt_at_cursor 0x47EBE0: the text carries its own two words (設置 / 中止); 0 the
+		## first, a right click the second
 		var text: String = battle.msg(msg, _args(args))
-		return 0 if battle.ask_choice(text, [[battle.ui("UI_YES"), true], [battle.ui("UI_NO"), false]], true) else 1
+		return 0 if battle.ask_prompt(text, true) else 1
 
 	func fuse(msg: int, low: int) -> int:
 		## 0x429200: the fuse list, "%3d分" from low x 5 in steps of 5 (25 - low entries)
@@ -7436,7 +7688,7 @@ class BattleDropHooks extends Drop.Hooks:
 
 func _focus(u: int) -> void:
 	if w.on_map(w.pos(u).x, w.pos(u).y):
-		cam.position = hex_center(w.pos(u))
+		scroll_to_hex(w.pos(u).x, w.pos(u).y)    # (scroll_to 0x4F4730)
 
 
 func _airdrop() -> int:
@@ -7500,6 +7752,13 @@ func _script_turn(stage: int) -> void:
 		if w.fault != "":
 			say("[color=red]rules fault: %s[/color]" % w.fault)
 			w.fault = ""
+	# mission_loop then: ui_refresh_panels (0x4363D0) after stages 1 and 0, and for stage 2
+	# the same test: with DS:0x50DD44 at 1, 0x43F060 closes the radar (its windows, the grid
+	# freed: grid_init clears it next time) and the flag goes to 0
+	if w.radar == 1:
+		w.radar = 0
+		w.grid.fill(0)
+		call_deferred("radar_hide")
 
 
 func _script_state() -> void:
@@ -7733,6 +7992,24 @@ func line_wait(t: String, red: bool) -> void:
 		await lines_done
 
 
+var _notes: Array = []
+var _note_on := false
+
+
+func note_box(t: String) -> void:
+	## 0x452170 on the pre-battle screens (the sortie's and the armament's notes): note_line
+	## one after another, each until its click
+	if auto_react or _headless():
+		return
+	_notes.append(t)
+	if _note_on:
+		return
+	_note_on = true
+	while not _notes.is_empty():
+		await note_line(_notes.pop_front())
+	_note_on = false
+
+
 func talk_slot() -> int:
 	## 0x48BF90's free slot (of five), taken
 	for i in 5:
@@ -7853,6 +8130,27 @@ func fade_to(level: int) -> void:
 		_fade_rect.color = Color(0, 0, 0, (100 - fade_lvl) / 100.0) if fade_lvl <= 100 else Color(1, 1, 1, (fade_lvl - 100) / 100.0)
 		hud_layer.move_child(_fade_rect, -1)
 		await get_tree().create_timer(0.017).timeout
+
+
+func _fade_now(level: int) -> void:
+	## the palette at a level at once (0x487A20)
+	if auto_react or _headless():
+		return
+	if _fade_rect == null or not is_instance_valid(_fade_rect):
+		_fade_rect = ColorRect.new()
+		_fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fade_rect.size = get_viewport().get_visible_rect().size
+		hud_layer.add_child(_fade_rect)
+	fade_lvl = level
+	_fade_rect.color = Color(0, 0, 0, (100 - fade_lvl) / 100.0) if fade_lvl <= 100 else Color(1, 1, 1, (fade_lvl - 100) / 100.0)
+	hud_layer.move_child(_fade_rect, -1)
+
+
+func screen_fade(level: int) -> void:
+	## 0x4875D0 on a screen of the pre-battle loop (the plan, the sortie, the armament)
+	if auto_react or _headless():
+		return
+	await fade_to(level)
 
 
 func radar_ping(c: Vector2i) -> void:
@@ -8276,6 +8574,28 @@ func open_status(u: int, rs: Array) -> GameWindow:
 	## (x + 0x108, y - 0x80), x = (640 - 0x260) / 2, y = max(400 / 2 - 0x20, 0xC0); the header
 	## 0x1D2 (74 columns, one line) and the rows' select window under it, centred on the
 	## screen's width (fonts 16 px)
+	var py := maxi((MAIN_H >> 1) - 0x20, 0xC0)
+	var three := _info_windows(u)
+	var w1: GameWindow = three[0]
+	var w0: GameWindow = three[1]
+	var w2: GameWindow = three[2]
+	var lw := (0x4A + (3 if rs.size() > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
+	var x := maxi(0, (MAIN_W - lw) >> 1)
+	var y := py
+	var hd := GameWindow.text_window(x, y, 0x4A, 1, 0)
+	hd.waits = false
+	var labels := rs.map(func(r): return r[0])
+	var lst := GameWindow.select_window(x, y + 0x20, 0x4A, 0, 0, labels, 0x4A, [], true)
+	_hold([w1, w0, w2, hd, lst])
+	w1.print_text(MachineStatus.pilot_text(self, u))
+	w2.print_text(MachineStatus.machine_text(self, u))
+	hd.print_text(GameWindow.coded(text_cells(msg_codes(0x1D2), [])))
+	return lst
+
+
+func _info_windows(u: int) -> Array:
+	## 0x467880's three windows (the pilot's, the damage diagram, the machine's): see
+	## open_status; printed once held
 	var ux := maxi(0, (MAIN_W - 0x260) >> 1)
 	var py := maxi((MAIN_H >> 1) - 0x20, 0xC0)
 	var w1 := GameWindow.text_window(ux, py - 0xC0, 15, 11, 0)
@@ -8291,18 +8611,22 @@ func open_status(u: int, rs: Array) -> GameWindow:
 	MachineStatus.damage(w0, w, u)
 	var w2 := GameWindow.text_window(ux + 0x108, py - 0x80, 16, 7, 0)
 	w2.waits = false
-	var lw := (0x4A + (3 if rs.size() > GameWindow.SCROLL_SHOWN else 0)) * 8 + 16
-	var x := maxi(0, (MAIN_W - lw) >> 1)
-	var y := py
-	var hd := GameWindow.text_window(x, y, 0x4A, 1, 0)
-	hd.waits = false
-	var labels := rs.map(func(r): return r[0])
-	var lst := GameWindow.select_window(x, y + 0x20, 0x4A, 0, 0, labels, 0x4A, [], true)
-	_hold([w1, w0, w2, hd, lst])
+	return [w1, w0, w2]
+
+
+func info_windows(u: int) -> void:
+	## command_loop's regions 0x16 (another side's unit) and 0x17 (an own unit): 0x467880's
+	## three windows, a click (0x453B80), then closed
+	var three := _info_windows(u)
+	var w1: GameWindow = three[0]
+	var w2: GameWindow = three[2]
+	var hold := _hold(three)
+	react_panel = null
 	w1.print_text(MachineStatus.pilot_text(self, u))
 	w2.print_text(MachineStatus.machine_text(self, u))
-	hd.print_text(GameWindow.coded(text_cells(msg_codes(0x1D2), [])))
-	return lst
+	hold.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and is_instance_valid(hold):
+			hold.queue_free())
 
 
 func _open_status(u: int, rs: Array) -> void:
@@ -8515,7 +8839,7 @@ func ask_reaction(menu: Array, t: int, mode: int) -> Variant:
 func _open_reaction_menu(menu: Array, t: int, mode: int) -> void:
 	react_target = t
 	react_menu = menu
-	cam.position = hex_center(w.pos(t))
+	scroll_to_hex(w.pos(t).x, w.pos(t).y)    # (scroll_to 0x4F4730)
 	_show_reaction_units(menu, t, mode)
 	overlay.queue_redraw()
 
@@ -8916,8 +9240,10 @@ func _equip_debug_done(r: int) -> void:
 	if r == -0x65 or r == -0x66 or r == -0x67:
 		# 0x454E60: below -0x65 it returns, -0x65 destroys its window and returns: the
 		# screen closes, as the template menu's aborts do
+		await screen_fade(0)
 		equip_sess = {}
 		_sortie_draw()
+		screen_fade(100)
 		return
 	_equip_draw()
 

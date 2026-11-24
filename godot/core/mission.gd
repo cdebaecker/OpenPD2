@@ -148,11 +148,11 @@ static func sandbox_squad(w: Pd2World, count := 4) -> Array:
 	for i in count:
 		if i >= spots.size():
 			break
-		var u := i                 # player units 0-26 (the briefing fills them in the game)
+		var u := 1 + i             # player units 1-26, unit c with crew c as the game's (the briefing fills them)
 		for f in 55:
 			w.setb(u, f, w.ub(template, f) if template != -1 else 0)
 		w.setb(u, 0, 0x0C)
-		w.setb(u, 0xB, 1 + i)
+		w.setb(u, 0xB, u)
 		w.setb(u, 0xC, 0)
 		w.setb(u, 0xD, 100)
 		w.setb(u, 0x34, 0xFF)

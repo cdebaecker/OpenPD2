@@ -174,6 +174,7 @@ func _menu() -> void:
 			if await question(SaveFiles.exe(0x518A20), 1):
 				GameAudio.music_stop()            # 0x40AF80, then userinf.dat and WM_CLOSE
 				Settings.remember_window()
+				await title.fade(0)                # (game_mode_loop's last 0x4875D0(0))
 				get_tree().quit()
 			else:
 				_menu()
@@ -527,6 +528,7 @@ func _title_done(entry: String, res: Array, w: Pd2World) -> void:
 	if ret > 20:
 		_menu()
 		return
+	await title.fade(0)                       # (game_mode_loop: the title faded out before 0x416CF0)
 	var scene: PackedScene = load(BATTLE)
 	var battle := scene.instantiate()
 	battle.campaign = "pd2" if w.campaign else "dash"

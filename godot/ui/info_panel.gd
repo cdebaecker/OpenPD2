@@ -26,7 +26,12 @@ const X := 0x1B2
 const REGIONS := {4: [8, 0x30, 0x57, 0x8F, 1], 8: [0x98, 0xE8, 199, 0xFB, 2], 9: [0x98, 0xFC, 199, 0x10F, 2],
 	10: [0x98, 0x110, 199, 0x123, 2], 11: [0x98, 0x124, 199, 0x137, 2], 12: [0x98, 0x138, 199, 0x14B, 2],
 	13: [0x98, 0x14C, 199, 0x15F, 2], 14: [0x98, 0x160, 199, 0x173, 2], 15: [0x88, 0x178, 199, 0x18B, 2],
-	16: [0x49, 0x178, 0x87, 0x18B, 2], 22: [8, 0x90, 0x57, 0xD3, 1], 23: [0x58, 0x30, 199, 0xD3, 0]}
+	16: [0x49, 0x178, 0x87, 0x18B, 2], 22: [8, 0x90, 0x57, 0xD3, 1], 23: [0x58, 0x30, 199, 0xD3, 0],
+	# the hidden ones (0x47BBB0): the refill, three option bits, the debug switch, the version
+	# line, a fourth option bit
+	2: [0, 399, 7, 399, 0], 5: [0x9E, 0xE1, 0xA1, 0xE5, 0], 6: [0xB4, 0xE1, 0xB7, 0xE5, 0],
+	7: [0xA8, 0xE1, 0xAC, 0xE5, 0], 0x11: [0xB9, 0xE1, 0xBC, 0xE5, 0], 0x13: [200, 0, 0xCF, 0, 0],
+	0x14: [0xA3, 0xE1, 0xA6, 0xE5, 0]}
 
 var battle
 var unit := -1
@@ -329,7 +334,41 @@ func _gui_input(ev: InputEvent) -> void:
 		battle.minimap_scroll(int(p.x), int(p.y))
 		accept_event()
 		return
+	# ui_map_click's -2 inside the face (8, 0x30)-(0x57, 0x8F): the previous own unit
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_RIGHT and ev.pressed and not _waiting \
+			and ev.position.x >= 8 and ev.position.x <= 0x57 and ev.position.y >= 0x30 and ev.position.y <= 0x8F:
+		accept_event()
+		battle.face_click(true)
+		return
+	# 0x46FF20: a left press on a region (type not 3) arms it; the release over it answers,
+	# a region of type other than 0 first blinking twice (0x470900 off / on, 50 ms each)
+	if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and not _waiting:
+		accept_event()
+		var r := _region_at(ev.position)
+		if ev.pressed:
+			_armed = r if r >= 0 and r < regions.size() and int(regions[r][4]) != 3 else -1
+			return
+		if _armed == -1 or r != _armed:
+			_armed = -1
+			return
+		var k := _armed
+		_armed = -1
+		if int(regions[k][4]) != 0:
+			for i in 2:
+				_hover = -1
+				queue_redraw()
+				await get_tree().create_timer(0.05).timeout
+				_hover = k
+				queue_redraw()
+				await get_tree().create_timer(0.05).timeout
+			_hover = -1
+			queue_redraw()
+		chosen.emit(k)
+		return
 	super(ev)
+
+
+var _armed := -1
 
 
 var _last_cam := Vector2(-1, -1)

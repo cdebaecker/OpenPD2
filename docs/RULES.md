@@ -985,7 +985,7 @@ every per‑mission table:
 - scripts 11–22 are the DASH campaign's chunks 0–11 (step table 0x50CC14);
 - the data chunk is DS:0x50663D − 1.
 
-Partly inferred: the DASH chunk numbering is not fully traced.
+The DASH chunk numbering is traced (RE_NOTES' step table, 2026-11-16).
 
 **The generic AI** (`ai_turn`, 0x42A950, run once in the computer's phase) moves and fights
 the computer's units. It walks the **order codes** in a fixed priority:
@@ -3901,8 +3901,8 @@ opening's music_start(12) and the exit's music_stop play at their places
      decompiled C: the event scripts (the player's dialogs — reaction menu, mine
      clearing, "enemy discovered" — are ported);
    - the event scripts mission by mission (226 KB in all): all ten PD2 missions and
-     DASH's missions 2-7 (scripts 12, 14-18) are ported and emulated; left: DASH's other 6 (scripts 11–22), and the
-     approach loop 0x4403D0 (ported 2026-11-16, §5.8; the operation plan and its pages, §5.22).
+     all twelve DASH scripts (11-22) are ported and emulated (MissionScripts.PORTED 1-22),
+     as is the approach loop 0x4403D0 (2026-11-16, §5.8; the operation plan and its pages, §5.22).
    Also the per‑step recon while moving (0x474090 / `step_visibility` (0x474E20) call `sees_unit` (0x412190)), and
    the search command for movement mode 3.
 4. The remaining action costs: conceal, lay mines, throw, reload and item use.
