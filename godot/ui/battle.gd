@@ -7363,22 +7363,36 @@ func _end_mission(code: int, exited := false) -> void:
 	var dh := BattleDebriefHooks.new()
 	dh.battle = self
 	var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
-	debrief_result = Debrief.debrief(w, code, rng, crt, dh)
+	if _pick_interactive():
+		# PD2's hand-over to DASH runs the new campaign's pilot choice (0x421B90), whose
+		# windows wait for the player: the debrief runs on a worker thread meanwhile
+		dh.interactive = true
+		var th := Thread.new()
+		th.start(func(): return Debrief.debrief(w, code, rng, crt, dh))
+		while th.is_alive():
+			await get_tree().process_frame
+		debrief_result = th.wait_to_finish()
+		_pick_close()
+	else:
+		debrief_result = Debrief.debrief(w, code, rng, crt, dh)
 	_show_safe()
 	if w.fault != "":
 		say("[color=red]rules fault: %s[/color]" % w.fault)
 		w.fault = ""
-	_show_debrief(dh.lines, Debrief.next_mission(w) if debrief_result == 0x80 else [], dh.screens)
+	_show_debrief(dh.lines, Debrief.next_mission(w) if debrief_result == 0x80 else [], dh.screens.slice(dh.shown))
 
 
 class BattleDebriefHooks extends Debrief.Hooks:
 	## The debrief's pictures and lists as lines of the debrief panel (the pictures and
 	## the credits are not shown); SAVEDATA.ORG and the record sets from the import; the
-	## new campaign's pilot choice (PD2's hand-over to DASH) filled at random, as the
-	## battle's first mission does; clearinf.bin's flags in user://clearinf.bin.
+	## new campaign's pilot choice (PD2's hand-over to DASH) in its windows when the
+	## debrief runs on its worker thread (interactive), else filled at random (the tests);
+	## clearinf.bin's flags in user://clearinf.bin.
 	var battle
 	var lines := []
 	var screens := []           # the screens the game shows (DebriefView replays them)
+	var shown := 0              # those already shown (before the hand-over's pilot choice)
+	var interactive := false    # the hand-over's pilot choice waits for the player
 
 	func music(n: int) -> void:
 		screens.append(["music", n])        # (music_start, in its order among the screens)
@@ -7420,7 +7434,21 @@ class BattleDebriefHooks extends Debrief.Hooks:
 		return img[1] if img.size() == 2 else PackedByteArray()
 
 	func new_campaign(w: Pd2World) -> int:
-		return Campaign.new_campaign(w, Campaign.CrtRand.new(int(Time.get_unix_time_from_system())), Campaign.Hooks.new())
+		## 0x421B90 at the hand-over: the screens so far (to kabe4.pac) shown, then the pilot
+		## choice's windows in the new campaign's texts; filled at random when not interactive
+		var crt := Campaign.CrtRand.new(int(Time.get_unix_time_from_system()))
+		if not interactive:
+			return Campaign.new_campaign(w, crt, Campaign.Hooks.new())
+		battle.call_deferred("_debrief_screens_now", screens.slice(shown))
+		battle.react_sem.wait()
+		shown = screens.size()
+		battle.pick_camp = "pd2" if w.campaign else "dash"
+		var ph := BattlePickHooks.new()
+		ph.battle = battle
+		var res := Campaign.new_campaign(w, crt, ph)
+		battle.pick_camp = ""
+		battle.call_deferred("_pick_close")
+		return res
 
 	func campaign_set(w: Pd2World) -> void:
 		var t := GameData.tables("pd2" if w.campaign else "dash")
@@ -7493,6 +7521,18 @@ func _show_debrief(lines: Array, nxt: Array, screens := []) -> void:
 	back.text = ui("UI_BACK_TO_MISSIONS")
 	back.pressed.connect(func(): get_tree().change_scene_to_file("res://ui/boot.tscn"))
 	box.add_child(back)
+
+
+func _debrief_screens_now(screens: Array) -> void:
+	## (the debrief's worker thread) its screens up to the hand-over's pilot choice
+	if not screens.is_empty():
+		var dv := DebriefView.new()
+		dv.battle = self
+		dv.screens = screens
+		_win_root().add_child(dv)
+		await dv.play()
+		dv.queue_free()
+	react_sem.post()
 
 
 func _next_mission(nxt: Array) -> void:
@@ -7934,14 +7974,14 @@ class BattlePickHooks extends Campaign.Hooks:
 
 	func pick_ask(text: int, arg: Variant) -> int:
 		## 0x451E30: a message box of kind 1 in the start window; yes = 1
-		var t: String = GameData.exe_text(battle.campaign, text, [arg] if arg != null else [])
+		var t: String = GameData.exe_text(battle._pick_camp(), text, [arg] if arg != null else [])
 		battle.call_deferred("_open_pick_box", t)
 		battle.react_sem.wait()
 		return battle.react_answer
 
 	func pick_note(text: int) -> int:
 		## 0x452170: a red line at y 0xAA, until a click
-		battle.call_deferred("_open_pick_note", GameData.exe_text(battle.campaign, text))
+		battle.call_deferred("_open_pick_note", GameData.exe_text(battle._pick_camp(), text))
 		battle.react_sem.wait()
 		return 0
 
@@ -7951,6 +7991,11 @@ var _pick_count := 0
 
 
 var pick_window := true          # false: the pilot choice fills at random at once (tools)
+var pick_camp := ""              # the pilot choice's campaign when not the battle's (the hand-over)
+
+
+func _pick_camp() -> String:
+	return pick_camp if pick_camp != "" else campaign
 
 
 func _pick_interactive() -> bool:
@@ -7961,7 +8006,8 @@ func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
 	## 0x422950's row for crew c: "%aFF%-14s %2d " (given and family name, crew +9), crew
 	## +0xA..+0xD as "%2X " (or "%2d " when negative), the skill bits 1 2 4 8 as 有 / 無
 	## ("%s %s %s %s%aFF"); a picked row's colour byte 'F' becomes 'C' (0x43, green)
-	var nm: Array = GameData.tables(campaign).crew_names
+	var camp := _pick_camp()
+	var nm: Array = GameData.tables(camp).crew_names
 	var id := Pd2World.s8(wd.crew[c * 16])
 	var n: Array = nm[id] if id >= 0 and id < nm.size() else ["", ""]
 	var name := _name_in(n, 14)
@@ -7971,7 +8017,7 @@ func pick_row(wd: Pd2World, c: int, picked: bool) -> String:
 		var v := Pd2World.s8(wd.crew[c * 16 + f])
 		t += ("%2X " % v) if v >= 0 else ("%2d " % v)
 	var sk := wd.crew[c * 16 + 8]
-	var yn := func(b: int) -> String: return GameData.yes_no_cell(campaign, sk & b != 0)
+	var yn := func(b: int) -> String: return GameData.yes_no_cell(camp, sk & b != 0)
 	t += "%s %s %s %s" % [yn.call(1), yn.call(2), yn.call(4), yn.call(8)] + "\u0001" + char(0xFF)
 	return t
 
@@ -8018,7 +8064,8 @@ func _open_pick(rows: Array, picked: Array) -> void:
 	## at (0x38, 0x50): its header DS:0x513A9C (42 x 2) whose nine columns (x 0x80 + 0x18 k
 	## .. +0x10, y 8 .. 0x27) are the sort buttons (0-8), the rows (9 + row), a right click
 	## the done / fill question (-2)
-	var pd2 := campaign != "dash"
+	var camp := _pick_camp()
+	var pd2 := camp != "dash"
 	var need: int = Campaign.PICK_COUNT[1 if pd2 else 0]
 	var n := 0
 	for p in picked:
@@ -8033,8 +8080,8 @@ func _open_pick(rows: Array, picked: Array) -> void:
 	lst.role = "pick"
 	lst.waits = false
 	_pick_hold([cw, lst])
-	cw.print_text(GameData.exe_text(campaign, 0x513A64 if pd2 else 0x513A80, [n, need - n]))
-	lst.print_text(GameData.exe_text(campaign, 0x513A9C))
+	cw.print_text(GameData.exe_text(camp, 0x513A64 if pd2 else 0x513A80, [n, need - n]))
+	lst.print_text(GameData.exe_text(camp, 0x513A9C))
 	lst.chosen.connect(func(v: int):
 		react_panel.queue_free()
 		react_panel = null
@@ -8045,7 +8092,8 @@ func _open_pick(rows: Array, picked: Array) -> void:
 func _open_pick_box(t: String) -> void:
 	## 0x451E30: ui_message_box's layout (kind 1: 実行 / 中止) in the start window
 	var l: Array = BOX_LABELS[1]
-	var labels := [GameData.exe_text(campaign, l[0]), GameData.exe_text(campaign, l[1])]
+	var camp := _pick_camp()
+	var labels := [GameData.exe_text(camp, l[0]), GameData.exe_text(camp, l[1])]
 	var wins := box_windows(t, labels, 0xAA)
 	_pick_hold(wins)
 	wins[0].print_text(wins[0].get_meta("text"))
